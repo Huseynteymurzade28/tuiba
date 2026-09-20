@@ -2,6 +2,8 @@
 
 use std::process::ExitCode;
 
+use tuiba_core::Cartridge;
+
 /// Errors specific to the terminal frontend.
 #[derive(Debug, thiserror::Error)]
 enum AppError {
@@ -16,9 +18,16 @@ enum AppError {
 
 fn run() -> Result<(), AppError> {
     let rom_path = std::env::args().nth(1).ok_or(AppError::Usage)?;
+    let cartridge = Cartridge::load(&rom_path)?;
+    let header = cartridge.header();
     println!(
-        "tuiba v{} – would load {rom_path}",
-        env!("CARGO_PKG_VERSION")
+        "{rom_path}: \"{}\" [{}/{}] v{} ({} KiB, header {})",
+        header.title,
+        header.game_code,
+        header.maker_code,
+        header.version,
+        cartridge.rom().len() / 1024,
+        if header.valid { "ok" } else { "INVALID" },
     );
     Ok(())
 }

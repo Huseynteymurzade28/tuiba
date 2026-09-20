@@ -20,6 +20,16 @@
 //! 0E000000-0E00FFFF  SRAM / Flash  64 KiB (8-bit bus)
 //! ```
 
+pub mod bus;
+pub mod cartridge;
+pub mod io;
+pub mod video;
+
+pub use bus::Bus;
+pub use cartridge::{Cartridge, Header};
+pub use io::IoRegisters;
+pub use video::VideoMemory;
+
 /// Size of the BIOS ROM in bytes.
 pub const BIOS_SIZE: usize = 16 * 1024;
 /// Size of on-board work RAM (EWRAM) in bytes.
@@ -123,6 +133,28 @@ impl MemoryRegion {
             Self::Rom => ROM_MAX_SIZE,
             Self::Sram => SRAM_SIZE,
         }
+    }
+}
+
+/// Helpers shared by unit tests across the memory module.
+#[cfg(test)]
+pub(crate) mod test_util {
+    use super::cartridge::HEADER_END;
+
+    /// Builds a minimal ROM with a valid header and the given title.
+    pub(crate) fn rom_with_header(title: &str, len: usize) -> Vec<u8> {
+        let mut rom = vec![0u8; len.max(HEADER_END)];
+        rom[0xA0..0xA0 + title.len()].copy_from_slice(title.as_bytes());
+        rom[0xAC..0xB0].copy_from_slice(b"TEST");
+        rom[0xB0..0xB2].copy_from_slice(b"00");
+        rom[0xB2] = 0x96;
+        rom[0xBC] = 1;
+        let checksum = rom[0xA0..=0xBC]
+            .iter()
+            .fold(0u8, |acc, &b| acc.wrapping_sub(b))
+            .wrapping_sub(0x19);
+        rom[0xBD] = checksum;
+        rom
     }
 }
 

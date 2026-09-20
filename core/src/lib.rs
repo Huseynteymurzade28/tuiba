@@ -13,3 +13,4 @@ pub mod error;
 pub mod memory;
 
 pub use error::{GbaError, Result};
+pub use memory::{Bus, Cartridge};

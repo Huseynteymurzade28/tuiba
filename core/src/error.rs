@@ -26,6 +26,15 @@ pub enum GbaError {
         min: usize,
     },
 
+    /// A BIOS image was not exactly 16 KiB.
+    #[error("BIOS image is {size} bytes, expected {expected}")]
+    BiosSize {
+        /// Actual size of the image.
+        size: usize,
+        /// Required size.
+        expected: usize,
+    },
+
     /// The cartridge header failed validation.
     #[error("invalid ROM header: {0}")]
     InvalidHeader(String),
