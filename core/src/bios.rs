@@ -59,8 +59,13 @@ pub mod call {
     pub const GET_BIOS_CHECKSUM: u8 = 0x0D;
     pub const BG_AFFINE_SET: u8 = 0x0E;
     pub const OBJ_AFFINE_SET: u8 = 0x0F;
+    pub const BIT_UNPACK: u8 = 0x10;
     pub const LZ77_UNCOMP_WRAM: u8 = 0x11;
     pub const LZ77_UNCOMP_VRAM: u8 = 0x12;
+    pub const HUFF_UNCOMP: u8 = 0x13;
+    pub const RL_UNCOMP_WRAM: u8 = 0x14;
+    pub const RL_UNCOMP_VRAM: u8 = 0x15;
+    pub const SOUND_BIAS: u8 = 0x19;
 }
 
 /// Outcome of servicing a call that the caller must act on.
@@ -86,10 +91,11 @@ pub fn service(number: u8, cpu: &mut Cpu, mem: &mut impl Memory) -> Outcome {
             register_ram_reset(mem, r(0) as u8);
             Outcome::Done
         }
-        call::HALT => {
+        call::HALT | call::STOP => {
             cpu.halted = true;
             Outcome::Done
         }
+        call::SOUND_BIAS => Outcome::Done,
         call::INTR_WAIT | call::VBLANK_INTR_WAIT => {
             let (discard_old, mask) = if number == call::VBLANK_INTR_WAIT {
                 (true, Interrupt::VBlank.mask())
@@ -150,6 +156,26 @@ pub fn service(number: u8, cpu: &mut Cpu, mem: &mut impl Memory) -> Outcome {
         }
         call::LZ77_UNCOMP_VRAM => {
             lz77_uncomp(mem, r(0), r(1), true);
+            Outcome::Done
+        }
+        call::RL_UNCOMP_WRAM => {
+            rl_uncomp(mem, r(0), r(1), false);
+            Outcome::Done
+        }
+        call::RL_UNCOMP_VRAM => {
+            rl_uncomp(mem, r(0), r(1), true);
+            Outcome::Done
+        }
+        call::BIT_UNPACK => {
+            bit_unpack(mem, r(0), r(1), r(2));
+            Outcome::Done
+        }
+        call::BG_AFFINE_SET => {
+            bg_affine_set(mem, r(0), r(1), r(2));
+            Outcome::Done
+        }
+        call::OBJ_AFFINE_SET => {
+            obj_affine_set(mem, r(0), r(1), r(2), r(3));
             Outcome::Done
         }
         _ => Outcome::Unsupported,
@@ -241,6 +267,149 @@ fn lz77_uncomp(mem: &mut impl Memory, src: u32, dst: u32, vram: bool) {
     } else {
         for (i, &byte) in out.iter().enumerate() {
             mem.write8(dst + i as u32, byte);
+        }
+    }
+}
+
+/// Writes decompressed bytes to `dst`, as halfwords when `vram` is set
+/// because VRAM ignores byte writes.
+fn write_out(mem: &mut impl Memory, dst: u32, out: &[u8], vram: bool) {
+    if vram {
+        for (i, pair) in out.chunks(2).enumerate() {
+            let half = u16::from(pair[0]) | (u16::from(*pair.get(1).unwrap_or(&0)) << 8);
+            mem.write16(dst + i as u32 * 2, half);
+        }
+    } else {
+        for (i, &byte) in out.iter().enumerate() {
+            mem.write8(dst + i as u32, byte);
+        }
+    }
+}
+
+/// `RLUnCompWram`/`RLUnCompVram`: run-length decoding. Each flag byte
+/// either repeats the next byte `(flag & 0x7F) + 3` times (bit 7 set) or
+/// copies the next `(flag & 0x7F) + 1` bytes literally.
+fn rl_uncomp(mem: &mut impl Memory, src: u32, dst: u32, vram: bool) {
+    let header = mem.read32(src);
+    if header & 0xF0 != 0x30 {
+        return;
+    }
+    let size = (header >> 8) as usize;
+    let mut src = src + 4;
+    let mut out = Vec::with_capacity(size);
+    while out.len() < size {
+        let flag = mem.read8(src);
+        src += 1;
+        if flag & 0x80 != 0 {
+            let byte = mem.read8(src);
+            src += 1;
+            out.extend(std::iter::repeat_n(byte, usize::from(flag & 0x7F) + 3));
+        } else {
+            for _ in 0..=usize::from(flag & 0x7F) {
+                out.push(mem.read8(src));
+                src += 1;
+            }
+        }
+    }
+    out.truncate(size);
+    write_out(mem, dst, &out, vram);
+}
+
+/// `BitUnPack`: widens `src_bits`-wide units into `dst_bits`-wide units,
+/// adding `offset` to each (non-zero, unless bit 31 of the offset word
+/// is set) value, and writes the result as words.
+fn bit_unpack(mem: &mut impl Memory, src: u32, dst: u32, info: u32) {
+    let length = u32::from(mem.read16(info));
+    let src_bits = u32::from(mem.read8(info + 2));
+    let dst_bits = u32::from(mem.read8(info + 3));
+    let offset_word = mem.read32(info + 4);
+    let offset = offset_word & 0x7FFF_FFFF;
+    let offset_zeros = offset_word & (1 << 31) != 0;
+    if !matches!(src_bits, 1 | 2 | 4 | 8) || !matches!(dst_bits, 1 | 2 | 4 | 8 | 16 | 32) {
+        return;
+    }
+
+    let mut out_word = 0u32;
+    let mut out_bits = 0;
+    let mut dst = dst;
+    for i in 0..length {
+        let byte = u32::from(mem.read8(src + i));
+        for chunk in 0..8 / src_bits {
+            let mut value = (byte >> (chunk * src_bits)) & ((1 << src_bits) - 1);
+            if value != 0 || offset_zeros {
+                value = value.wrapping_add(offset);
+            }
+            out_word |= value.checked_shl(out_bits).unwrap_or(0);
+            out_bits += dst_bits;
+            if out_bits >= 32 {
+                mem.write32(dst, out_word);
+                dst += 4;
+                out_word = 0;
+                out_bits = 0;
+            }
+        }
+    }
+}
+
+/// `sin`/`cos` of a BIOS angle (`0..=0xFF` = one turn) in 8.8 fixed point.
+fn sin_cos(theta: u16) -> (i32, i32) {
+    let angle = f64::from(theta & 0xFF) / 256.0 * std::f64::consts::TAU;
+    (
+        (angle.sin() * 256.0).round() as i32,
+        (angle.cos() * 256.0).round() as i32,
+    )
+}
+
+/// The rotation/scaling matrix for scale `(sx, sy)` (8.8) and `theta`.
+fn affine_matrix(sx: i32, sy: i32, theta: u16) -> [i32; 4] {
+    let (sin, cos) = sin_cos(theta);
+    [
+        (sx * cos) >> 8,
+        -(sx * sin) >> 8,
+        (sy * sin) >> 8,
+        (sy * cos) >> 8,
+    ]
+}
+
+/// `BgAffineSet`: `count` sets of BG rotation parameters.
+///
+/// Source (20 bytes): texture origin x/y (24.8), screen centre x/y
+/// (s16), scale x/y (8.8), angle (upper byte used).
+/// Destination (16 bytes): PA–PD then the reference point DX/DY.
+fn bg_affine_set(mem: &mut impl Memory, mut src: u32, mut dst: u32, count: u32) {
+    for _ in 0..count {
+        let ox = mem.read32(src) as i32;
+        let oy = mem.read32(src + 4) as i32;
+        let cx = i32::from(mem.read16(src + 8) as i16);
+        let cy = i32::from(mem.read16(src + 10) as i16);
+        let sx = i32::from(mem.read16(src + 12) as i16);
+        let sy = i32::from(mem.read16(src + 14) as i16);
+        let theta = mem.read16(src + 16) >> 8;
+        src += 20;
+
+        let [pa, pb, pc, pd] = affine_matrix(sx, sy, theta);
+        let dx = ox.wrapping_sub(pa.wrapping_mul(cx).wrapping_add(pb.wrapping_mul(cy)));
+        let dy = oy.wrapping_sub(pc.wrapping_mul(cx).wrapping_add(pd.wrapping_mul(cy)));
+        for (i, v) in [pa, pb, pc, pd].iter().enumerate() {
+            mem.write16(dst + i as u32 * 2, *v as u16);
+        }
+        mem.write32(dst + 8, dx as u32);
+        mem.write32(dst + 12, dy as u32);
+        dst += 16;
+    }
+}
+
+/// `ObjAffineSet`: `count` OAM matrices, each parameter `stride` bytes
+/// apart (2 for packed output, 8 to write straight into OAM).
+fn obj_affine_set(mem: &mut impl Memory, mut src: u32, mut dst: u32, count: u32, stride: u32) {
+    for _ in 0..count {
+        let sx = i32::from(mem.read16(src) as i16);
+        let sy = i32::from(mem.read16(src + 2) as i16);
+        let theta = mem.read16(src + 4) >> 8;
+        src += 8;
+        for v in affine_matrix(sx, sy, theta) {
+            mem.write16(dst, v as u16);
+            dst += stride;
         }
     }
 }
@@ -445,6 +614,78 @@ mod tests {
         service(call::LZ77_UNCOMP_VRAM, &mut cpu, &mut mem);
         assert_eq!(mem.read16(0x3000), u16::from_le_bytes(*b"AB"));
         assert_eq!(mem.read8(0x300A), b'D');
+    }
+
+    #[test]
+    fn rl_decompresses_runs_and_literals() {
+        let mut mem = Ram::new();
+        // header 0x30, size 7 ; run of 4 'A' ; literal "BCD"
+        let data: [u8; 10] = [0x30, 7, 0, 0, 0x81, b'A', 0x02, b'B', b'C', b'D'];
+        for (i, b) in data.iter().enumerate() {
+            mem.write8(0x1000 + i as u32, *b);
+        }
+        let mut cpu = cpu_with(&[(0, 0x1000), (1, 0x2000)]);
+        service(call::RL_UNCOMP_WRAM, &mut cpu, &mut mem);
+        let out: Vec<u8> = (0..7).map(|i| mem.read8(0x2000 + i)).collect();
+        assert_eq!(&out, b"AAAABCD");
+    }
+
+    #[test]
+    fn bit_unpack_widens_units() {
+        let mut mem = Ram::new();
+        // Two bytes of 1-bit units -> 4-bit units with offset 5 for non-zero.
+        mem.write8(0x1000, 0b0000_0101);
+        mem.write8(0x1001, 0b0000_0001);
+        mem.write16(0x1100, 2); // length
+        mem.write8(0x1102, 1); // src bits
+        mem.write8(0x1103, 4); // dst bits
+        mem.write32(0x1104, 5); // offset
+        let mut cpu = cpu_with(&[(0, 0x1000), (1, 0x2000), (2, 0x1100)]);
+        service(call::BIT_UNPACK, &mut cpu, &mut mem);
+        assert_eq!(
+            mem.read32(0x2000),
+            0x0000_0606,
+            "bits 0 and 2 of byte 0, plus offset"
+        );
+        assert_eq!(mem.read32(0x2004), 0x0000_0006, "bit 0 of byte 1");
+    }
+
+    #[test]
+    fn affine_set_identity_and_rotation() {
+        let mut mem = Ram::new();
+        // ObjAffineSet: scale 1.0, theta 0 -> identity; stride 8 (OAM layout).
+        mem.write16(0x1000, 0x100);
+        mem.write16(0x1002, 0x100);
+        mem.write16(0x1004, 0);
+        let mut cpu = cpu_with(&[(0, 0x1000), (1, 0x2006), (2, 1), (3, 8)]);
+        service(call::OBJ_AFFINE_SET, &mut cpu, &mut mem);
+        assert_eq!(mem.read16(0x2006), 0x100);
+        assert_eq!(mem.read16(0x200E), 0);
+        assert_eq!(mem.read16(0x2016), 0);
+        assert_eq!(mem.read16(0x201E), 0x100);
+
+        // 90 degrees (theta 0x4000): pa = 0, pb = -1.0, pc = 1.0, pd = 0.
+        mem.write16(0x1004, 0x4000);
+        let mut cpu = cpu_with(&[(0, 0x1000), (1, 0x3000), (2, 1), (3, 2)]);
+        service(call::OBJ_AFFINE_SET, &mut cpu, &mut mem);
+        assert_eq!(mem.read16(0x3000), 0);
+        assert_eq!(mem.read16(0x3002) as i16, -0x100);
+        assert_eq!(mem.read16(0x3004), 0x100);
+        assert_eq!(mem.read16(0x3006), 0);
+
+        // BgAffineSet: origin (10, 20), centre (120, 80), identity.
+        mem.write32(0x4000, 10 << 8);
+        mem.write32(0x4004, 20 << 8);
+        mem.write16(0x4008, 120);
+        mem.write16(0x400A, 80);
+        mem.write16(0x400C, 0x100);
+        mem.write16(0x400E, 0x100);
+        mem.write16(0x4010, 0);
+        let mut cpu = cpu_with(&[(0, 0x4000), (1, 0x5000), (2, 1)]);
+        service(call::BG_AFFINE_SET, &mut cpu, &mut mem);
+        assert_eq!(mem.read16(0x5000), 0x100);
+        assert_eq!(mem.read32(0x5008) as i32, (10 << 8) - 120 * 0x100);
+        assert_eq!(mem.read32(0x500C) as i32, (20 << 8) - 80 * 0x100);
     }
 
     #[test]

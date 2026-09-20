@@ -110,8 +110,15 @@ impl App {
             .last_unsupported_swi
             .map(|n| format!("  [unsupported SWI {n:#04x}]"))
             .unwrap_or_default();
+        let debug = format!(
+            "pc={:#010x} {:?}{} dispcnt={:#06x}",
+            self.gba.cpu.next_pc(),
+            self.gba.cpu.regs.mode(),
+            if self.gba.cpu.halted { " halt" } else { "" },
+            self.gba.bus.io.read16(tuiba_core::memory::io::reg::DISPCNT),
+        );
         let status = Line::from(format!(
-            " {}{size_hint}{swi_hint}  {:.1} fps  keys:{keys} [{}]  q: quit",
+            " {}{size_hint}{swi_hint}  {:.1} fps  {debug}  keys:{keys} [{}]  q: quit",
             self.title,
             self.fps,
             self.held_buttons(now)
