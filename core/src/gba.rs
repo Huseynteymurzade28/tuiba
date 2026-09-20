@@ -78,6 +78,17 @@ impl Gba {
         Ok(())
     }
 
+    /// The backup memory contents, for writing a save file.
+    #[must_use]
+    pub fn save_data(&self) -> &[u8] {
+        self.bus.backup.data()
+    }
+
+    /// Restores backup memory from a save file's contents.
+    pub fn load_save_data(&mut self, data: &[u8]) {
+        self.bus.backup.load(data);
+    }
+
     /// Sets the keypad state (`KEYINPUT` layout, active-low).
     pub fn set_keyinput(&mut self, keyinput: u16) {
         self.bus.io.keyinput = keyinput;

@@ -133,6 +133,11 @@ impl App {
 fn run() -> Result<(), AppError> {
     let rom_path = std::env::args().nth(1).ok_or(AppError::Usage)?;
     let cartridge = Cartridge::load(&rom_path)?;
+    let save_path = std::path::Path::new(&rom_path).with_extension("sav");
+    let mut gba = Gba::new(cartridge);
+    if let Ok(data) = std::fs::read(&save_path) {
+        gba.load_save_data(&data);
+    }
 
     let mut terminal = ratatui::init();
     // Ask for key release events; terminals that lack the protocol simply
@@ -146,8 +151,8 @@ fn run() -> Result<(), AppError> {
     }
 
     let mut app = App {
-        title: cartridge.header().title.clone(),
-        gba: Gba::new(cartridge),
+        title: gba.bus.cartridge.header().title.clone(),
+        gba,
         keypad: Keypad::new(release_events),
         fps_frames: 0,
         fps_window_start: Instant::now(),
@@ -159,6 +164,11 @@ fn run() -> Result<(), AppError> {
         let _ = execute!(stdout(), PopKeyboardEnhancementFlags);
     }
     ratatui::restore();
+
+    // Persist the save even if the loop ended with an error.
+    if let Err(err) = std::fs::write(&save_path, app.gba.save_data()) {
+        eprintln!("warning: could not write {}: {err}", save_path.display());
+    }
     result
 }
 

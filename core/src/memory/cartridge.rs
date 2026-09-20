@@ -4,6 +4,7 @@ use std::path::Path;
 
 use crate::error::{GbaError, Result};
 use crate::memory::ROM_MAX_SIZE;
+use crate::memory::backup::SaveType;
 
 /// Offset of the cartridge header within the ROM.
 pub const HEADER_OFFSET: usize = 0xA0;
@@ -70,6 +71,7 @@ impl Header {
 pub struct Cartridge {
     rom: Box<[u8]>,
     header: Header,
+    save_type: SaveType,
 }
 
 impl Cartridge {
@@ -94,9 +96,11 @@ impl Cartridge {
             });
         }
         let header = Header::parse(&rom);
+        let save_type = SaveType::detect(&rom);
         Ok(Self {
             rom: rom.into_boxed_slice(),
             header,
+            save_type,
         })
     }
 
@@ -114,6 +118,12 @@ impl Cartridge {
     #[must_use]
     pub fn header(&self) -> &Header {
         &self.header
+    }
+
+    /// The backup chip type detected from the ROM.
+    #[must_use]
+    pub fn save_type(&self) -> SaveType {
+        self.save_type
     }
 
     /// Raw ROM contents.

@@ -20,6 +20,7 @@
 //! 0E000000-0E00FFFF  SRAM / Flash  64 KiB (8-bit bus)
 //! ```
 
+pub mod backup;
 pub mod bus;
 pub mod cartridge;
 pub mod dma;
@@ -27,6 +28,7 @@ pub mod io;
 pub mod timers;
 pub mod video;
 
+pub use backup::{Backup, SaveType};
 pub use bus::Bus;
 pub use cartridge::{Cartridge, Header};
 pub use io::{Interrupt, IoRegisters};

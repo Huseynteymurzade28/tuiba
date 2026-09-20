@@ -5,10 +5,11 @@
 //! lives in the CPU, not here.
 
 use crate::error::{GbaError, Result};
+use crate::memory::backup::Backup;
 use crate::memory::cartridge::Cartridge;
 use crate::memory::io::IoRegisters;
 use crate::memory::video::VideoMemory;
-use crate::memory::{BIOS_SIZE, EWRAM_SIZE, IWRAM_SIZE, Memory, MemoryRegion, SRAM_SIZE};
+use crate::memory::{BIOS_SIZE, EWRAM_SIZE, IWRAM_SIZE, Memory, MemoryRegion};
 
 /// Offset of an address within its 16 MiB page.
 #[inline]
@@ -42,7 +43,8 @@ pub struct Bus {
     bios: Box<[u8]>,
     ewram: Box<[u8]>,
     iwram: Box<[u8]>,
-    sram: Box<[u8]>,
+    /// Save memory at `0x0E00_0000`.
+    pub backup: Backup,
     /// Memory-mapped I/O registers.
     pub io: IoRegisters,
     /// Palette RAM, VRAM and OAM.
@@ -63,7 +65,7 @@ impl Bus {
             bios: vec![0; BIOS_SIZE].into_boxed_slice(),
             ewram: vec![0; EWRAM_SIZE].into_boxed_slice(),
             iwram: vec![0; IWRAM_SIZE].into_boxed_slice(),
-            sram: vec![0xFF; SRAM_SIZE].into_boxed_slice(),
+            backup: Backup::for_type(cartridge.save_type()),
             io: IoRegisters::new(),
             video: VideoMemory::new(),
             cartridge,
@@ -109,7 +111,7 @@ impl Memory for Bus {
             Some(MemoryRegion::Vram) => self.video.vram[VideoMemory::vram_index(off)],
             Some(MemoryRegion::Oam) => self.video.oam[VideoMemory::oam_index(off)],
             Some(MemoryRegion::Rom) => self.cartridge.read8(address & 0x01FF_FFFF),
-            Some(MemoryRegion::Sram) => self.sram[off as usize & (SRAM_SIZE - 1)],
+            Some(MemoryRegion::Sram) => self.backup.read(off),
             None => 0,
         }
     }
@@ -184,7 +186,7 @@ impl Memory for Bus {
                     set16(&mut self.video.vram, index, u16::from(value) * 0x0101);
                 }
             }
-            Some(MemoryRegion::Sram) => self.sram[off as usize & (SRAM_SIZE - 1)] = value,
+            Some(MemoryRegion::Sram) => self.backup.write(off, value),
             Some(MemoryRegion::Bios | MemoryRegion::Oam | MemoryRegion::Rom) | None => {}
         }
     }
