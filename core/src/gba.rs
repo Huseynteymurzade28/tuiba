@@ -1,0 +1,312 @@
+//! The whole system: CPU, bus and PPU wired together.
+
+use crate::bios::{self, Outcome};
+use crate::cpu::Cpu;
+use crate::error::Result;
+use crate::memory::io::reg;
+use crate::memory::{Bus, Cartridge, Memory};
+use crate::ppu::{CYCLES_PER_LINE, Framebuffer, Ppu};
+
+/// Cycles the system skips at a time while the CPU is halted. Small
+/// enough that HBlank/VBlank events are not noticeably delayed.
+const HALT_STEP: u32 = 32;
+
+/// State of a pending `IntrWait`/`VBlankIntrWait` call.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct IntrWait {
+    mask: u16,
+    resume_pc: u32,
+}
+
+/// A Game Boy Advance.
+#[derive(Debug, Clone)]
+pub struct Gba {
+    /// The ARM7TDMI.
+    pub cpu: Cpu,
+    /// Memory and memory-mapped devices.
+    pub bus: Bus,
+    /// The LCD controller.
+    pub ppu: Ppu,
+    /// An in-progress `IntrWait` BIOS call: the interrupt mask it waits for
+    /// and the address the call returns to.
+    ///
+    /// The real BIOS loops "halt; run the game's IRQ handler; check the
+    /// flag word" until a matching flag appears. We mirror that: whenever
+    /// the CPU is about to execute the return address outside IRQ mode, the
+    /// flag word is checked and the CPU is either released or halted again.
+    intr_wait: Option<IntrWait>,
+    /// Number of the last BIOS call that could not be serviced, for the
+    /// frontend to report.
+    pub last_unsupported_swi: Option<u8>,
+}
+
+impl Gba {
+    /// Boots a cartridge without a BIOS image: the CPU starts at the
+    /// cartridge entry point and BIOS calls are emulated in software.
+    #[must_use]
+    pub fn new(cartridge: Cartridge) -> Self {
+        let mut bus = Bus::new(cartridge);
+        let mut cpu = Cpu::new();
+        cpu.hle_swi = true;
+        cpu.skip_bios(&mut bus);
+        // The BIOS leaves this flag set after the boot sequence.
+        bus.io.write16(reg::POSTFLG, 1);
+        Self {
+            cpu,
+            bus,
+            ppu: Ppu::new(),
+            intr_wait: None,
+            last_unsupported_swi: None,
+        }
+    }
+
+    /// Installs a real BIOS image and restarts from the reset vector.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`crate::GbaError::BiosSize`] if the image is not 16 KiB.
+    pub fn load_bios(&mut self, bios: &[u8]) -> Result<()> {
+        self.bus.load_bios(bios)?;
+        self.cpu.hle_swi = false;
+        self.cpu.reset(&mut self.bus);
+        self.intr_wait = None;
+        Ok(())
+    }
+
+    /// Sets the keypad state (`KEYINPUT` layout, active-low).
+    pub fn set_keyinput(&mut self, keyinput: u16) {
+        self.bus.io.keyinput = keyinput;
+    }
+
+    /// The most recently rendered frame.
+    #[must_use]
+    pub fn framebuffer(&self) -> &Framebuffer {
+        &self.ppu.framebuffer
+    }
+
+    /// Runs the system until the PPU finishes a frame (enters VBlank).
+    pub fn run_frame(&mut self) {
+        loop {
+            if self.step() {
+                return;
+            }
+        }
+    }
+
+    /// Executes one instruction (or skips ahead while halted), advances the
+    /// PPU, and services BIOS calls and interrupts. Returns `true` when a
+    /// frame was completed.
+    pub fn step(&mut self) -> bool {
+        self.check_intr_wait();
+        let cycles = if self.cpu.halted {
+            HALT_STEP.min(CYCLES_PER_LINE)
+        } else {
+            let cycles = self.cpu.step(&mut self.bus);
+            if let Some(number) = self.cpu.take_swi() {
+                self.service_swi(number);
+            }
+            if std::mem::take(&mut self.bus.io.halt_requested) {
+                self.cpu.halted = true;
+            }
+            cycles
+        };
+
+        let frame_done = self.ppu.step(cycles, &mut self.bus.io, &self.bus.video);
+        self.service_interrupts();
+        frame_done
+    }
+
+    fn service_swi(&mut self, number: u8) {
+        match bios::service(number, &mut self.cpu, &mut self.bus) {
+            Outcome::Done => {}
+            Outcome::WaitForInterrupt { mask } => {
+                self.intr_wait = Some(IntrWait {
+                    mask,
+                    resume_pc: self.cpu.next_pc(),
+                });
+            }
+            Outcome::Unsupported => self.last_unsupported_swi = Some(number),
+        }
+    }
+
+    /// Re-evaluates a pending `IntrWait` once the IRQ handler has returned
+    /// to the call site: release the CPU if the game's handler flagged one
+    /// of the awaited interrupts, otherwise halt again.
+    fn check_intr_wait(&mut self) {
+        let Some(wait) = self.intr_wait else { return };
+        if self.cpu.halted
+            || self.cpu.regs.mode() == crate::cpu::Mode::Irq
+            || self.cpu.next_pc() != wait.resume_pc
+        {
+            return;
+        }
+        let flags = self.bus.read16(bios::INTR_CHECK_FLAGS);
+        if flags & wait.mask != 0 {
+            self.bus.write16(bios::INTR_CHECK_FLAGS, flags & !wait.mask);
+            self.intr_wait = None;
+        } else {
+            self.cpu.halted = true;
+        }
+    }
+
+    /// Wakes a halted CPU when an enabled interrupt is pending and enters
+    /// the IRQ handler if the CPU accepts interrupts.
+    fn service_interrupts(&mut self) {
+        let io = &self.bus.io;
+        let enabled_pending = io.read16(reg::IE) & io.read16(reg::IF);
+        if enabled_pending == 0 {
+            return;
+        }
+        // Any enabled interrupt wakes a halted CPU, even with IME off.
+        self.cpu.halted = false;
+        if io.read16(reg::IME) & 1 != 0 && self.cpu.irq_enabled() {
+            self.cpu.raise_irq(&self.bus);
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::memory::base;
+    use crate::memory::io::Interrupt;
+    use crate::memory::test_util::rom_with_header;
+    use crate::ppu::{CYCLES_PER_FRAME, SCREEN_WIDTH};
+
+    /// A cartridge whose entry point runs `code` (ARM).
+    fn gba_with(code: &[u32]) -> Gba {
+        let mut rom = rom_with_header("TEST", 0x1000);
+        for (i, word) in code.iter().enumerate() {
+            rom[i * 4..i * 4 + 4].copy_from_slice(&word.to_le_bytes());
+        }
+        Gba::new(Cartridge::from_bytes(rom).unwrap())
+    }
+
+    #[test]
+    fn boots_at_cartridge_entry_and_runs_a_frame() {
+        // mov r0, #0x04000000 ; mov r1, #0x400 ; orr r1, r1, #3 ; strh r1, [r0] ; b .
+        let mut gba = gba_with(&[
+            0xE3A0_0301,
+            0xE3A0_1B01,
+            0xE381_1003,
+            0xE1C0_10B0,
+            0xEAFF_FFFE,
+        ]);
+        assert_eq!(gba.cpu.next_pc(), base::ROM_WS0);
+        gba.run_frame();
+        assert_eq!(gba.bus.io.read16(reg::DISPCNT), 0x0403);
+        // A frame ends when VBlank starts, i.e. after the 160 visible lines.
+        assert!(gba.cpu.cycles >= u64::from(160 * CYCLES_PER_LINE - CYCLES_PER_LINE));
+        assert!(gba.cpu.cycles < u64::from(CYCLES_PER_FRAME));
+        assert_eq!(gba.ppu.vcount(), 160);
+    }
+
+    #[test]
+    fn mode3_pixel_reaches_framebuffer() {
+        // mov r0, #0x04000000 ; mov r1, #0x400 ; orr r1, r1, #3 ; strh r1, [r0]
+        // mov r2, #0x06000000 ; mov r3, #0x1F ; strh r3, [r2, #4] ; b .
+        let mut gba = gba_with(&[
+            0xE3A0_0301,
+            0xE3A0_1B01,
+            0xE381_1003,
+            0xE1C0_10B0,
+            0xE3A0_2406,
+            0xE3A0_301F,
+            0xE1C2_30B4,
+            0xEAFF_FFFE,
+        ]);
+        gba.run_frame();
+        assert_eq!(gba.framebuffer().row(0)[2], 0xFF00_00FF);
+        assert_eq!(gba.framebuffer().pixels().len(), SCREEN_WIDTH * 160);
+    }
+
+    #[test]
+    fn vblank_irq_is_delivered_and_intr_wait_resumes() {
+        let mut gba = gba_with(&[
+            0xE3A0_0301, // mov r0, #0x04000000
+            0xE3A0_1008, // mov r1, #8            ; DISPSTAT: VBlank IRQ enable
+            0xE1C0_10B4, // strh r1, [r0, #4]
+            0xE280_4C02, // add r4, r0, #0x200
+            0xE3A0_1001, // mov r1, #1
+            0xE1C4_10B0, // strh r1, [r4]         ; IE = VBlank
+            0xE1C4_10B8, // strh r1, [r4, #8]     ; IME = 1
+            0xEF05_0000, // loop: swi VBlankIntrWait
+            0xE3A0_3001, // mov r3, #1            ; marks a wakeup
+            0xEAFF_FFFC, // b loop
+        ]);
+        // Without a BIOS there is no IRQ vector, so install a minimal one:
+        // acknowledge VBlank in IF and in the BIOS flag word, then return.
+        let mut bios = vec![0u8; 0x4000];
+        let handler: [u32; 10] = [
+            0xE92D_4007, // 0x18: push {r0-r2, lr}
+            0xE3A0_0301, // mov r0, #0x04000000
+            0xE280_0C02, // add r0, r0, #0x200
+            0xE3A0_1001, // mov r1, #1
+            0xE1C0_10B2, // strh r1, [r0, #2]     ; IF = VBlank (ack)
+            0xE3A0_2403, // mov r2, #0x03000000
+            0xE382_2C7F, // orr r2, r2, #0x7F00
+            0xE1C2_1FB8, // strh r1, [r2, #0xF8]  ; INTR_CHECK_FLAGS |= VBlank
+            0xE8BD_4007, // pop {r0-r2, lr}
+            0xE25E_F004, // subs pc, lr, #4
+        ];
+        for (i, w) in handler.iter().enumerate() {
+            bios[0x18 + i * 4..0x18 + i * 4 + 4].copy_from_slice(&w.to_le_bytes());
+        }
+        gba.bus.load_bios(&bios).unwrap(); // keeps HLE SWI and the entry point
+
+        gba.run_frame();
+        // The frame ends as VBlank fires, so the CPU is already in the handler.
+        assert!(gba.intr_wait.is_some(), "still inside VBlankIntrWait");
+        assert_eq!(gba.cpu.regs.mode(), crate::cpu::Mode::Irq);
+        assert_eq!(gba.cpu.regs.get(3), 0);
+
+        // Let the handler run and return: the wait completes exactly once.
+        for _ in 0..64 {
+            gba.step();
+        }
+        assert_eq!(gba.cpu.regs.get(3), 1, "woken once");
+        assert_eq!(
+            gba.bus.io.read16(reg::IF) & Interrupt::VBlank.mask(),
+            0,
+            "acknowledged"
+        );
+        assert!(gba.cpu.irq_enabled(), "handler returned and restored CPSR");
+        assert!(gba.cpu.halted, "back in VBlankIntrWait");
+        assert_eq!(gba.bus.read16(bios::INTR_CHECK_FLAGS), 0, "flag consumed");
+    }
+
+    #[test]
+    fn halt_wakes_on_enabled_interrupt() {
+        // Enable the HBlank IRQ in IE but leave IME off; halt via HALTCNT.
+        let mut gba = gba_with(&[
+            0xE3A0_0301, // mov r0, #0x04000000
+            0xE3A0_1010, // mov r1, #0x10         ; DISPSTAT: HBlank IRQ enable
+            0xE1C0_10B4, // strh r1, [r0, #4]
+            0xE280_4C02, // add r4, r0, #0x200
+            0xE3A0_1002, // mov r1, #2
+            0xE1C4_10B0, // strh r1, [r4]         ; IE = HBlank
+            0xE3A0_1000, // mov r1, #0
+            0xE5C0_1301, // strb r1, [r0, #0x301] ; HALTCNT
+            0xE3A0_3001, // mov r3, #1
+            0xEAFF_FFFE, // b .
+        ]);
+        for _ in 0..8 {
+            gba.step();
+        }
+        assert!(gba.cpu.halted);
+        assert_eq!(gba.cpu.regs.get(3), 0);
+        while gba.cpu.halted {
+            gba.step();
+        }
+        assert!(gba.cpu.cycles < 2000, "woke at the first HBlank");
+        gba.step();
+        assert_eq!(gba.cpu.regs.get(3), 1, "resumed after the halt");
+    }
+
+    #[test]
+    fn unsupported_swi_is_reported() {
+        let mut gba = gba_with(&[0xEF2A_0000, 0xEAFF_FFFE]);
+        gba.step();
+        assert_eq!(gba.last_unsupported_swi, Some(0x2A));
+    }
+}

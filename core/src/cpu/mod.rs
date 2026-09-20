@@ -83,6 +83,13 @@ pub struct Cpu {
     flushed: bool,
     /// Total cycles executed. Purely informational for now.
     pub cycles: u64,
+    /// When set, `SWI` does not enter the exception vector but records the
+    /// call number for the emulator to service in software (HLE BIOS).
+    pub hle_swi: bool,
+    /// Pending HLE `SWI` call number, taken by [`Cpu::take_swi`].
+    pending_swi: Option<u8>,
+    /// Halted by `HALTCNT` or a BIOS wait call; woken by an interrupt.
+    pub halted: bool,
 }
 
 impl Default for Cpu {
@@ -102,6 +109,9 @@ impl Cpu {
             pipeline: [0; 2],
             flushed: false,
             cycles: 0,
+            hle_swi: false,
+            pending_swi: None,
+            halted: false,
         }
     }
 
@@ -183,10 +193,22 @@ impl Cpu {
     /// Like any other write to r15 this only *schedules* the pipeline
     /// refill; it happens at the end of the current step.
     pub(crate) fn enter_exception(&mut self, exception: Exception) {
-        // LR = address of the *next* instruction for SWI/UND (return with
-        // `MOVS pc, lr`), and next+4 for IRQ (return with `SUBS pc, lr, #4`).
-        // In both cases that is r15 minus one instruction.
-        let return_address = self.regs.get(PC).wrapping_sub(self.instruction_size());
+        // SWI/UND run mid-step: LR = the next instruction, i.e. r15 minus
+        // one instruction (return with `MOVS pc, lr`).
+        // IRQ/FIQ are taken between steps: LR = next instruction + 4
+        // (return with `SUBS pc, lr, #4`). With r15 = next + 2*size that is
+        // r15 - 4 in ARM and exactly r15 in THUMB.
+        let pc = self.regs.get(PC);
+        let return_address = match exception {
+            Exception::Irq | Exception::Fiq => {
+                if self.thumb() {
+                    pc
+                } else {
+                    pc.wrapping_sub(4)
+                }
+            }
+            _ => pc.wrapping_sub(self.instruction_size()),
+        };
         let old_cpsr = self.regs.cpsr;
 
         self.regs.switch_mode(exception.mode());
@@ -198,6 +220,35 @@ impl Cpu {
             self.regs.cpsr.set_fiq_disabled(true);
         }
         self.set_pc(exception.vector());
+    }
+
+    /// Handles an `SWI` instruction: either records it for HLE servicing
+    /// or enters the Supervisor exception vector.
+    pub(crate) fn software_interrupt(&mut self, comment: u8) {
+        if self.hle_swi {
+            self.pending_swi = Some(comment);
+        } else {
+            self.enter_exception(Exception::SoftwareInterrupt);
+        }
+    }
+
+    /// Takes the HLE `SWI` call recorded by the last step, if any.
+    pub fn take_swi(&mut self) -> Option<u8> {
+        self.pending_swi.take()
+    }
+
+    /// Whether an IRQ would be accepted right now (CPSR I bit clear).
+    #[must_use]
+    pub fn irq_enabled(&self) -> bool {
+        !self.regs.cpsr.irq_disabled()
+    }
+
+    /// Takes the IRQ exception immediately, refilling the pipeline from
+    /// the vector. Call between steps, only when [`Cpu::irq_enabled`].
+    pub fn raise_irq(&mut self, mem: &impl Memory) {
+        self.halted = false;
+        self.enter_exception(Exception::Irq);
+        self.flush_pipeline(mem, self.regs.get(PC));
     }
 
     /// Executes a single instruction and returns the cycles it took.
@@ -462,6 +513,42 @@ mod tests {
         assert_eq!(cpu.next_pc(), 0x08);
         assert_eq!(cpu.regs.get(LR), 0x202);
         assert!(cpu.regs.spsr().unwrap().thumb());
+    }
+
+    #[test]
+    fn irq_return_address_is_next_plus_four_in_both_states() {
+        let mut mem = Ram::new();
+        mem.load_arm(0x100, &[0xE1A0_0000; 4]);
+        let mut cpu = cpu_at(&mut mem, 0x100);
+        cpu.step(&mut mem);
+        cpu.raise_irq(&mem);
+        assert_eq!(cpu.regs.mode(), Mode::Irq);
+        assert_eq!(cpu.regs.get(LR), 0x108, "next instruction 0x104 + 4");
+        assert_eq!(cpu.next_pc(), 0x18);
+        assert!(cpu.regs.cpsr.irq_disabled());
+
+        mem.load_thumb(0x200, &[0x46C0; 4]); // nop
+        let mut cpu = cpu_at(&mut mem, 0x200);
+        cpu.regs.cpsr.set_thumb(true);
+        cpu.flush_pipeline(&mem, 0x200);
+        cpu.step(&mut mem);
+        cpu.raise_irq(&mem);
+        assert!(!cpu.thumb());
+        assert_eq!(cpu.regs.get(LR), 0x206, "next instruction 0x202 + 4");
+        assert!(cpu.regs.spsr().unwrap().thumb());
+    }
+
+    #[test]
+    fn hle_swi_is_recorded_instead_of_taken() {
+        let mut mem = Ram::new();
+        mem.load_arm(0x100, &[0xEF05_0000]); // swi 0x50000: ARM form of call 5
+        let mut cpu = cpu_at(&mut mem, 0x100);
+        cpu.hle_swi = true;
+        cpu.step(&mut mem);
+        assert_eq!(cpu.take_swi(), Some(5));
+        assert_eq!(cpu.take_swi(), None);
+        assert_eq!(cpu.regs.mode(), Mode::System);
+        assert_eq!(cpu.next_pc(), 0x104);
     }
 
     #[test]

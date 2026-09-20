@@ -137,7 +137,7 @@ impl Cpu {
             ThumbKind::Branch => self.thumb_branch(op),
             ThumbKind::LongBranchLink => self.thumb_long_branch_link(op),
             ThumbKind::Swi => {
-                self.enter_exception(Exception::SoftwareInterrupt);
+                self.software_interrupt(op as u8);
                 3
             }
             ThumbKind::Undefined => {

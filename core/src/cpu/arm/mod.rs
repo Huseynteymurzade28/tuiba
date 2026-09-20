@@ -124,7 +124,8 @@ impl Cpu {
             ArmKind::BlockDataTransfer => self.arm_block_transfer(mem, op),
             ArmKind::SingleDataSwap => self.arm_swap(mem, op),
             ArmKind::SoftwareInterrupt => {
-                self.enter_exception(Exception::SoftwareInterrupt);
+                // The BIOS reads the call number from bits 23:16.
+                self.software_interrupt((op >> 16) as u8);
                 3
             }
             ArmKind::Undefined | ArmKind::Coprocessor => {

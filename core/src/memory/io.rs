@@ -95,6 +95,8 @@ pub struct IoRegisters {
     raw: Box<[u8]>,
     /// Current `KEYINPUT` state, written by the frontend. `0` = pressed.
     pub keyinput: u16,
+    /// Set by a write to `HALTCNT`; the emulator takes it and halts the CPU.
+    pub halt_requested: bool,
 }
 
 impl Default for IoRegisters {
@@ -110,6 +112,7 @@ impl IoRegisters {
         Self {
             raw: vec![0; IO_SIZE].into_boxed_slice(),
             keyinput: KEYINPUT_ALL_RELEASED,
+            halt_requested: false,
         }
     }
 
@@ -160,6 +163,11 @@ impl IoRegisters {
 
     /// Writes a byte register by merging it into the containing halfword.
     pub fn write8(&mut self, offset: u32, value: u8) {
+        // HALTCNT: bit 7 clear = halt, set = stop (treated as halt).
+        if offset == reg::HALTCNT {
+            self.halt_requested = true;
+            return;
+        }
         let aligned = offset & !1;
         let shift = (offset & 1) * 8;
         let half = match aligned {
@@ -287,6 +295,19 @@ mod tests {
         assert!(io.irq_pending());
         io.write16(reg::IF, Interrupt::Timer1.mask());
         assert!(!io.irq_pending(), "acknowledged");
+    }
+
+    #[test]
+    fn haltcnt_requests_halt() {
+        let mut io = IoRegisters::new();
+        io.write8(reg::HALTCNT, 0);
+        assert!(io.halt_requested);
+        io.halt_requested = false;
+        io.write16(reg::POSTFLG, 0x0001);
+        assert!(
+            !io.halt_requested,
+            "halfword write to POSTFLG is not a halt"
+        );
     }
 
     #[test]

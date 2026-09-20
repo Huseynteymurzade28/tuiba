@@ -17,7 +17,7 @@ use ratatui::layout::{Constraint, Layout};
 use ratatui::style::{Color, Style};
 use ratatui::text::Line;
 use ratatui::widgets::Paragraph;
-use tuiba_core::{Cartridge, Framebuffer};
+use tuiba_core::{Cartridge, Gba};
 
 use crate::input::{GbaKey, Keypad};
 use crate::screen::GbaScreen;
@@ -38,14 +38,36 @@ enum AppError {
     Io(#[from] std::io::Error),
 }
 
+/// Target frame period: the GBA runs at 16.78 MHz / 280 896 cycles per
+/// frame ≈ 59.73 Hz.
+const FRAME_PERIOD: Duration = Duration::from_micros(16_743);
+
 /// Frontend state.
 struct App {
     title: String,
-    framebuffer: Framebuffer,
+    gba: Gba,
     keypad: Keypad,
+    /// Frames emulated in the current measurement window.
+    fps_frames: u32,
+    fps_window_start: Instant,
+    /// Last measured emulation rate.
+    fps: f64,
 }
 
 impl App {
+    /// Emulates one frame with the current keypad state.
+    fn emulate_frame(&mut self, now: Instant) {
+        self.gba.set_keyinput(self.keypad.keyinput(now));
+        self.gba.run_frame();
+        self.fps_frames += 1;
+        let elapsed = now.duration_since(self.fps_window_start);
+        if elapsed >= Duration::from_secs(1) {
+            self.fps = f64::from(self.fps_frames) / elapsed.as_secs_f64();
+            self.fps_frames = 0;
+            self.fps_window_start = now;
+        }
+    }
+
     /// Human-readable list of held buttons, for the status bar.
     fn held_buttons(&self, now: Instant) -> String {
         GbaKey::ALL
@@ -60,7 +82,7 @@ impl App {
         let [screen_area, status_area] =
             Layout::vertical([Constraint::Fill(1), Constraint::Length(1)]).areas(frame.area());
 
-        frame.render_widget(GbaScreen::new(&self.framebuffer), screen_area);
+        frame.render_widget(GbaScreen::new(self.gba.framebuffer()), screen_area);
 
         let size_hint = if GbaScreen::fits(screen_area) {
             String::new()
@@ -79,10 +101,15 @@ impl App {
             "timeout"
         };
         let now = Instant::now();
+        let swi_hint = self
+            .gba
+            .last_unsupported_swi
+            .map(|n| format!("  [unsupported SWI {n:#04x}]"))
+            .unwrap_or_default();
         let status = Line::from(format!(
-            " {}{size_hint}  keys:{keys} KEYINPUT={:#06x} [{}]  q: quit",
+            " {}{size_hint}{swi_hint}  {:.1} fps  keys:{keys} [{}]  q: quit",
             self.title,
-            self.keypad.keyinput(now),
+            self.fps,
             self.held_buttons(now)
         ));
         frame.render_widget(
@@ -109,8 +136,11 @@ fn run() -> Result<(), AppError> {
 
     let mut app = App {
         title: cartridge.header().title.clone(),
-        framebuffer: Framebuffer::new(),
+        gba: Gba::new(cartridge),
         keypad: Keypad::new(release_events),
+        fps_frames: 0,
+        fps_window_start: Instant::now(),
+        fps: 0.0,
     };
     let result = event_loop(&mut terminal, &mut app);
 
@@ -121,9 +151,18 @@ fn run() -> Result<(), AppError> {
     result
 }
 
+/// Emulate → draw → handle input, paced to the GBA's frame rate.
+///
+/// Emulation and rendering are decoupled: if a frame takes longer than
+/// the period we simply run late rather than skipping emulation, so the
+/// game never sees dropped input or jumps in time.
 fn event_loop(terminal: &mut ratatui::DefaultTerminal, app: &mut App) -> Result<(), AppError> {
+    let mut next_frame = Instant::now();
     loop {
+        let now = Instant::now();
+        app.emulate_frame(now);
         terminal.draw(|frame| app.draw(frame))?;
+
         while event::poll(Duration::ZERO)? {
             if let Event::Key(key) = event::read()? {
                 if key.kind == KeyEventKind::Press
@@ -134,7 +173,15 @@ fn event_loop(terminal: &mut ratatui::DefaultTerminal, app: &mut App) -> Result<
                 app.keypad.handle(key, Instant::now());
             }
         }
-        std::thread::sleep(Duration::from_millis(16));
+
+        next_frame += FRAME_PERIOD;
+        let now = Instant::now();
+        if next_frame > now {
+            std::thread::sleep(next_frame - now);
+        } else {
+            // Running behind: resynchronise instead of trying to catch up.
+            next_frame = now;
+        }
     }
 }
 
