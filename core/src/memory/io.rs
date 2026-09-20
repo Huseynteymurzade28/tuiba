@@ -60,6 +60,35 @@ pub mod reg {
 /// `KEYINPUT` value with every key released (bits are active-low).
 pub const KEYINPUT_ALL_RELEASED: u16 = 0x03FF;
 
+/// Interrupt sources, numbered by their bit in `IE`/`IF`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
+#[allow(missing_docs)]
+pub enum Interrupt {
+    VBlank = 0,
+    HBlank = 1,
+    VCount = 2,
+    Timer0 = 3,
+    Timer1 = 4,
+    Timer2 = 5,
+    Timer3 = 6,
+    Serial = 7,
+    Dma0 = 8,
+    Dma1 = 9,
+    Dma2 = 10,
+    Dma3 = 11,
+    Keypad = 12,
+    GamePak = 13,
+}
+
+impl Interrupt {
+    /// The `IE`/`IF` bit for this source.
+    #[must_use]
+    pub const fn mask(self) -> u16 {
+        1 << (self as u16)
+    }
+}
+
 /// The I/O register block.
 #[derive(Debug, Clone)]
 pub struct IoRegisters {
@@ -120,6 +149,8 @@ impl IoRegisters {
         let value = match off as u32 {
             // Read-only.
             reg::VCOUNT | reg::KEYINPUT => return,
+            // Bits 2:0 are status flags owned by the PPU.
+            reg::DISPSTAT => (value & !0x7) | (self.read16(reg::DISPSTAT) & 0x7),
             // Writing `1` acknowledges (clears) the corresponding bit.
             reg::IF => self.read16(reg::IF) & !value,
             _ => value,
@@ -144,6 +175,19 @@ impl IoRegisters {
         let aligned = offset & !3;
         self.write16(aligned, value as u16);
         self.write16(aligned + 2, (value >> 16) as u16);
+    }
+
+    /// Raises `source` in `IF`. Whether it reaches the CPU depends on `IE`
+    /// and `IME`, which the interrupt controller checks separately.
+    pub fn request_interrupt(&mut self, source: Interrupt) {
+        let current = self.read16(reg::IF);
+        self.set_raw16(reg::IF, current | source.mask());
+    }
+
+    /// Whether an interrupt is pending and enabled: `IME`, `IE & IF`.
+    #[must_use]
+    pub fn irq_pending(&self) -> bool {
+        self.read16(reg::IME) & 1 != 0 && self.read16(reg::IE) & self.read16(reg::IF) != 0
     }
 
     /// Sets a register's stored value directly, bypassing write semantics.
@@ -220,6 +264,29 @@ mod tests {
         assert_eq!(io.read16(reg::IF), 0b0101);
         io.write8(reg::IF, 0b0001);
         assert_eq!(io.read16(reg::IF), 0b0100);
+    }
+
+    #[test]
+    fn dispstat_flags_survive_software_writes() {
+        let mut io = IoRegisters::new();
+        io.set_raw16(reg::DISPSTAT, 0b011);
+        io.write16(reg::DISPSTAT, 0x1F38);
+        assert_eq!(io.read16(reg::DISPSTAT), 0x1F3B);
+    }
+
+    #[test]
+    fn interrupt_request_and_pending() {
+        let mut io = IoRegisters::new();
+        io.request_interrupt(Interrupt::VBlank);
+        io.request_interrupt(Interrupt::Timer1);
+        assert_eq!(io.read16(reg::IF), 0b1_0001);
+        assert!(!io.irq_pending(), "IME off");
+        io.write16(reg::IME, 1);
+        assert!(!io.irq_pending(), "IE empty");
+        io.write16(reg::IE, Interrupt::Timer1.mask());
+        assert!(io.irq_pending());
+        io.write16(reg::IF, Interrupt::Timer1.mask());
+        assert!(!io.irq_pending(), "acknowledged");
     }
 
     #[test]

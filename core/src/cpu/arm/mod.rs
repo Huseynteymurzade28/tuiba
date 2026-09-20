@@ -38,7 +38,7 @@ pub enum ArmKind {
     /// Coprocessor instructions: the GBA has no coprocessors, so these
     /// trap to the undefined-instruction vector.
     Coprocessor,
-    /// Any encoding that is undefined on `ARMv4T`.
+    /// Any encoding that is undefined on ARMv4T.
     Undefined,
 }
 

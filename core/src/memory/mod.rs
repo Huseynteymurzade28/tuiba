@@ -27,7 +27,7 @@ pub mod video;
 
 pub use bus::Bus;
 pub use cartridge::{Cartridge, Header};
-pub use io::IoRegisters;
+pub use io::{Interrupt, IoRegisters};
 pub use video::VideoMemory;
 
 /// Byte-addressable memory as seen by the CPU and DMA.

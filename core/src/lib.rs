@@ -9,11 +9,14 @@
 //! - [`error`]  – the crate-wide [`GbaError`] type.
 //! - [`memory`] – GBA address-space layout, bus and cartridge.
 //! - [`cpu`]    – the ARM7TDMI core.
+//! - [`ppu`]    – LCD timing and scanline rendering into a framebuffer.
 
 pub mod cpu;
 pub mod error;
 pub mod memory;
+pub mod ppu;
 
 pub use cpu::Cpu;
 pub use error::{GbaError, Result};
 pub use memory::{Bus, Cartridge, Memory};
+pub use ppu::{Framebuffer, Ppu, SCREEN_HEIGHT, SCREEN_WIDTH};

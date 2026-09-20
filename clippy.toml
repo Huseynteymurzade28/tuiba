@@ -1,0 +1,2 @@
+# Hardware terms that clippy::doc_markdown would otherwise want in backticks.
+doc-valid-idents = ["HBlank", "VBlank", "VCount", "ARMv4T", "ARM7TDMI", "GBA", "VRAM", "EWRAM", "IWRAM", "OAM", "SRAM", "BIOS", "MMIO", ".."]
