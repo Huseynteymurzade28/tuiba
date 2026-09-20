@@ -14,11 +14,14 @@
 
 pub mod bitmap;
 pub mod framebuffer;
+pub mod tiled;
 
 pub use framebuffer::{Framebuffer, Rgba, SCREEN_HEIGHT, SCREEN_WIDTH};
 
 use crate::memory::VideoMemory;
 use crate::memory::io::{Interrupt, IoRegisters, reg};
+use framebuffer::bgr555_to_rgba;
+use tiled::{BgControl, TRANSPARENT};
 
 /// Cycles per scanline.
 pub const CYCLES_PER_LINE: u32 = 1232;
@@ -60,6 +63,8 @@ pub struct Ppu {
     line_cycle: u32,
     /// Whether HBlank has been entered on the current line.
     in_hblank: bool,
+    /// Per-background scanline scratch buffers, 15-bit colours.
+    bg_lines: [[u16; SCREEN_WIDTH]; 4],
 }
 
 impl Default for Ppu {
@@ -77,6 +82,7 @@ impl Ppu {
             vcount: 0,
             line_cycle: 0,
             in_hblank: false,
+            bg_lines: [[TRANSPARENT; SCREEN_WIDTH]; 4],
         }
     }
 
@@ -153,25 +159,65 @@ impl Ppu {
         entered_vblank
     }
 
+    /// Renders the current scanline: each enabled background into its
+    /// scratch buffer, then composited front-to-back by priority.
     fn render_line(&mut self, io: &IoRegisters, video: &VideoMemory) {
         let dispcnt = io.read16(reg::DISPCNT);
         let y = usize::from(self.vcount);
-        let out = self.framebuffer.row_mut(y);
 
         // Forced blank: the LCD shows white.
         if dispcnt & (1 << 7) != 0 {
-            out.fill(0xFFFF_FFFF);
+            self.framebuffer.row_mut(y).fill(0xFFFF_FFFF);
             return;
         }
 
+        let mode = dispcnt & 0x7;
         let frame1 = dispcnt & (1 << 4) != 0;
-        let bg2_enabled = dispcnt & (1 << 10) != 0;
-        match dispcnt & 0x7 {
-            3 if bg2_enabled => bitmap::render_mode3(video, y, out),
-            4 if bg2_enabled => bitmap::render_mode4(video, frame1, y, out),
-            5 if bg2_enabled => bitmap::render_mode5(video, frame1, y, out),
-            // Tiled modes are not implemented yet; show the backdrop.
-            _ => out.fill(bitmap::palette_color(video, 0)),
+        let mut enabled = [false; 4];
+        for (bg, on) in enabled.iter_mut().enumerate() {
+            *on = dispcnt & (1 << (8 + bg)) != 0;
+        }
+        // Which backgrounds exist in this mode, and which are affine.
+        let (available, affine): ([bool; 4], [bool; 4]) = match mode {
+            0 => ([true; 4], [false; 4]),
+            1 => ([true, true, true, false], [false, false, true, false]),
+            2 => ([false, false, true, true], [false, false, true, true]),
+            3..=5 => ([false, false, true, false], [false; 4]),
+            _ => ([false; 4], [false; 4]),
+        };
+
+        for bg in 0..4 {
+            enabled[bg] &= available[bg];
+            if !enabled[bg] {
+                continue;
+            }
+            let line = &mut self.bg_lines[bg];
+            match mode {
+                3 => bitmap::render_mode3(video, y, line),
+                4 => bitmap::render_mode4(video, frame1, y, line),
+                5 => bitmap::render_mode5(video, frame1, y, line),
+                _ if affine[bg] => tiled::render_affine(io, video, bg, y, line),
+                _ => tiled::render_text(io, video, bg, y, line),
+            }
+        }
+
+        let priorities: [u8; 4] = std::array::from_fn(|bg| BgControl::read(io, bg).priority);
+        let backdrop = bitmap::palette_entry(video, 0);
+        let out = self.framebuffer.row_mut(y);
+        for (x, px) in out.iter_mut().enumerate() {
+            let mut color = backdrop;
+            let mut best = u8::MAX;
+            // Lower priority value wins; ties go to the lower-numbered BG.
+            for bg in 0..4 {
+                if enabled[bg] && priorities[bg] < best {
+                    let c = self.bg_lines[bg][x];
+                    if c != TRANSPARENT {
+                        color = c;
+                        best = priorities[bg];
+                    }
+                }
+            }
+            *px = bgr555_to_rgba(color);
         }
     }
 }

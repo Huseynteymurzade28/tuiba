@@ -34,6 +34,28 @@ pub mod reg {
     pub const BG2VOFS: u32 = 0x01A;
     pub const BG3HOFS: u32 = 0x01C;
     pub const BG3VOFS: u32 = 0x01E;
+    pub const BG2PA: u32 = 0x020;
+    pub const BG2PB: u32 = 0x022;
+    pub const BG2PC: u32 = 0x024;
+    pub const BG2PD: u32 = 0x026;
+    pub const BG2X: u32 = 0x028;
+    pub const BG2Y: u32 = 0x02C;
+    pub const BG3PA: u32 = 0x030;
+    pub const BG3PB: u32 = 0x032;
+    pub const BG3PC: u32 = 0x034;
+    pub const BG3PD: u32 = 0x036;
+    pub const BG3X: u32 = 0x038;
+    pub const BG3Y: u32 = 0x03C;
+    pub const WIN0H: u32 = 0x040;
+    pub const WIN1H: u32 = 0x042;
+    pub const WIN0V: u32 = 0x044;
+    pub const WIN1V: u32 = 0x046;
+    pub const WININ: u32 = 0x048;
+    pub const WINOUT: u32 = 0x04A;
+    pub const MOSAIC: u32 = 0x04C;
+    pub const BLDCNT: u32 = 0x050;
+    pub const BLDALPHA: u32 = 0x052;
+    pub const BLDY: u32 = 0x054;
 
     // Sound (not emulated; stored so games see their writes)
     pub const SOUNDCNT_L: u32 = 0x080;
