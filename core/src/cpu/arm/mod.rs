@@ -1,10 +1,11 @@
 //! ARM (32-bit) instruction set: decoding and execution.
 
 mod alu;
+mod mem;
 
 use crate::cpu::registers::{LR, PC};
 use crate::cpu::{Cpu, Exception};
-use crate::error::{GbaError, Result};
+use crate::memory::Memory;
 
 /// The instruction class an ARM opcode belongs to.
 ///
@@ -105,32 +106,31 @@ pub const fn decode(op: u32) -> ArmKind {
 }
 
 impl Cpu {
-    /// Executes one ARM instruction. `address` is where it was fetched from.
-    pub(super) fn execute_arm(&mut self, op: u32, address: u32) -> Result<u32> {
+    /// Executes one ARM instruction.
+    pub(super) fn execute_arm(&mut self, mem: &mut impl Memory, op: u32) -> u32 {
         if !self.regs.cpsr.condition(op >> 28) {
-            return Ok(1);
+            return 1;
         }
 
         match decode(op) {
-            ArmKind::Branch => Ok(self.arm_branch(op)),
-            ArmKind::BranchExchange => Ok(self.arm_branch_exchange(op)),
-            ArmKind::DataProcessing => Ok(self.arm_data_processing(op)),
-            ArmKind::PsrTransfer => Ok(self.arm_psr_transfer(op)),
-            ArmKind::Multiply => Ok(self.arm_multiply(op)),
-            ArmKind::MultiplyLong => Ok(self.arm_multiply_long(op)),
+            ArmKind::Branch => self.arm_branch(op),
+            ArmKind::BranchExchange => self.arm_branch_exchange(op),
+            ArmKind::DataProcessing => self.arm_data_processing(op),
+            ArmKind::PsrTransfer => self.arm_psr_transfer(op),
+            ArmKind::Multiply => self.arm_multiply(op),
+            ArmKind::MultiplyLong => self.arm_multiply_long(op),
+            ArmKind::SingleDataTransfer => self.arm_single_transfer(mem, op),
+            ArmKind::HalfwordTransfer => self.arm_halfword_transfer(mem, op),
+            ArmKind::BlockDataTransfer => self.arm_block_transfer(mem, op),
+            ArmKind::SingleDataSwap => self.arm_swap(mem, op),
             ArmKind::SoftwareInterrupt => {
                 self.enter_exception(Exception::SoftwareInterrupt);
-                Ok(3)
+                3
             }
             ArmKind::Undefined | ArmKind::Coprocessor => {
                 self.enter_exception(Exception::Undefined);
-                Ok(3)
+                3
             }
-            _ => Err(GbaError::UnimplementedInstruction {
-                mode: "ARM",
-                opcode: op,
-                pc: address,
-            }),
         }
     }
 

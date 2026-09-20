@@ -16,6 +16,7 @@
 
 pub mod alu;
 pub mod arm;
+pub mod load;
 pub mod registers;
 pub mod thumb;
 
@@ -219,7 +220,7 @@ impl Cpu {
         let cycles = if self.thumb() {
             self.execute_thumb(op as u16, address)
         } else {
-            self.execute_arm(op, address)
+            Ok(self.execute_arm(mem, op))
         };
 
         match cycles {
@@ -253,6 +254,14 @@ pub(crate) mod test_util {
         let mut cpu = Cpu::new();
         cpu.reset(mem);
         cpu.regs.switch_mode(Mode::System);
+        cpu.flush_pipeline(mem, pc);
+        cpu
+    }
+
+    /// A CPU in System mode, THUMB state, about to execute the halfword at `pc`.
+    pub fn thumb_at(mem: &mut Ram, pc: u32) -> Cpu {
+        let mut cpu = arm_at(mem, pc);
+        cpu.regs.cpsr.set_thumb(true);
         cpu.flush_pipeline(mem, pc);
         cpu
     }
@@ -325,7 +334,7 @@ pub(crate) mod test_util {
 
 #[cfg(test)]
 mod tests {
-    use super::test_util::{Ram, arm_at as cpu_at};
+    use super::test_util::{Ram, arm_at as cpu_at, thumb_at};
     use super::*;
     use crate::error::GbaError;
 
@@ -488,18 +497,18 @@ mod tests {
     #[test]
     fn unimplemented_reports_address_and_leaves_state() {
         let mut mem = Ram::new();
-        mem.load_arm(0x100, &[0xE590_0000]); // ldr r0, [r0]
-        let mut cpu = cpu_at(&mut mem, 0x100);
+        mem.load_thumb(0x200, &[0x2001]); // mov r0, #1
+        let mut cpu = thumb_at(&mut mem, 0x200);
         let err = cpu.step(&mut mem).unwrap_err();
         assert!(matches!(
             err,
             GbaError::UnimplementedInstruction {
-                mode: "ARM",
-                opcode: 0xE590_0000,
-                pc: 0x100
+                mode: "THUMB",
+                opcode: 0x2001,
+                pc: 0x200
             }
         ));
-        assert_eq!(cpu.next_pc(), 0x100);
-        assert_eq!(cpu.pipeline[0], 0xE590_0000);
+        assert_eq!(cpu.next_pc(), 0x200);
+        assert_eq!(cpu.pipeline[0], 0x2001);
     }
 }
