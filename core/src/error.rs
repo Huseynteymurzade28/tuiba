@@ -45,17 +45,6 @@ pub enum GbaError {
         /// The faulting address.
         address: u32,
     },
-
-    /// The CPU fetched an instruction it does not (yet) know how to execute.
-    #[error("unimplemented {mode} instruction {opcode:#010x} at {pc:#010x}")]
-    UnimplementedInstruction {
-        /// `"ARM"` or `"THUMB"`.
-        mode: &'static str,
-        /// Raw instruction word (16-bit THUMB opcodes are zero-extended).
-        opcode: u32,
-        /// Address the instruction was fetched from.
-        pc: u32,
-    },
 }
 
 /// Convenience alias used throughout the crate.

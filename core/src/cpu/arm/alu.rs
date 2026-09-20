@@ -286,7 +286,7 @@ mod tests {
         );
         let mut cpu = arm_at(&mut mem, 0x100);
         for _ in 0..3 {
-            cpu.step(&mut mem).unwrap();
+            cpu.step(&mut mem);
         }
         assert_eq!(cpu.regs.get(0), 1);
         assert_eq!(cpu.regs.get(1), 0xFF00_0001);
@@ -299,12 +299,12 @@ mod tests {
         mem.load_arm(0x100, &[enc::dp_imm(0x2, true, 0, 0, 1, 0)]); // subs r0, r0, #1
         let mut cpu = arm_at(&mut mem, 0x100);
         cpu.regs.set(0, 1);
-        cpu.step(&mut mem).unwrap();
+        cpu.step(&mut mem);
         assert_eq!(cpu.regs.get(0), 0);
         assert!(cpu.regs.cpsr.z() && cpu.regs.cpsr.c() && !cpu.regs.cpsr.n() && !cpu.regs.cpsr.v());
 
         cpu.flush_pipeline(&mem, 0x100);
-        cpu.step(&mut mem).unwrap(); // 0 - 1
+        cpu.step(&mut mem); // 0 - 1
         assert_eq!(cpu.regs.get(0), 0xFFFF_FFFF);
         assert!(!cpu.regs.cpsr.z() && !cpu.regs.cpsr.c() && cpu.regs.cpsr.n());
     }
@@ -316,7 +316,7 @@ mod tests {
         let mut cpu = arm_at(&mut mem, 0x100);
         cpu.regs.set(0, 0x7FFF_FFFF);
         cpu.regs.set(1, 1);
-        cpu.step(&mut mem).unwrap();
+        cpu.step(&mut mem);
         assert_eq!(cpu.regs.get(0), 0x8000_0000);
         assert!(cpu.regs.cpsr.v() && cpu.regs.cpsr.n() && !cpu.regs.cpsr.c());
     }
@@ -328,7 +328,7 @@ mod tests {
         let mut cpu = arm_at(&mut mem, 0x100);
         cpu.regs.set(0, 5);
         cpu.regs.set(1, 5);
-        cpu.step(&mut mem).unwrap();
+        cpu.step(&mut mem);
         assert_eq!(cpu.regs.get(0), 5);
         assert!(cpu.regs.cpsr.z() && cpu.regs.cpsr.c());
     }
@@ -340,13 +340,13 @@ mod tests {
         mem.load_arm(0x100, &[0xE1B0_0081, 0xE010_2221, 0xE310_0000]);
         let mut cpu = arm_at(&mut mem, 0x100);
         cpu.regs.set(1, 0x8000_0018);
-        cpu.step(&mut mem).unwrap();
+        cpu.step(&mut mem);
         assert_eq!(cpu.regs.get(0), 0x30);
         assert!(cpu.regs.cpsr.c(), "carry out of LSL");
-        cpu.step(&mut mem).unwrap();
+        cpu.step(&mut mem);
         assert_eq!(cpu.regs.get(2), 0x30 & 0x0800_0001);
         assert!(cpu.regs.cpsr.c(), "carry out of LSR #4 of ...0x18 is bit 3");
-        cpu.step(&mut mem).unwrap();
+        cpu.step(&mut mem);
         assert!(cpu.regs.cpsr.z());
         assert!(cpu.regs.cpsr.c(), "rotate 0 keeps carry");
     }
@@ -357,8 +357,8 @@ mod tests {
         mem.load_arm(0x100, &[0xE1A0_000F, 0xE1A0_121F]); // mov r0, pc ; mov r1, pc, lsl r2
         let mut cpu = arm_at(&mut mem, 0x100);
         cpu.regs.set(2, 0);
-        cpu.step(&mut mem).unwrap();
-        cpu.step(&mut mem).unwrap();
+        cpu.step(&mut mem);
+        cpu.step(&mut mem);
         assert_eq!(cpu.regs.get(0), 0x108);
         assert_eq!(cpu.regs.get(1), 0x110);
     }
@@ -369,7 +369,7 @@ mod tests {
         mem.load_arm(0x100, &[0xE1A0_F000]); // mov pc, r0
         let mut cpu = arm_at(&mut mem, 0x100);
         cpu.regs.set(0, 0x203); // misaligned bits dropped
-        cpu.step(&mut mem).unwrap();
+        cpu.step(&mut mem);
         assert_eq!(cpu.next_pc(), 0x200);
     }
 
@@ -381,7 +381,7 @@ mod tests {
         cpu.regs.switch_mode(Mode::Supervisor);
         cpu.regs.set(LR, 0x300);
         cpu.regs.set_spsr(Cpsr(0x2000_0010)); // C set, User mode
-        cpu.step(&mut mem).unwrap();
+        cpu.step(&mut mem);
         assert_eq!(cpu.regs.mode(), Mode::User);
         assert!(cpu.regs.cpsr.c());
         assert_eq!(cpu.next_pc(), 0x300);
@@ -393,13 +393,13 @@ mod tests {
         // mrs r0, cpsr ; orr r0, r0, #0x80000000 ; msr cpsr_f, r0 ; msr cpsr_c, #0x12
         mem.load_arm(0x100, &[0xE10F_0000, 0xE380_0102, 0xE128_F000, 0xE321_F012]);
         let mut cpu = arm_at(&mut mem, 0x100);
-        cpu.step(&mut mem).unwrap();
+        cpu.step(&mut mem);
         assert_eq!(cpu.regs.get(0), cpu.regs.cpsr.0);
-        cpu.step(&mut mem).unwrap();
-        cpu.step(&mut mem).unwrap();
+        cpu.step(&mut mem);
+        cpu.step(&mut mem);
         assert!(cpu.regs.cpsr.n());
         assert_eq!(cpu.regs.mode(), Mode::System);
-        cpu.step(&mut mem).unwrap();
+        cpu.step(&mut mem);
         assert_eq!(
             cpu.regs.mode(),
             Mode::Irq,
@@ -414,7 +414,7 @@ mod tests {
         mem.load_arm(0x100, &[0xE321_F013]); // msr cpsr_c, #0x13
         let mut cpu = arm_at(&mut mem, 0x100);
         cpu.regs.switch_mode(Mode::User);
-        cpu.step(&mut mem).unwrap();
+        cpu.step(&mut mem);
         assert_eq!(cpu.regs.mode(), Mode::User);
     }
 
@@ -427,7 +427,7 @@ mod tests {
         cpu.regs.set(1, 0xFFFF_FFFF); // -1
         cpu.regs.set(2, 3);
         for _ in 0..4 {
-            cpu.step(&mut mem).unwrap();
+            cpu.step(&mut mem);
         }
         assert_eq!(cpu.regs.get(0), 0xFFFF_FFFD);
         assert_eq!(cpu.regs.get(3), 0xFFFF_FFFA);
@@ -447,7 +447,7 @@ mod tests {
         cpu.regs.set(1, 0x8000_0000);
         cpu.regs.set(2, 2);
         cpu.regs.set(3, 3);
-        cpu.step(&mut mem).unwrap();
+        cpu.step(&mut mem);
         assert_eq!((cpu.regs.get(1), cpu.regs.get(0)), (0x8000_0000, 7));
         assert!(cpu.regs.cpsr.n() && !cpu.regs.cpsr.z());
     }

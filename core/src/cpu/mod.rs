@@ -20,7 +20,6 @@ pub mod load;
 pub mod registers;
 pub mod thumb;
 
-use crate::error::Result;
 use crate::memory::Memory;
 pub use registers::{Cpsr, Mode, Registers};
 use registers::{LR, PC, SP};
@@ -202,45 +201,27 @@ impl Cpu {
     }
 
     /// Executes a single instruction and returns the cycles it took.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`crate::GbaError::UnimplementedInstruction`] for opcodes the
-    /// core cannot execute yet. The CPU state is left as it was before the
-    /// instruction, so the caller can inspect it.
-    pub fn step(&mut self, mem: &mut impl Memory) -> Result<u32> {
+    pub fn step(&mut self, mem: &mut impl Memory) -> u32 {
         let size = self.instruction_size();
         let pc = self.regs.get(PC);
-        let address = pc.wrapping_sub(2 * size);
 
         let op = self.pipeline[0];
         self.pipeline[0] = self.pipeline[1];
         self.pipeline[1] = self.fetch(mem, pc);
 
         let cycles = if self.thumb() {
-            self.execute_thumb(op as u16, address)
+            self.execute_thumb(mem, op as u16)
         } else {
-            Ok(self.execute_arm(mem, op))
+            self.execute_arm(mem, op)
         };
 
-        match cycles {
-            Ok(cycles) => {
-                if self.flushed {
-                    self.flush_pipeline(mem, self.regs.get(PC));
-                } else {
-                    self.regs.set(PC, pc.wrapping_add(size));
-                }
-                self.cycles += u64::from(cycles);
-                Ok(cycles)
-            }
-            Err(err) => {
-                // Undo the prefetch so a retry (or a debugger) sees the
-                // faulting instruction at the front of the queue.
-                self.pipeline[1] = self.pipeline[0];
-                self.pipeline[0] = op;
-                Err(err)
-            }
+        if self.flushed {
+            self.flush_pipeline(mem, self.regs.get(PC));
+        } else {
+            self.regs.set(PC, pc.wrapping_add(size));
         }
+        self.cycles += u64::from(cycles);
+        cycles
     }
 }
 
@@ -334,9 +315,8 @@ pub(crate) mod test_util {
 
 #[cfg(test)]
 mod tests {
-    use super::test_util::{Ram, arm_at as cpu_at, thumb_at};
+    use super::test_util::{Ram, arm_at as cpu_at};
     use super::*;
-    use crate::error::GbaError;
 
     #[test]
     fn reset_starts_at_vector_zero_with_prefetch() {
@@ -372,9 +352,9 @@ mod tests {
         // 0x110: b 0x100 ; offset = (0x100 - 0x118) / 4 = -6
         mem.load_arm(0x110, &[0xEAFF_FFFA]);
         let mut cpu = cpu_at(&mut mem, 0x100);
-        assert_eq!(cpu.step(&mut mem).unwrap(), 3);
+        assert_eq!(cpu.step(&mut mem), 3);
         assert_eq!(cpu.next_pc(), 0x110);
-        cpu.step(&mut mem).unwrap();
+        cpu.step(&mut mem);
         assert_eq!(cpu.next_pc(), 0x100);
     }
 
@@ -383,7 +363,7 @@ mod tests {
         let mut mem = Ram::new();
         mem.load_arm(0x100, &[0xEB00_0010]); // bl 0x148
         let mut cpu = cpu_at(&mut mem, 0x100);
-        cpu.step(&mut mem).unwrap();
+        cpu.step(&mut mem);
         assert_eq!(cpu.regs.get(LR), 0x104);
         assert_eq!(cpu.next_pc(), 0x148);
     }
@@ -393,11 +373,11 @@ mod tests {
         let mut mem = Ram::new();
         mem.load_arm(0x100, &[0x0A00_0010, 0xEA00_0000]); // beq +; b +0
         let mut cpu = cpu_at(&mut mem, 0x100);
-        assert_eq!(cpu.step(&mut mem).unwrap(), 1);
+        assert_eq!(cpu.step(&mut mem), 1);
         assert_eq!(cpu.next_pc(), 0x104);
         cpu.regs.cpsr.set_z(true);
         cpu.flush_pipeline(&mem, 0x100);
-        cpu.step(&mut mem).unwrap();
+        cpu.step(&mut mem);
         assert_eq!(cpu.next_pc(), 0x148);
     }
 
@@ -409,11 +389,11 @@ mod tests {
         let mut cpu = cpu_at(&mut mem, 0x100);
         cpu.regs.set(0, 0x201);
         cpu.regs.set(1, 0x300);
-        cpu.step(&mut mem).unwrap();
+        cpu.step(&mut mem);
         assert!(cpu.thumb());
         assert_eq!(cpu.next_pc(), 0x200);
         assert_eq!(cpu.regs.get(PC), 0x204, "THUMB r15 reads PC+4");
-        cpu.step(&mut mem).unwrap();
+        cpu.step(&mut mem);
         assert!(!cpu.thumb());
         assert_eq!(cpu.next_pc(), 0x300);
         assert_eq!(cpu.regs.get(PC), 0x308, "ARM r15 reads PC+8");
@@ -429,13 +409,13 @@ mod tests {
         let mut cpu = cpu_at(&mut mem, 0x200);
         cpu.regs.cpsr.set_thumb(true);
         cpu.flush_pipeline(&mem, 0x200);
-        cpu.step(&mut mem).unwrap();
+        cpu.step(&mut mem);
         assert_eq!(cpu.next_pc(), 0x208);
-        cpu.step(&mut mem).unwrap();
+        cpu.step(&mut mem);
         assert_eq!(cpu.next_pc(), 0x206);
         cpu.regs.cpsr.set_z(true);
         cpu.flush_pipeline(&mem, 0x208);
-        assert_eq!(cpu.step(&mut mem).unwrap(), 1);
+        assert_eq!(cpu.step(&mut mem), 1);
         assert_eq!(cpu.next_pc(), 0x20A);
     }
 
@@ -448,8 +428,8 @@ mod tests {
         let mut cpu = cpu_at(&mut mem, 0x200);
         cpu.regs.cpsr.set_thumb(true);
         cpu.flush_pipeline(&mem, 0x200);
-        cpu.step(&mut mem).unwrap();
-        cpu.step(&mut mem).unwrap();
+        cpu.step(&mut mem);
+        cpu.step(&mut mem);
         assert_eq!(cpu.next_pc(), 0x400);
         assert_eq!(cpu.regs.get(LR), 0x205);
     }
@@ -460,7 +440,7 @@ mod tests {
         mem.load_arm(0x100, &[0xEF00_0001]); // swi 1
         let mut cpu = cpu_at(&mut mem, 0x100);
         cpu.regs.cpsr.set_c(true);
-        cpu.step(&mut mem).unwrap();
+        cpu.step(&mut mem);
         assert_eq!(cpu.regs.mode(), Mode::Supervisor);
         assert_eq!(cpu.next_pc(), 0x08);
         assert_eq!(cpu.regs.get(LR), 0x104);
@@ -477,7 +457,7 @@ mod tests {
         let mut cpu = cpu_at(&mut mem, 0x200);
         cpu.regs.cpsr.set_thumb(true);
         cpu.flush_pipeline(&mem, 0x200);
-        cpu.step(&mut mem).unwrap();
+        cpu.step(&mut mem);
         assert!(!cpu.thumb());
         assert_eq!(cpu.next_pc(), 0x08);
         assert_eq!(cpu.regs.get(LR), 0x202);
@@ -489,26 +469,8 @@ mod tests {
         let mut mem = Ram::new();
         mem.load_arm(0x100, &[0xE780_1012]);
         let mut cpu = cpu_at(&mut mem, 0x100);
-        cpu.step(&mut mem).unwrap();
+        cpu.step(&mut mem);
         assert_eq!(cpu.regs.mode(), Mode::Undefined);
         assert_eq!(cpu.next_pc(), 0x04);
-    }
-
-    #[test]
-    fn unimplemented_reports_address_and_leaves_state() {
-        let mut mem = Ram::new();
-        mem.load_thumb(0x200, &[0x2001]); // mov r0, #1
-        let mut cpu = thumb_at(&mut mem, 0x200);
-        let err = cpu.step(&mut mem).unwrap_err();
-        assert!(matches!(
-            err,
-            GbaError::UnimplementedInstruction {
-                mode: "THUMB",
-                opcode: 0x2001,
-                pc: 0x200
-            }
-        ));
-        assert_eq!(cpu.next_pc(), 0x200);
-        assert_eq!(cpu.pipeline[0], 0x2001);
     }
 }

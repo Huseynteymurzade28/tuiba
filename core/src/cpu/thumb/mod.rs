@@ -1,8 +1,11 @@
 //! THUMB (16-bit) instruction set: decoding and execution.
 
+mod alu;
+mod mem;
+
 use crate::cpu::registers::{LR, PC};
 use crate::cpu::{Cpu, Exception};
-use crate::error::{GbaError, Result};
+use crate::memory::Memory;
 
 /// The THUMB instruction format (numbered as in the ARM7TDMI manual).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -112,27 +115,35 @@ pub const fn decode(op: u16) -> ThumbKind {
 }
 
 impl Cpu {
-    /// Executes one THUMB instruction. `address` is where it was fetched from.
-    pub(super) fn execute_thumb(&mut self, op: u16, address: u32) -> Result<u32> {
+    /// Executes one THUMB instruction.
+    pub(super) fn execute_thumb(&mut self, mem: &mut impl Memory, op: u16) -> u32 {
         match decode(op) {
-            ThumbKind::Branch => Ok(self.thumb_branch(op)),
-            ThumbKind::CondBranch => Ok(self.thumb_cond_branch(op)),
-            ThumbKind::LongBranchLink => Ok(self.thumb_long_branch_link(op)),
-            // Only the BX form of format 5 exists yet.
-            ThumbKind::HiRegBx if (op >> 8) & 0b11 == 0b11 => Ok(self.thumb_bx(op)),
+            ThumbKind::MoveShifted => self.thumb_move_shifted(op),
+            ThumbKind::AddSub => self.thumb_add_sub(op),
+            ThumbKind::MovCmpAddSubImm => self.thumb_immediate(op),
+            ThumbKind::AluOps => self.thumb_alu(op),
+            ThumbKind::HiRegBx => self.thumb_hi_reg(op),
+            ThumbKind::LdrPcRel => self.thumb_ldr_pc(mem, op),
+            ThumbKind::LdrStrReg => self.thumb_ldr_str_reg(mem, op),
+            ThumbKind::LdrStrSignExt => self.thumb_ldr_str_sign_ext(mem, op),
+            ThumbKind::LdrStrImm => self.thumb_ldr_str_imm(mem, op),
+            ThumbKind::LdrStrHalf => self.thumb_ldr_str_half(mem, op),
+            ThumbKind::LdrStrSpRel => self.thumb_ldr_str_sp(mem, op),
+            ThumbKind::LoadAddress => self.thumb_load_address(op),
+            ThumbKind::AddSp => self.thumb_add_sp(op),
+            ThumbKind::PushPop => self.thumb_push_pop(mem, op),
+            ThumbKind::LdmStm => self.thumb_ldm_stm(mem, op),
+            ThumbKind::CondBranch => self.thumb_cond_branch(op),
+            ThumbKind::Branch => self.thumb_branch(op),
+            ThumbKind::LongBranchLink => self.thumb_long_branch_link(op),
             ThumbKind::Swi => {
                 self.enter_exception(Exception::SoftwareInterrupt);
-                Ok(3)
+                3
             }
             ThumbKind::Undefined => {
                 self.enter_exception(Exception::Undefined);
-                Ok(3)
+                3
             }
-            _ => Err(GbaError::UnimplementedInstruction {
-                mode: "THUMB",
-                opcode: u32::from(op),
-                pc: address,
-            }),
         }
     }
 
@@ -169,15 +180,6 @@ impl Cpu {
             self.set_pc(target);
             3
         }
-    }
-
-    /// Format 5 `BX Rs` (Rs may be a high register).
-    fn thumb_bx(&mut self, op: u16) -> u32 {
-        let rs = usize::from((op >> 3) & 0xF);
-        let target = self.regs.get(rs);
-        self.regs.cpsr.set_thumb(target & 1 != 0);
-        self.set_pc(target);
-        3
     }
 }
 

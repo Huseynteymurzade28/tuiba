@@ -261,7 +261,7 @@ mod tests {
         cpu.regs.set(0, 0x1000);
         cpu.regs.set(1, 0xAABB_CCDD);
         for _ in 0..4 {
-            cpu.step(&mut mem).unwrap();
+            cpu.step(&mut mem);
         }
         assert_eq!(mem.read32(0x1004), 0xAABB_CCDD);
         assert_eq!(cpu.regs.get(2), 0xAABB_CCDD);
@@ -279,14 +279,14 @@ mod tests {
         cpu.regs.set(0, 0x1000);
         cpu.regs.set(1, 1);
         cpu.regs.set(3, 1);
-        cpu.step(&mut mem).unwrap();
+        cpu.step(&mut mem);
         assert_eq!(cpu.regs.get(0), 0x1004);
         assert_eq!(mem.read32(0x1004), 1);
-        cpu.step(&mut mem).unwrap();
+        cpu.step(&mut mem);
         assert_eq!(cpu.regs.get(0), 0x1000);
         assert_eq!(mem.read32(0x1004), 1);
         mem.write32(0xFFC, 0x77);
-        cpu.step(&mut mem).unwrap();
+        cpu.step(&mut mem);
         assert_eq!(cpu.regs.get(0), 0xFFC);
         assert_eq!(cpu.regs.get(2), 0x77);
     }
@@ -297,11 +297,11 @@ mod tests {
         mem.load_arm(0x100, &[0xE59F_0000, 0xE1A0_0000, 0x1234_5678, 0xE590_1001]);
         // ldr r0, [pc] -> loads word at 0x108 ; nop ; literal ; ldr r1, [r0, #1]
         let mut cpu = arm_at(&mut mem, 0x100);
-        cpu.step(&mut mem).unwrap();
+        cpu.step(&mut mem);
         assert_eq!(cpu.regs.get(0), 0x1234_5678);
         cpu.regs.set(0, 0x108);
         cpu.flush_pipeline(&mem, 0x10C);
-        cpu.step(&mut mem).unwrap();
+        cpu.step(&mut mem);
         assert_eq!(cpu.regs.get(1), 0x7812_3456);
     }
 
@@ -311,10 +311,10 @@ mod tests {
         mem.load_arm(0x100, &[0xE580_F000, 0xE590_F000]); // str pc, [r0] ; ldr pc, [r0]
         let mut cpu = arm_at(&mut mem, 0x100);
         cpu.regs.set(0, 0x1000);
-        cpu.step(&mut mem).unwrap();
+        cpu.step(&mut mem);
         assert_eq!(mem.read32(0x1000), 0x10C);
         mem.write32(0x1000, 0x203);
-        cpu.step(&mut mem).unwrap();
+        cpu.step(&mut mem);
         assert_eq!(cpu.next_pc(), 0x200);
         assert!(!cpu.thumb(), "ARMv4 LDR pc does not switch state");
     }
@@ -339,7 +339,7 @@ mod tests {
         cpu.regs.set(1, 0xFFFF_8001);
         cpu.regs.set(6, 1);
         for _ in 0..5 {
-            cpu.step(&mut mem).unwrap();
+            cpu.step(&mut mem);
         }
         assert_eq!(mem.read16(0x1000), 0x8001);
         assert_eq!(cpu.regs.get(2), 0x8001);
@@ -359,13 +359,13 @@ mod tests {
         cpu.regs.set(1, 11);
         cpu.regs.set(2, 12);
         cpu.regs.set(LR, 0x300);
-        cpu.step(&mut mem).unwrap();
+        cpu.step(&mut mem);
         assert_eq!(cpu.regs.get(SP), 0x1FF0);
         assert_eq!(mem.read32(0x1FF0), 10);
         assert_eq!(mem.read32(0x1FF4), 11);
         assert_eq!(mem.read32(0x1FF8), 12);
         assert_eq!(mem.read32(0x1FFC), 0x300);
-        cpu.step(&mut mem).unwrap();
+        cpu.step(&mut mem);
         assert_eq!(cpu.regs.get(SP), 0x2000);
         assert_eq!(
             (cpu.regs.get(4), cpu.regs.get(5), cpu.regs.get(6)),
@@ -391,7 +391,7 @@ mod tests {
         for (lo, hi) in expected {
             cpu.regs.set(0, 0x1000);
             mem.0[0xFF0..0x1010].fill(0);
-            cpu.step(&mut mem).unwrap();
+            cpu.step(&mut mem);
             assert_eq!(mem.read32(lo), 1, "lo @ {lo:#x}");
             assert_eq!(mem.read32(hi), 2, "hi @ {hi:#x}");
         }
@@ -405,14 +405,14 @@ mod tests {
         let mut cpu = arm_at(&mut mem, 0x100);
         cpu.regs.set(0, 0x1000);
         cpu.regs.set(1, 0x2000);
-        cpu.step(&mut mem).unwrap();
+        cpu.step(&mut mem);
         assert_eq!(
             mem.read32(0x1000),
             0x1000,
             "base first in list: original value"
         );
         assert_eq!(cpu.regs.get(0), 0x1008);
-        cpu.step(&mut mem).unwrap();
+        cpu.step(&mut mem);
         assert_eq!(
             mem.read32(0x2004),
             0x2008,
@@ -428,7 +428,7 @@ mod tests {
         mem.write32(0x1004, 0x66);
         let mut cpu = arm_at(&mut mem, 0x100);
         cpu.regs.set(0, 0x1000);
-        cpu.step(&mut mem).unwrap();
+        cpu.step(&mut mem);
         assert_eq!(cpu.regs.get(0), 0x55);
         assert_eq!(cpu.regs.get(1), 0x66);
     }
@@ -439,7 +439,7 @@ mod tests {
         mem.load_arm(0x100, &[0xE8A0_0000]); // stmia r0!, {}
         let mut cpu = arm_at(&mut mem, 0x100);
         cpu.regs.set(0, 0x1000);
-        cpu.step(&mut mem).unwrap();
+        cpu.step(&mut mem);
         assert_eq!(mem.read32(0x1000), 0x10C);
         assert_eq!(cpu.regs.get(0), 0x1040);
     }
@@ -455,9 +455,9 @@ mod tests {
         cpu.regs.set(SP, 0xBBBB);
         cpu.regs.set(0, 0x1000);
         cpu.regs.set_spsr(crate::cpu::Cpsr(0x0000_001F));
-        cpu.step(&mut mem).unwrap();
+        cpu.step(&mut mem);
         assert_eq!(mem.read32(0x1000), 0xAAAA, "User-bank sp stored");
-        cpu.step(&mut mem).unwrap();
+        cpu.step(&mut mem);
         assert_eq!(cpu.regs.mode(), Mode::System);
         assert_eq!(cpu.next_pc(), 0xAAA8);
         let _ = PC;
@@ -473,10 +473,10 @@ mod tests {
         cpu.regs.set(0, 0x1000);
         cpu.regs.set(1, 0x1122_3344);
         cpu.regs.set(2, 0x2001);
-        cpu.step(&mut mem).unwrap();
+        cpu.step(&mut mem);
         assert_eq!(cpu.regs.get(0), 0xDEAD_BEEF);
         assert_eq!(mem.read32(0x1000), 0x1122_3344);
-        cpu.step(&mut mem).unwrap();
+        cpu.step(&mut mem);
         assert_eq!(cpu.regs.get(3), 0x42);
         assert_eq!(mem.read8(0x2001), 0x44);
     }
