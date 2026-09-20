@@ -60,8 +60,9 @@ impl GbaKey {
 
 /// Maps a terminal key to a GBA button.
 ///
-/// Layout: arrows = D-pad, `Z` = A, `X` = B, `A` = L, `S` = R,
-/// `Enter` = Start, `Backspace` / `Right Shift` = Select.
+/// Buttons are on the keys of the same name: `A`, `B`, `L`, `R`,
+/// arrows for the D-pad, `Enter` = Start, `Space` / `Backspace` = Select.
+/// `Z`/`X` double as A/B for people used to other emulators.
 #[must_use]
 pub fn map_key(code: KeyCode) -> Option<GbaKey> {
     Some(match code {
@@ -69,12 +70,12 @@ pub fn map_key(code: KeyCode) -> Option<GbaKey> {
         KeyCode::Down => GbaKey::Down,
         KeyCode::Left => GbaKey::Left,
         KeyCode::Right => GbaKey::Right,
-        KeyCode::Char('z' | 'Z') => GbaKey::A,
-        KeyCode::Char('x' | 'X') => GbaKey::B,
-        KeyCode::Char('a' | 'A') => GbaKey::L,
-        KeyCode::Char('s' | 'S') => GbaKey::R,
+        KeyCode::Char('a' | 'A' | 'z' | 'Z') => GbaKey::A,
+        KeyCode::Char('b' | 'B' | 'x' | 'X') => GbaKey::B,
+        KeyCode::Char('l' | 'L') => GbaKey::L,
+        KeyCode::Char('r' | 'R') => GbaKey::R,
         KeyCode::Enter => GbaKey::Start,
-        KeyCode::Backspace => GbaKey::Select,
+        KeyCode::Backspace | KeyCode::Char(' ') => GbaKey::Select,
         _ => return None,
     })
 }
@@ -172,16 +173,16 @@ mod tests {
     #[test]
     fn mapping_covers_all_ten_buttons() {
         let codes = [
-            KeyCode::Char('z'),
-            KeyCode::Char('x'),
+            KeyCode::Char('a'),
+            KeyCode::Char('b'),
             KeyCode::Backspace,
             KeyCode::Enter,
             KeyCode::Right,
             KeyCode::Left,
             KeyCode::Up,
             KeyCode::Down,
-            KeyCode::Char('s'),
-            KeyCode::Char('a'),
+            KeyCode::Char('r'),
+            KeyCode::Char('l'),
         ];
         for (code, expected) in codes.into_iter().zip(GbaKey::ALL) {
             assert_eq!(map_key(code), Some(expected));
@@ -199,7 +200,7 @@ mod tests {
         let t0 = Instant::now();
         let mut pad = Keypad::new(true);
         assert_eq!(pad.keyinput(t0), 0x03FF);
-        assert!(pad.handle(press(KeyCode::Char('z')), t0));
+        assert!(pad.handle(press(KeyCode::Char('a')), t0));
         assert!(pad.handle(press(KeyCode::Up), t0));
         assert_eq!(
             pad.keyinput(t0),
@@ -207,7 +208,7 @@ mod tests {
         );
         // Still held long after: no timeout in this mode.
         assert!(pad.is_pressed(GbaKey::A, t0 + Duration::from_secs(10)));
-        pad.handle(release(KeyCode::Char('z')), t0 + Duration::from_secs(10));
+        pad.handle(release(KeyCode::Char('a')), t0 + Duration::from_secs(10));
         assert_eq!(
             pad.keyinput(t0 + Duration::from_secs(10)),
             0x03FF & !GbaKey::Up.mask()
@@ -235,10 +236,10 @@ mod tests {
     fn modifier_chords_are_ignored() {
         let t0 = Instant::now();
         let mut pad = Keypad::new(true);
-        assert!(!pad.handle(KeyEvent::new(KeyCode::Char('z'), KeyModifiers::CONTROL), t0));
-        assert!(!pad.handle(KeyEvent::new(KeyCode::Char('z'), KeyModifiers::ALT), t0));
+        assert!(!pad.handle(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::CONTROL), t0));
+        assert!(!pad.handle(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::ALT), t0));
         assert_eq!(pad.keyinput(t0), 0x03FF);
-        assert!(pad.handle(KeyEvent::new(KeyCode::Char('Z'), KeyModifiers::SHIFT), t0));
+        assert!(pad.handle(KeyEvent::new(KeyCode::Char('A'), KeyModifiers::SHIFT), t0));
     }
 
     #[test]

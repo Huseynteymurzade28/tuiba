@@ -8,8 +8,8 @@ use std::process::ExitCode;
 use std::time::{Duration, Instant};
 
 use crossterm::event::{
-    self, Event, KeyCode, KeyEventKind, KeyboardEnhancementFlags, PopKeyboardEnhancementFlags,
-    PushKeyboardEnhancementFlags,
+    self, Event, KeyCode, KeyEventKind, KeyModifiers, KeyboardEnhancementFlags,
+    PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
 };
 use crossterm::execute;
 use ratatui::Frame;
@@ -118,7 +118,7 @@ impl App {
             self.gba.bus.io.read16(tuiba_core::memory::io::reg::DISPCNT),
         );
         let status = Line::from(format!(
-            " {}{size_hint}{swi_hint}  {:.1} fps  {debug}  keys:{keys} [{}]  q: quit",
+            " {}{size_hint}{swi_hint}  {:.1} fps  {debug}  keys:{keys} [{}]  Esc: quit",
             self.title,
             self.fps,
             self.held_buttons(now)
@@ -186,9 +186,10 @@ fn event_loop(terminal: &mut ratatui::DefaultTerminal, app: &mut App) -> Result<
 
         while event::poll(Duration::ZERO)? {
             if let Event::Key(key) = event::read()? {
-                if key.kind == KeyEventKind::Press
-                    && matches!(key.code, KeyCode::Char('q') | KeyCode::Esc)
-                {
+                // Esc or Ctrl+Q quits; plain letters belong to the game.
+                let ctrl_q =
+                    key.code == KeyCode::Char('q') && key.modifiers.contains(KeyModifiers::CONTROL);
+                if key.kind == KeyEventKind::Press && (key.code == KeyCode::Esc || ctrl_q) {
                     return Ok(());
                 }
                 app.keypad.handle(key, Instant::now());
