@@ -65,9 +65,9 @@ impl Framebuffer {
         &self.pixels[y * SCREEN_WIDTH..(y + 1) * SCREEN_WIDTH]
     }
 
-    /// Mutable access to one scanline, for the renderer.
+    /// Mutable access to one scanline.
     #[inline]
-    pub(crate) fn row_mut(&mut self, y: usize) -> &mut [Rgba] {
+    pub fn row_mut(&mut self, y: usize) -> &mut [Rgba] {
         &mut self.pixels[y * SCREEN_WIDTH..(y + 1) * SCREEN_WIDTH]
     }
 
