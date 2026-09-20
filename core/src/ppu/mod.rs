@@ -14,6 +14,7 @@
 
 pub mod bitmap;
 pub mod framebuffer;
+pub mod obj;
 pub mod tiled;
 
 pub use framebuffer::{Framebuffer, Rgba, SCREEN_HEIGHT, SCREEN_WIDTH};
@@ -65,6 +66,9 @@ pub struct Ppu {
     in_hblank: bool,
     /// Per-background scanline scratch buffers, 15-bit colours.
     bg_lines: [[u16; SCREEN_WIDTH]; 4],
+    /// OBJ layer scratch: colours and the priority of the winning sprite.
+    obj_line: [u16; SCREEN_WIDTH],
+    obj_priority: [u8; SCREEN_WIDTH],
 }
 
 impl Default for Ppu {
@@ -83,6 +87,8 @@ impl Ppu {
             line_cycle: 0,
             in_hblank: false,
             bg_lines: [[TRANSPARENT; SCREEN_WIDTH]; 4],
+            obj_line: [TRANSPARENT; SCREEN_WIDTH],
+            obj_priority: [0; SCREEN_WIDTH],
         }
     }
 
@@ -201,6 +207,11 @@ impl Ppu {
             }
         }
 
+        let objects = dispcnt & (1 << 12) != 0;
+        if objects {
+            obj::render_line(io, video, y, &mut self.obj_line, &mut self.obj_priority);
+        }
+
         let priorities: [u8; 4] = std::array::from_fn(|bg| BgControl::read(io, bg).priority);
         let backdrop = bitmap::palette_entry(video, 0);
         let out = self.framebuffer.row_mut(y);
@@ -216,6 +227,10 @@ impl Ppu {
                         best = priorities[bg];
                     }
                 }
+            }
+            // A sprite beats a background of equal or worse priority.
+            if objects && self.obj_line[x] != TRANSPARENT && self.obj_priority[x] <= best {
+                color = self.obj_line[x];
             }
             *px = bgr555_to_rgba(color);
         }
