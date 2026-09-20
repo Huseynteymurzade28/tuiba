@@ -3,7 +3,9 @@
 use crate::bios::{self, Outcome};
 use crate::cpu::Cpu;
 use crate::error::Result;
+use crate::memory::dma::{self, Timing};
 use crate::memory::io::reg;
+use crate::memory::timers::Timers;
 use crate::memory::{Bus, Cartridge, Memory};
 use crate::ppu::{CYCLES_PER_LINE, Framebuffer, Ppu};
 
@@ -111,9 +113,39 @@ impl Gba {
             cycles
         };
 
-        let frame_done = self.ppu.step(cycles, &mut self.bus.io, &self.bus.video);
+        self.run_dma();
+        let timer_irqs = self.bus.io.timers.step(cycles);
+        for n in (0..4).filter(|n| timer_irqs & (1 << n) != 0) {
+            self.bus.io.request_interrupt(Timers::interrupt(n));
+        }
+
+        let events = self.ppu.step(cycles, &mut self.bus.io, &self.bus.video);
+        if events.hblank {
+            self.bus.io.dma.trigger(Timing::HBlank);
+        }
+        if events.vblank {
+            self.bus.io.dma.trigger(Timing::VBlank);
+        }
+        self.run_dma();
+
         self.service_interrupts();
-        frame_done
+        events.vblank
+    }
+
+    /// Runs every DMA channel that has been triggered. Transfers are
+    /// instantaneous; the CPU is simply not stepped in the meantime.
+    fn run_dma(&mut self) {
+        let pending = self.bus.io.dma.take_pending();
+        for n in (0..4).filter(|n| pending & (1 << n) != 0) {
+            // The transfer needs the whole bus, so the controller state is
+            // moved out for its duration.
+            let mut controller = std::mem::take(&mut self.bus.io.dma);
+            let irq = dma::run(&mut controller, n, &mut self.bus);
+            self.bus.io.dma = controller;
+            if let Some(irq) = irq {
+                self.bus.io.request_interrupt(irq);
+            }
+        }
     }
 
     fn service_swi(&mut self, number: u8) {
@@ -301,6 +333,47 @@ mod tests {
         assert!(gba.cpu.cycles < 2000, "woke at the first HBlank");
         gba.step();
         assert_eq!(gba.cpu.regs.get(3), 1, "resumed after the halt");
+    }
+
+    #[test]
+    fn immediate_dma_copies_rom_to_vram() {
+        // DMA3: copy 4 halfwords from ROM+0x100 to VRAM.
+        let mut gba = gba_with(&[
+            0xE3A0_0301, // mov r0, #0x04000000
+            0xE280_00D4, // add r0, r0, #0xD4    ; DMA3SAD
+            0xE59F_1014, // ldr r1, =0x08000100
+            0xE580_1000, // str r1, [r0]
+            0xE3A0_1406, // mov r1, #0x06000000
+            0xE580_1004, // str r1, [r0, #4]     ; DMA3DAD
+            0xE59F_1008, // ldr r1, =0x80000004  ; enable, 4 halfwords
+            0xE580_1008, // str r1, [r0, #8]     ; DMA3CNT
+            0xEAFF_FFFE, // b .
+            0x0800_0100,
+            0x8000_0004,
+        ]);
+        gba.bus.cartridge = {
+            let mut rom = gba.bus.cartridge.rom().to_vec();
+            rom[0x100..0x108].copy_from_slice(&[1, 0, 2, 0, 3, 0, 4, 0]);
+            Cartridge::from_bytes(rom).unwrap()
+        };
+        for _ in 0..10 {
+            gba.step();
+        }
+        assert_eq!(gba.bus.read16(base::VRAM), 1);
+        assert_eq!(gba.bus.read16(base::VRAM + 6), 4);
+        assert_eq!(gba.bus.io.read16(reg::DMA3CNT_H) & 0x8000, 0, "done");
+    }
+
+    #[test]
+    fn timer_overflow_raises_interrupt() {
+        let mut gba = gba_with(&[0xEAFF_FFFE]); // b .
+        gba.bus.io.write16(reg::TM0CNT_L, 0xFFF0);
+        gba.bus.io.write16(reg::TM0CNT_H, 0x80 | 0x40);
+        gba.bus.io.write16(reg::IE, 1 << 3);
+        for _ in 0..8 {
+            gba.step();
+        }
+        assert_ne!(gba.bus.io.read16(reg::IF) & (1 << 3), 0);
     }
 
     #[test]

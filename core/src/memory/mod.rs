@@ -22,7 +22,9 @@
 
 pub mod bus;
 pub mod cartridge;
+pub mod dma;
 pub mod io;
+pub mod timers;
 pub mod video;
 
 pub use bus::Bus;

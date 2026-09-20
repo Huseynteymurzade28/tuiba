@@ -39,6 +39,15 @@ mod dispstat {
     pub const VCOUNT_IRQ: u16 = 1 << 5;
 }
 
+/// What happened during a [`Ppu::step`] call.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Events {
+    /// VBlank began: the frame is complete.
+    pub vblank: bool,
+    /// A visible line entered HBlank (never set during VBlank lines).
+    pub hblank: bool,
+}
+
 /// The PPU state.
 #[derive(Debug, Clone)]
 pub struct Ppu {
@@ -77,28 +86,29 @@ impl Ppu {
         self.vcount
     }
 
-    /// Advances the PPU by `cycles`. Returns `true` if a frame was
-    /// completed (VBlank entered) during this call.
-    pub fn step(&mut self, cycles: u32, io: &mut IoRegisters, video: &VideoMemory) -> bool {
+    /// Advances the PPU by `cycles` and reports the events that occurred.
+    pub fn step(&mut self, cycles: u32, io: &mut IoRegisters, video: &VideoMemory) -> Events {
         self.line_cycle += cycles;
-        let mut frame_done = false;
+        let mut events = Events::default();
 
         loop {
             if !self.in_hblank && self.line_cycle >= HBLANK_START {
-                self.enter_hblank(io, video);
+                events.hblank |= self.enter_hblank(io, video);
             }
             if self.line_cycle < CYCLES_PER_LINE {
                 break;
             }
             self.line_cycle -= CYCLES_PER_LINE;
-            frame_done |= self.end_line(io);
+            events.vblank |= self.end_line(io);
         }
-        frame_done
+        events
     }
 
-    fn enter_hblank(&mut self, io: &mut IoRegisters, video: &VideoMemory) {
+    /// Returns `true` if this was a visible line (HBlank DMA fires).
+    fn enter_hblank(&mut self, io: &mut IoRegisters, video: &VideoMemory) -> bool {
         self.in_hblank = true;
-        if usize::from(self.vcount) < SCREEN_HEIGHT {
+        let visible = usize::from(self.vcount) < SCREEN_HEIGHT;
+        if visible {
             self.render_line(io, video);
         }
         let stat = io.read16(reg::DISPSTAT);
@@ -107,6 +117,7 @@ impl Ppu {
         if stat & dispstat::HBLANK_IRQ != 0 {
             io.request_interrupt(Interrupt::HBlank);
         }
+        visible
     }
 
     /// Moves to the next line; returns `true` when entering VBlank.
@@ -176,9 +187,12 @@ mod tests {
     #[test]
     fn hblank_and_line_advance() {
         let (mut ppu, mut io, video) = setup();
-        assert!(!ppu.step(HBLANK_START - 1, &mut io, &video));
+        assert_eq!(
+            ppu.step(HBLANK_START - 1, &mut io, &video),
+            Events::default()
+        );
         assert_eq!(io.read16(reg::DISPSTAT) & dispstat::HBLANK, 0);
-        ppu.step(1, &mut io, &video);
+        assert!(ppu.step(1, &mut io, &video).hblank);
         assert_ne!(io.read16(reg::DISPSTAT) & dispstat::HBLANK, 0);
         assert_eq!(ppu.vcount(), 0);
         ppu.step(CYCLES_PER_LINE - HBLANK_START, &mut io, &video);
@@ -192,10 +206,11 @@ mod tests {
         let (mut ppu, mut io, video) = setup();
         let mut frames = 0;
         for line in 0..LINES_PER_FRAME {
-            let done = ppu.step(CYCLES_PER_LINE, &mut io, &video);
-            frames += u32::from(done);
+            let events = ppu.step(CYCLES_PER_LINE, &mut io, &video);
+            frames += u32::from(events.vblank);
             let next = (line + 1) % LINES_PER_FRAME;
-            assert_eq!(done, next == 160, "line {next}");
+            assert_eq!(events.vblank, next == 160, "line {next}");
+            assert_eq!(events.hblank, line < 160, "hblank event on line {line}");
             let vblank = io.read16(reg::DISPSTAT) & dispstat::VBLANK != 0;
             assert_eq!(
                 vblank,
@@ -230,7 +245,7 @@ mod tests {
     #[test]
     fn large_steps_catch_up_multiple_lines() {
         let (mut ppu, mut io, video) = setup();
-        assert!(ppu.step(CYCLES_PER_FRAME, &mut io, &video));
+        assert!(ppu.step(CYCLES_PER_FRAME, &mut io, &video).vblank);
         assert_eq!(ppu.vcount(), 0);
     }
 

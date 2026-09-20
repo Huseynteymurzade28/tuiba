@@ -55,6 +55,10 @@ pub enum Outcome {
 pub fn service(number: u8, cpu: &mut Cpu, mem: &mut impl Memory) -> Outcome {
     let r = |i: usize| cpu.regs.get(i);
     match number {
+        call::REGISTER_RAM_RESET => {
+            register_ram_reset(mem, r(0) as u8);
+            Outcome::Done
+        }
         call::HALT => {
             cpu.halted = true;
             Outcome::Done
@@ -113,7 +117,104 @@ pub fn service(number: u8, cpu: &mut Cpu, mem: &mut impl Memory) -> Outcome {
             cpu.regs.set(0, 0xBAAE_187F);
             Outcome::Done
         }
+        call::LZ77_UNCOMP_WRAM => {
+            lz77_uncomp(mem, r(0), r(1), false);
+            Outcome::Done
+        }
+        call::LZ77_UNCOMP_VRAM => {
+            lz77_uncomp(mem, r(0), r(1), true);
+            Outcome::Done
+        }
         _ => Outcome::Unsupported,
+    }
+}
+
+/// `RegisterRamReset`: clears the memories selected by `flags` and resets
+/// most I/O registers.
+fn register_ram_reset(mem: &mut impl Memory, flags: u8) {
+    use crate::memory::{EWRAM_SIZE, IWRAM_SIZE, OAM_SIZE, PALETTE_SIZE, VRAM_SIZE, base};
+    let clear = |mem: &mut dyn FnMut(u32, u32), base: u32, size: usize| {
+        for offset in (0..size as u32).step_by(4) {
+            mem(base + offset, 0);
+        }
+    };
+    let mut write = |address, value| mem.write32(address, value);
+    if flags & 0x01 != 0 {
+        clear(&mut write, base::EWRAM, EWRAM_SIZE);
+    }
+    if flags & 0x02 != 0 {
+        // Everything but the top 0x200 bytes, which hold the BIOS's own state.
+        clear(&mut write, base::IWRAM, IWRAM_SIZE - 0x200);
+    }
+    if flags & 0x04 != 0 {
+        clear(&mut write, base::PALETTE, PALETTE_SIZE);
+    }
+    if flags & 0x08 != 0 {
+        clear(&mut write, base::VRAM, VRAM_SIZE);
+    }
+    if flags & 0x10 != 0 {
+        clear(&mut write, base::OAM, OAM_SIZE);
+    }
+    // Bits 5–7 reset the serial, sound and other I/O registers. We only
+    // model the visible side effect games rely on: the display is blanked.
+    if flags & 0x80 != 0 {
+        mem.write16(base::IO + reg::DISPCNT, 0x0080);
+    }
+}
+
+/// `LZ77UnCompWram`/`LZ77UnCompVram`: decompress the GBA's LZ77 format.
+///
+/// The header word holds the type (`0x10`) in its low byte and the
+/// decompressed size in the upper 24 bits. Each block starts with a flag
+/// byte whose bits (MSB first) mark the next eight tokens as literal
+/// bytes (0) or 2-byte back-references (1): `LLLL DDDD DDDD DDDD` with
+/// length `L + 3` and distance `D + 1`. The VRAM variant writes halfwords
+/// because VRAM ignores byte writes.
+fn lz77_uncomp(mem: &mut impl Memory, src: u32, dst: u32, vram: bool) {
+    let header = mem.read32(src);
+    if header & 0xFF != 0x10 {
+        return;
+    }
+    let size = header >> 8;
+    let mut src = src + 4;
+    let mut out = Vec::with_capacity(size as usize);
+
+    while (out.len() as u32) < size {
+        let flags = mem.read8(src);
+        src += 1;
+        for bit in (0..8).rev() {
+            if (out.len() as u32) >= size {
+                break;
+            }
+            if flags & (1 << bit) == 0 {
+                out.push(mem.read8(src));
+                src += 1;
+            } else {
+                let b0 = mem.read8(src);
+                let b1 = mem.read8(src + 1);
+                src += 2;
+                let length = usize::from(b0 >> 4) + 3;
+                let distance = (usize::from(b0 & 0xF) << 8 | usize::from(b1)) + 1;
+                for _ in 0..length {
+                    let byte = out
+                        .get(out.len().wrapping_sub(distance))
+                        .copied()
+                        .unwrap_or(0);
+                    out.push(byte);
+                }
+            }
+        }
+    }
+
+    if vram {
+        for (i, pair) in out.chunks(2).enumerate() {
+            let half = u16::from(pair[0]) | (u16::from(*pair.get(1).unwrap_or(&0)) << 8);
+            mem.write16(dst + i as u32 * 2, half);
+        }
+    } else {
+        for (i, &byte) in out.iter().enumerate() {
+            mem.write8(dst + i as u32, byte);
+        }
     }
 }
 
@@ -261,6 +362,62 @@ mod tests {
             Outcome::WaitForInterrupt { mask: 0b1000 }
         );
         assert_eq!(mem.read16(INTR_CHECK_FLAGS), 0b1000);
+    }
+
+    #[test]
+    fn register_ram_reset_clears_selected_memories() {
+        use crate::memory::test_util::rom_with_header;
+        use crate::memory::{Bus, Cartridge, base};
+        let mut bus = Bus::new(Cartridge::from_bytes(rom_with_header("R", 0x100)).unwrap());
+        bus.write32(base::EWRAM, 1);
+        bus.write32(base::IWRAM, 2);
+        bus.write32(base::IWRAM + 0x7FF0, 3);
+        bus.write32(base::VRAM, 4);
+        let mut cpu = cpu_with(&[(0, 0x01 | 0x02 | 0x80)]);
+        service(call::REGISTER_RAM_RESET, &mut cpu, &mut bus);
+        assert_eq!(bus.read32(base::EWRAM), 0);
+        assert_eq!(bus.read32(base::IWRAM), 0);
+        assert_eq!(
+            bus.read32(base::IWRAM + 0x7FF0),
+            3,
+            "top of IWRAM preserved"
+        );
+        assert_eq!(bus.read32(base::VRAM), 4, "VRAM not selected");
+        assert_eq!(bus.io.read16(reg::DISPCNT), 0x0080, "display blanked");
+    }
+
+    #[test]
+    fn lz77_decompresses_literals_and_references() {
+        let mut mem = Ram::new();
+        // "ABCABCABCD": literals A B C, then a 7-byte back-reference of
+        // distance 3, then literal D.  Header: type 0x10, size 11.
+        let compressed: [u8; 12] = [
+            0x10,
+            11,
+            0,
+            0, // header
+            0b0001_0000,
+            b'A',
+            b'B',
+            b'C',
+            0x40,
+            0x02,
+            b'D', // flags, tokens
+            0x00, // padding
+        ];
+        // token 4 is a reference: 0x40 -> length 4+3 = 7, distance 2+1 = 3
+        for (i, b) in compressed.iter().enumerate() {
+            mem.write8(0x1000 + i as u32, *b);
+        }
+        let mut cpu = cpu_with(&[(0, 0x1000), (1, 0x2000)]);
+        service(call::LZ77_UNCOMP_WRAM, &mut cpu, &mut mem);
+        let out: Vec<u8> = (0..11).map(|i| mem.read8(0x2000 + i)).collect();
+        assert_eq!(&out, b"ABCABCABCAD");
+
+        let mut cpu = cpu_with(&[(0, 0x1000), (1, 0x3000)]);
+        service(call::LZ77_UNCOMP_VRAM, &mut cpu, &mut mem);
+        assert_eq!(mem.read16(0x3000), u16::from_le_bytes(*b"AB"));
+        assert_eq!(mem.read8(0x300A), b'D');
     }
 
     #[test]

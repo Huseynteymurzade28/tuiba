@@ -7,6 +7,13 @@
 //! interrupts) will take ownership of their registers as they are built.
 
 use crate::memory::IO_SIZE;
+use crate::memory::dma::Dma;
+use crate::memory::timers::Timers;
+
+/// First and last DMA register offsets.
+const DMA_RANGE: std::ops::RangeInclusive<usize> = 0x0B0..=0x0DE;
+/// First and last timer register offsets.
+const TIMER_RANGE: std::ops::RangeInclusive<usize> = 0x100..=0x10E;
 
 /// Register offsets relative to the I/O base address.
 #[allow(missing_docs)]
@@ -97,6 +104,10 @@ pub struct IoRegisters {
     pub keyinput: u16,
     /// Set by a write to `HALTCNT`; the emulator takes it and halts the CPU.
     pub halt_requested: bool,
+    /// The four timers.
+    pub timers: Timers,
+    /// The DMA controller registers.
+    pub dma: Dma,
 }
 
 impl Default for IoRegisters {
@@ -113,6 +124,8 @@ impl IoRegisters {
             raw: vec![0; IO_SIZE].into_boxed_slice(),
             keyinput: KEYINPUT_ALL_RELEASED,
             halt_requested: false,
+            timers: Timers::new(),
+            dma: Dma::new(),
         }
     }
 
@@ -123,6 +136,23 @@ impl IoRegisters {
         let off = (offset & !1) as usize;
         if off >= IO_SIZE {
             return 0;
+        }
+        if DMA_RANGE.contains(&off) {
+            let (n, sub) = ((off - 0xB0) / 12, (off - 0xB0) % 12);
+            // Only the control halfword is readable.
+            return if sub == 10 {
+                self.dma.channels[n].control
+            } else {
+                0
+            };
+        }
+        if TIMER_RANGE.contains(&off) {
+            let (n, sub) = ((off - 0x100) / 4, (off - 0x100) % 4);
+            return if sub == 0 {
+                self.timers.counter(n)
+            } else {
+                self.timers.control(n)
+            };
         }
         match off as u32 {
             reg::KEYINPUT => self.keyinput,
@@ -147,6 +177,28 @@ impl IoRegisters {
     pub fn write16(&mut self, offset: u32, value: u16) {
         let off = (offset & !1) as usize;
         if off >= IO_SIZE {
+            return;
+        }
+        if DMA_RANGE.contains(&off) {
+            let (n, sub) = ((off - 0xB0) / 12, (off - 0xB0) % 12);
+            let ch = &mut self.dma.channels[n];
+            match sub {
+                0 => ch.source = (ch.source & 0xFFFF_0000) | u32::from(value),
+                2 => ch.source = (ch.source & 0xFFFF) | (u32::from(value) << 16),
+                4 => ch.dest = (ch.dest & 0xFFFF_0000) | u32::from(value),
+                6 => ch.dest = (ch.dest & 0xFFFF) | (u32::from(value) << 16),
+                8 => ch.count = value,
+                _ => self.dma.write_control(n, value),
+            }
+            return;
+        }
+        if TIMER_RANGE.contains(&off) {
+            let (n, sub) = ((off - 0x100) / 4, (off - 0x100) % 4);
+            if sub == 0 {
+                self.timers.set_reload(n, value);
+            } else {
+                self.timers.set_control(n, value);
+            }
             return;
         }
         let value = match off as u32 {
@@ -308,6 +360,38 @@ mod tests {
             !io.halt_requested,
             "halfword write to POSTFLG is not a halt"
         );
+    }
+
+    #[test]
+    fn dma_registers_route_to_channels() {
+        let mut io = IoRegisters::new();
+        io.write32(reg::DMA0SAD + 12 * 3, 0x0800_1234); // DMA3SAD
+        io.write32(reg::DMA0SAD + 12 * 3 + 4, 0x0600_0000); // DMA3DAD
+        io.write16(reg::DMA0SAD + 12 * 3 + 8, 0x100); // DMA3CNT_L
+        assert_eq!(io.dma.channels[3].source, 0x0800_1234);
+        assert_eq!(io.dma.channels[3].dest, 0x0600_0000);
+        assert_eq!(io.dma.channels[3].count, 0x100);
+        assert_eq!(io.read32(reg::DMA0SAD + 12 * 3), 0, "SAD is write-only");
+        io.write16(reg::DMA3CNT_H, 0x8400);
+        assert_eq!(io.read16(reg::DMA3CNT_H), 0x8400);
+        assert_eq!(io.dma.take_pending(), 0b1000);
+    }
+
+    #[test]
+    fn timer_registers_route_to_timers() {
+        let mut io = IoRegisters::new();
+        io.write16(reg::TM0CNT_L, 0xFF00);
+        assert_eq!(
+            io.read16(reg::TM0CNT_L),
+            0,
+            "reload is not visible until enabled"
+        );
+        io.write16(reg::TM0CNT_H, 0x80);
+        assert_eq!(io.read16(reg::TM0CNT_L), 0xFF00);
+        assert_eq!(io.read16(reg::TM0CNT_H), 0x80);
+        io.write32(reg::TM3CNT_H - 2, 0x00C0_1234); // TM3CNT_L=0x1234, TM3CNT_H=0xC0
+        assert_eq!(io.read16(reg::TM3CNT_H), 0xC0);
+        assert_eq!(io.timers.counter(3), 0x1234);
     }
 
     #[test]
