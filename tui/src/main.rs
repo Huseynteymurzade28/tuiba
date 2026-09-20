@@ -84,16 +84,20 @@ impl App {
 
         frame.render_widget(GbaScreen::new(self.gba.framebuffer()), screen_area);
 
-        let size_hint = if GbaScreen::fits(screen_area) {
-            String::new()
-        } else {
+        let scale = GbaScreen::scale_for(screen_area);
+        let size_hint = if !GbaScreen::fits(screen_area) {
             format!(
-                "  [terminal {}x{} < {}x{}: cropped]",
-                screen_area.width,
-                screen_area.height,
+                "  [terminal {}x{} too small: cropped]",
+                screen_area.width, screen_area.height
+            )
+        } else if scale > 1 {
+            format!(
+                "  [1/{scale} scale; {}x{} for full]",
                 screen::CELL_WIDTH,
                 screen::CELL_HEIGHT
             )
+        } else {
+            String::new()
         };
         let keys = if self.keypad.has_release_events() {
             "kitty"
