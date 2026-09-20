@@ -14,6 +14,7 @@
 //!
 //! Any write to r15 flushes the queue and refills it from the new address.
 
+pub mod alu;
 pub mod arm;
 pub mod registers;
 pub mod thumb;
@@ -157,7 +158,7 @@ impl Cpu {
 
     /// Refills the prefetch queue from `address` (aligned for the current
     /// state) and points r15 past it.
-    fn flush_pipeline(&mut self, mem: &impl Memory, address: u32) {
+    pub(crate) fn flush_pipeline(&mut self, mem: &impl Memory, address: u32) {
         let size = self.instruction_size();
         let address = address & !(size - 1);
         self.pipeline[0] = self.fetch(mem, address);
@@ -244,7 +245,31 @@ impl Cpu {
 
 #[cfg(test)]
 pub(crate) mod test_util {
+    use super::{Cpu, Mode};
     use crate::memory::Memory;
+
+    /// A CPU in System mode, ARM state, about to execute the word at `pc`.
+    pub fn arm_at(mem: &mut Ram, pc: u32) -> Cpu {
+        let mut cpu = Cpu::new();
+        cpu.reset(mem);
+        cpu.regs.switch_mode(Mode::System);
+        cpu.flush_pipeline(mem, pc);
+        cpu
+    }
+
+    /// Hand encoders for instructions whose bit layout is easy to get wrong.
+    pub mod enc {
+        /// ARM data processing with a rotated 8-bit immediate (`AL` condition).
+        pub fn dp_imm(opcode: u32, s: bool, rn: u32, rd: u32, imm8: u32, rot4: u32) -> u32 {
+            0xE200_0000
+                | (opcode << 21)
+                | (u32::from(s) << 20)
+                | (rn << 16)
+                | (rd << 12)
+                | (rot4 << 8)
+                | imm8
+        }
+    }
 
     /// Flat 64 KiB RAM for CPU tests; addresses wrap.
     pub struct Ram(pub Vec<u8>);
@@ -300,17 +325,9 @@ pub(crate) mod test_util {
 
 #[cfg(test)]
 mod tests {
-    use super::test_util::Ram;
+    use super::test_util::{Ram, arm_at as cpu_at};
     use super::*;
     use crate::error::GbaError;
-
-    fn cpu_at(mem: &mut Ram, pc: u32) -> Cpu {
-        let mut cpu = Cpu::new();
-        cpu.reset(mem);
-        cpu.regs.switch_mode(Mode::System);
-        cpu.flush_pipeline(mem, pc);
-        cpu
-    }
 
     #[test]
     fn reset_starts_at_vector_zero_with_prefetch() {
@@ -471,18 +488,18 @@ mod tests {
     #[test]
     fn unimplemented_reports_address_and_leaves_state() {
         let mut mem = Ram::new();
-        mem.load_arm(0x100, &[0xE3A0_0001]); // mov r0, #1
+        mem.load_arm(0x100, &[0xE590_0000]); // ldr r0, [r0]
         let mut cpu = cpu_at(&mut mem, 0x100);
         let err = cpu.step(&mut mem).unwrap_err();
         assert!(matches!(
             err,
             GbaError::UnimplementedInstruction {
                 mode: "ARM",
-                opcode: 0xE3A0_0001,
+                opcode: 0xE590_0000,
                 pc: 0x100
             }
         ));
         assert_eq!(cpu.next_pc(), 0x100);
-        assert_eq!(cpu.pipeline[0], 0xE3A0_0001);
+        assert_eq!(cpu.pipeline[0], 0xE590_0000);
     }
 }

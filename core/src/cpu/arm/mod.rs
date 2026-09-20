@@ -1,5 +1,7 @@
 //! ARM (32-bit) instruction set: decoding and execution.
 
+mod alu;
+
 use crate::cpu::registers::{LR, PC};
 use crate::cpu::{Cpu, Exception};
 use crate::error::{GbaError, Result};
@@ -112,6 +114,10 @@ impl Cpu {
         match decode(op) {
             ArmKind::Branch => Ok(self.arm_branch(op)),
             ArmKind::BranchExchange => Ok(self.arm_branch_exchange(op)),
+            ArmKind::DataProcessing => Ok(self.arm_data_processing(op)),
+            ArmKind::PsrTransfer => Ok(self.arm_psr_transfer(op)),
+            ArmKind::Multiply => Ok(self.arm_multiply(op)),
+            ArmKind::MultiplyLong => Ok(self.arm_multiply_long(op)),
             ArmKind::SoftwareInterrupt => {
                 self.enter_exception(Exception::SoftwareInterrupt);
                 Ok(3)
