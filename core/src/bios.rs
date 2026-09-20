@@ -13,6 +13,33 @@ use crate::memory::io::{Interrupt, reg};
 /// `IntrWait`: the game's IRQ handler ORs the flags it handled into it.
 pub const INTR_CHECK_FLAGS: u32 = 0x0300_7FF8;
 
+/// Minimal replacement for the BIOS's exception vectors, installed when
+/// no BIOS image is loaded. The IRQ vector mirrors the real entry code:
+/// save the caller-saved registers, jump to the handler the game placed
+/// at `0x03007FFC`, restore and return.
+///
+/// ```text
+/// 0x18: b     0x20
+/// 0x20: stmfd sp!, {r0-r3, r12, lr}
+/// 0x24: mov   r0, #0x04000000
+/// 0x28: add   lr, pc, #0          ; lr = 0x30
+/// 0x2C: ldr   pc, [r0, #-4]       ; [0x03FFFFFC] = [0x03007FFC]
+/// 0x30: ldmfd sp!, {r0-r3, r12, lr}
+/// 0x34: subs  pc, lr, #4
+/// ```
+pub const IRQ_STUB: [(u32, u32); 7] = [
+    (0x18, 0xEA00_0000),
+    (0x20, 0xE92D_500F),
+    (0x24, 0xE3A0_0301),
+    (0x28, 0xE28F_E000),
+    (0x2C, 0xE510_F004),
+    (0x30, 0xE8BD_500F),
+    (0x34, 0xE25E_F004),
+];
+
+/// Address of the game's IRQ handler pointer, read by the BIOS.
+pub const IRQ_HANDLER_POINTER: u32 = 0x0300_7FFC;
+
 /// System call numbers.
 #[allow(missing_docs)]
 pub mod call {

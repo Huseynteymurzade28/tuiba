@@ -70,6 +70,15 @@ impl Bus {
         }
     }
 
+    /// Writes a word into the BIOS region. Used to install the HLE
+    /// exception stubs; software cannot write here.
+    pub fn poke_bios(&mut self, address: u32, value: u32) {
+        let i = address as usize;
+        if i + 4 <= BIOS_SIZE {
+            self.bios[i..i + 4].copy_from_slice(&value.to_le_bytes());
+        }
+    }
+
     /// Installs a BIOS image.
     ///
     /// # Errors

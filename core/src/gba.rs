@@ -48,6 +48,9 @@ impl Gba {
     #[must_use]
     pub fn new(cartridge: Cartridge) -> Self {
         let mut bus = Bus::new(cartridge);
+        for (address, word) in bios::IRQ_STUB {
+            bus.poke_bios(address, word);
+        }
         let mut cpu = Cpu::new();
         cpu.hle_swi = true;
         cpu.skip_bios(&mut bus);
@@ -262,15 +265,17 @@ mod tests {
             0xE3A0_1001, // mov r1, #1
             0xE1C4_10B0, // strh r1, [r4]         ; IE = VBlank
             0xE1C4_10B8, // strh r1, [r4, #8]     ; IME = 1
+            0xE3A0_2403, // mov r2, #0x03000000
+            0xE382_2C7F, // orr r2, r2, #0x7F00
+            0xE59F_100C, // ldr r1, =handler      ; literal at 0x38
+            0xE582_10FC, // str r1, [r2, #0xFC]   ; 0x03007FFC = handler
             0xEF05_0000, // loop: swi VBlankIntrWait
             0xE3A0_3001, // mov r3, #1            ; marks a wakeup
             0xEAFF_FFFC, // b loop
-        ]);
-        // Without a BIOS there is no IRQ vector, so install a minimal one:
-        // acknowledge VBlank in IF and in the BIOS flag word, then return.
-        let mut bios = vec![0u8; 0x4000];
-        let handler: [u32; 10] = [
-            0xE92D_4007, // 0x18: push {r0-r2, lr}
+            0x0800_0044, // =handler
+            0,
+            0,
+            // handler @ 0x44: the game's IRQ routine, entered by the stub.
             0xE3A0_0301, // mov r0, #0x04000000
             0xE280_0C02, // add r0, r0, #0x200
             0xE3A0_1001, // mov r1, #1
@@ -278,21 +283,16 @@ mod tests {
             0xE3A0_2403, // mov r2, #0x03000000
             0xE382_2C7F, // orr r2, r2, #0x7F00
             0xE1C2_1FB8, // strh r1, [r2, #0xF8]  ; INTR_CHECK_FLAGS |= VBlank
-            0xE8BD_4007, // pop {r0-r2, lr}
-            0xE25E_F004, // subs pc, lr, #4
-        ];
-        for (i, w) in handler.iter().enumerate() {
-            bios[0x18 + i * 4..0x18 + i * 4 + 4].copy_from_slice(&w.to_le_bytes());
-        }
-        gba.bus.load_bios(&bios).unwrap(); // keeps HLE SWI and the entry point
+            0xE12F_FF1E, // bx lr                 ; back into the stub
+        ]);
 
         gba.run_frame();
-        // The frame ends as VBlank fires, so the CPU is already in the handler.
+        // The frame ends as VBlank fires, so the CPU is already in the stub.
         assert!(gba.intr_wait.is_some(), "still inside VBlankIntrWait");
         assert_eq!(gba.cpu.regs.mode(), crate::cpu::Mode::Irq);
         assert_eq!(gba.cpu.regs.get(3), 0);
 
-        // Let the handler run and return: the wait completes exactly once.
+        // Let the stub and handler run and return: the wait completes once.
         for _ in 0..64 {
             gba.step();
         }
@@ -302,9 +302,15 @@ mod tests {
             0,
             "acknowledged"
         );
+        assert_eq!(
+            gba.cpu.regs.mode(),
+            crate::cpu::Mode::System,
+            "stub restored the mode"
+        );
         assert!(gba.cpu.irq_enabled(), "handler returned and restored CPSR");
         assert!(gba.cpu.halted, "back in VBlankIntrWait");
         assert_eq!(gba.bus.read16(bios::INTR_CHECK_FLAGS), 0, "flag consumed");
+        assert_eq!(gba.cpu.regs.get(13), 0x0300_7F00, "user stack balanced");
     }
 
     #[test]
