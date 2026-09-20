@@ -13,6 +13,7 @@
 //! VBlank / HBlank / VCount interrupts.
 
 pub mod bitmap;
+pub mod compose;
 pub mod framebuffer;
 pub mod obj;
 pub mod tiled;
@@ -66,9 +67,10 @@ pub struct Ppu {
     in_hblank: bool,
     /// Per-background scanline scratch buffers, 15-bit colours.
     bg_lines: [[u16; SCREEN_WIDTH]; 4],
-    /// OBJ layer scratch: colours and the priority of the winning sprite.
-    obj_line: [u16; SCREEN_WIDTH],
-    obj_priority: [u8; SCREEN_WIDTH],
+    /// OBJ layer scratch.
+    obj_line: obj::ObjLine,
+    /// Composed 15-bit scanline before conversion to RGBA.
+    composed: [u16; SCREEN_WIDTH],
 }
 
 impl Default for Ppu {
@@ -87,8 +89,8 @@ impl Ppu {
             line_cycle: 0,
             in_hblank: false,
             bg_lines: [[TRANSPARENT; SCREEN_WIDTH]; 4],
-            obj_line: [TRANSPARENT; SCREEN_WIDTH],
-            obj_priority: [0; SCREEN_WIDTH],
+            obj_line: obj::ObjLine::default(),
+            composed: [0; SCREEN_WIDTH],
         }
     }
 
@@ -209,30 +211,25 @@ impl Ppu {
 
         let objects = dispcnt & (1 << 12) != 0;
         if objects {
-            obj::render_line(io, video, y, &mut self.obj_line, &mut self.obj_priority);
+            obj::render_line(io, video, y, &mut self.obj_line);
         }
 
         let priorities: [u8; 4] = std::array::from_fn(|bg| BgControl::read(io, bg).priority);
         let backdrop = bitmap::palette_entry(video, 0);
+        compose::compose_line(
+            io,
+            y,
+            &self.bg_lines,
+            enabled,
+            priorities,
+            objects,
+            &self.obj_line,
+            backdrop,
+            &mut self.composed,
+        );
         let out = self.framebuffer.row_mut(y);
-        for (x, px) in out.iter_mut().enumerate() {
-            let mut color = backdrop;
-            let mut best = u8::MAX;
-            // Lower priority value wins; ties go to the lower-numbered BG.
-            for bg in 0..4 {
-                if enabled[bg] && priorities[bg] < best {
-                    let c = self.bg_lines[bg][x];
-                    if c != TRANSPARENT {
-                        color = c;
-                        best = priorities[bg];
-                    }
-                }
-            }
-            // A sprite beats a background of equal or worse priority.
-            if objects && self.obj_line[x] != TRANSPARENT && self.obj_priority[x] <= best {
-                color = self.obj_line[x];
-            }
-            *px = bgr555_to_rgba(color);
+        for (px, &c) in out.iter_mut().zip(self.composed.iter()) {
+            *px = bgr555_to_rgba(c);
         }
     }
 }

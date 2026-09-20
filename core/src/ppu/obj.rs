@@ -40,8 +40,8 @@ struct Object {
     tile: usize,
     priority: u8,
     palette: usize,
-    /// Mode 2 (object window) contributes no pixels.
-    hidden: bool,
+    /// Attribute 0 bits 11:10: 1 = semi-transparent, 2 = object window.
+    mode: u8,
 }
 
 impl Object {
@@ -88,7 +88,7 @@ impl Object {
             tile: usize::from(a2 & 0x3FF),
             priority: ((a2 >> 10) & 0b11) as u8,
             palette: usize::from(a2 >> 12),
-            hidden: (a0 >> 10) & 0b11 == 2,
+            mode: ((a0 >> 10) & 0b11) as u8,
         })
     }
 
@@ -155,16 +155,37 @@ fn texel(
     u16::from_le_bytes([video.palette[p], video.palette[p + 1]]) & 0x7FFF
 }
 
-/// Renders line `y` of the OBJ layer: colours into `colors`, the
-/// matching priority attribute into `priorities`.
-pub fn render_line(
-    io: &IoRegisters,
-    video: &VideoMemory,
-    y: usize,
-    colors: &mut [u16; SCREEN_WIDTH],
-    priorities: &mut [u8; SCREEN_WIDTH],
-) {
+/// Per-pixel output of the OBJ layer for one scanline.
+#[derive(Debug, Clone)]
+pub struct ObjLine {
+    /// Colour of the winning sprite pixel, or `TRANSPARENT`.
+    pub colors: [u16; SCREEN_WIDTH],
+    /// Priority attribute of the winning sprite.
+    pub priorities: [u8; SCREEN_WIDTH],
+    /// Whether the winning sprite is semi-transparent (mode 1).
+    pub semi_transparent: [bool; SCREEN_WIDTH],
+    /// Pixels covered by any object-window (mode 2) sprite.
+    pub window: [bool; SCREEN_WIDTH],
+}
+
+impl Default for ObjLine {
+    fn default() -> Self {
+        Self {
+            colors: [TRANSPARENT; SCREEN_WIDTH],
+            priorities: [0; SCREEN_WIDTH],
+            semi_transparent: [false; SCREEN_WIDTH],
+            window: [false; SCREEN_WIDTH],
+        }
+    }
+}
+
+/// Renders line `y` of the OBJ layer into `out`.
+pub fn render_line(io: &IoRegisters, video: &VideoMemory, y: usize, out: &mut ObjLine) {
+    let colors = &mut out.colors;
+    let priorities = &mut out.priorities;
     colors.fill(TRANSPARENT);
+    out.semi_transparent.fill(false);
+    out.window.fill(false);
     let dispcnt = io.read16(reg::DISPCNT);
     let one_dimensional = dispcnt & (1 << 6) != 0;
     let bitmap_mode = (dispcnt & 0x7) >= 3;
@@ -175,9 +196,10 @@ pub fn render_line(
             continue;
         };
         let (box_w, box_h) = obj.box_size();
-        if obj.hidden || y < obj.y || y >= obj.y + box_h as i32 {
+        if obj.mode == 3 || y < obj.y || y >= obj.y + box_h as i32 {
             continue;
         }
+        let is_window = obj.mode == 2;
         let iy = (y - obj.y) as usize;
 
         let matrix = obj.affine.map(|i| affine_params(video, i));
@@ -189,7 +211,7 @@ pub fn render_line(
                 continue;
             }
             let sx = sx as usize;
-            if colors[sx] != TRANSPARENT {
+            if !is_window && colors[sx] != TRANSPARENT {
                 continue; // an earlier object already owns this pixel
             }
 
@@ -208,9 +230,15 @@ pub fn render_line(
             };
 
             let color = texel(video, &obj, one_dimensional, bitmap_mode, tx, ty);
-            if color != TRANSPARENT {
+            if color == TRANSPARENT {
+                continue;
+            }
+            if is_window {
+                out.window[sx] = true;
+            } else {
                 colors[sx] = color;
                 priorities[sx] = obj.priority;
+                out.semi_transparent[sx] = obj.mode == 1;
             }
         }
     }
@@ -242,10 +270,9 @@ mod tests {
         video: &VideoMemory,
         y: usize,
     ) -> ([u16; SCREEN_WIDTH], [u8; SCREEN_WIDTH]) {
-        let mut colors = [0; SCREEN_WIDTH];
-        let mut prios = [0; SCREEN_WIDTH];
-        render_line(io, video, y, &mut colors, &mut prios);
-        (colors, prios)
+        let mut out = ObjLine::default();
+        render_line(io, video, y, &mut out);
+        (out.colors, out.priorities)
     }
 
     #[test]
@@ -281,6 +308,16 @@ mod tests {
         assert_eq!(render(&io, &video, 0).0[0], TRANSPARENT);
         write_oam(&mut video, 0, 2 << 10, 0, 1 | (1 << 12)); // obj window
         assert_eq!(render(&io, &video, 0).0[0], TRANSPARENT);
+        let mut out = ObjLine::default();
+        render_line(&io, &video, 0, &mut out);
+        assert!(
+            out.window[0] && out.window[1] && !out.window[2],
+            "window mask set"
+        );
+        write_oam(&mut video, 0, 1 << 10, 0, 1 | (1 << 12)); // semi-transparent
+        render_line(&io, &video, 0, &mut out);
+        assert!(out.semi_transparent[0]);
+        assert_eq!(out.colors[0], 0x001F);
         write_oam(&mut video, 0, 0, 0, 1 | (1 << 12));
         assert_eq!(render(&io, &video, 0).0[0], 0x001F);
     }
