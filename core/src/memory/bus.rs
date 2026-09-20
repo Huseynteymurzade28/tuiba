@@ -8,7 +8,7 @@ use crate::error::{GbaError, Result};
 use crate::memory::cartridge::Cartridge;
 use crate::memory::io::IoRegisters;
 use crate::memory::video::VideoMemory;
-use crate::memory::{BIOS_SIZE, EWRAM_SIZE, IWRAM_SIZE, MemoryRegion, SRAM_SIZE};
+use crate::memory::{BIOS_SIZE, EWRAM_SIZE, IWRAM_SIZE, Memory, MemoryRegion, SRAM_SIZE};
 
 /// Offset of an address within its 16 MiB page.
 #[inline]
@@ -85,10 +85,11 @@ impl Bus {
         self.bios.copy_from_slice(bios);
         Ok(())
     }
+}
 
+impl Memory for Bus {
     /// Reads a byte.
-    #[must_use]
-    pub fn read8(&self, address: u32) -> u8 {
+    fn read8(&self, address: u32) -> u8 {
         let off = page_offset(address);
         match MemoryRegion::from_address(address) {
             Some(MemoryRegion::Bios) => self.bios.get(off as usize).copied().unwrap_or(0),
@@ -105,8 +106,7 @@ impl Bus {
     }
 
     /// Reads a halfword from an even address.
-    #[must_use]
-    pub fn read16(&self, address: u32) -> u16 {
+    fn read16(&self, address: u32) -> u16 {
         debug_assert_eq!(address & 1, 0, "unaligned halfword read");
         let off = page_offset(address);
         match MemoryRegion::from_address(address) {
@@ -130,8 +130,7 @@ impl Bus {
     }
 
     /// Reads a word from a word-aligned address.
-    #[must_use]
-    pub fn read32(&self, address: u32) -> u32 {
+    fn read32(&self, address: u32) -> u32 {
         debug_assert_eq!(address & 3, 0, "unaligned word read");
         let off = page_offset(address);
         match MemoryRegion::from_address(address) {
@@ -158,7 +157,7 @@ impl Bus {
     /// Video memory is on a 16-bit bus: byte writes to palette RAM and VRAM
     /// (background area only) are duplicated into both bytes of the
     /// halfword, byte writes to OAM and the VRAM object area are ignored.
-    pub fn write8(&mut self, address: u32, value: u8) {
+    fn write8(&mut self, address: u32, value: u8) {
         let off = page_offset(address);
         match MemoryRegion::from_address(address) {
             Some(MemoryRegion::Ewram) => self.ewram[off as usize & (EWRAM_SIZE - 1)] = value,
@@ -182,7 +181,7 @@ impl Bus {
     }
 
     /// Writes a halfword to an even address.
-    pub fn write16(&mut self, address: u32, value: u16) {
+    fn write16(&mut self, address: u32, value: u16) {
         debug_assert_eq!(address & 1, 0, "unaligned halfword write");
         let off = page_offset(address);
         match MemoryRegion::from_address(address) {
@@ -213,7 +212,7 @@ impl Bus {
     }
 
     /// Writes a word to a word-aligned address.
-    pub fn write32(&mut self, address: u32, value: u32) {
+    fn write32(&mut self, address: u32, value: u32) {
         debug_assert_eq!(address & 3, 0, "unaligned word write");
         let off = page_offset(address);
         match MemoryRegion::from_address(address) {

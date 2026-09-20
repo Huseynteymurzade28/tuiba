@@ -7,10 +7,13 @@
 //! # Module layout
 //!
 //! - [`error`]  – the crate-wide [`GbaError`] type.
-//! - [`memory`] – GBA address-space layout and (later) the memory bus.
+//! - [`memory`] – GBA address-space layout, bus and cartridge.
+//! - [`cpu`]    – the ARM7TDMI core.
 
+pub mod cpu;
 pub mod error;
 pub mod memory;
 
+pub use cpu::Cpu;
 pub use error::{GbaError, Result};
-pub use memory::{Bus, Cartridge};
+pub use memory::{Bus, Cartridge, Memory};

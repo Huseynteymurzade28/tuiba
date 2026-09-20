@@ -30,6 +30,26 @@ pub use cartridge::{Cartridge, Header};
 pub use io::IoRegisters;
 pub use video::VideoMemory;
 
+/// Byte-addressable memory as seen by the CPU and DMA.
+///
+/// Halfword and word accessors receive addresses already aligned to their
+/// width; the ARM7TDMI applies its own alignment/rotation rules before the
+/// access reaches the bus.
+pub trait Memory {
+    /// Reads a byte.
+    fn read8(&self, address: u32) -> u8;
+    /// Reads a halfword from an even address.
+    fn read16(&self, address: u32) -> u16;
+    /// Reads a word from a word-aligned address.
+    fn read32(&self, address: u32) -> u32;
+    /// Writes a byte.
+    fn write8(&mut self, address: u32, value: u8);
+    /// Writes a halfword to an even address.
+    fn write16(&mut self, address: u32, value: u16);
+    /// Writes a word to a word-aligned address.
+    fn write32(&mut self, address: u32, value: u32);
+}
+
 /// Size of the BIOS ROM in bytes.
 pub const BIOS_SIZE: usize = 16 * 1024;
 /// Size of on-board work RAM (EWRAM) in bytes.
