@@ -80,11 +80,48 @@ pub fn map_key(code: KeyCode) -> Option<GbaKey> {
     })
 }
 
+/// One key's held state: exact with release events, by timeout without.
+#[derive(Debug, Clone, Copy)]
+pub struct Hold {
+    /// Time of the last press/repeat, `None` when released.
+    last: Option<Instant>,
+    /// Whether the terminal delivers `Release` events (Kitty protocol).
+    release_events: bool,
+}
+
+impl Hold {
+    /// A key that is not held.
+    #[must_use]
+    pub const fn new(release_events: bool) -> Self {
+        Self {
+            last: None,
+            release_events,
+        }
+    }
+
+    /// Feeds an event for this key.
+    pub fn update(&mut self, kind: KeyEventKind, now: Instant) {
+        self.last = match kind {
+            KeyEventKind::Press | KeyEventKind::Repeat => Some(now),
+            KeyEventKind::Release => None,
+        };
+    }
+
+    /// Whether the key is held at `now`.
+    #[must_use]
+    pub fn is_held(&self, now: Instant) -> bool {
+        match self.last {
+            None => false,
+            Some(_) if self.release_events => true,
+            Some(at) => now.duration_since(at) < HOLD_TIMEOUT,
+        }
+    }
+}
+
 /// Tracks which GBA buttons are currently held.
 #[derive(Debug)]
 pub struct Keypad {
-    /// Per-button time of the last press/repeat, `None` when released.
-    last_event: [Option<Instant>; 10],
+    holds: [Hold; 10],
     /// Whether the terminal delivers `Release` events (Kitty protocol).
     release_events: bool,
 }
@@ -97,7 +134,7 @@ impl Keypad {
     #[must_use]
     pub const fn new(release_events: bool) -> Self {
         Self {
-            last_event: [None; 10],
+            holds: [Hold::new(release_events); 10],
             release_events,
         }
     }
@@ -126,21 +163,14 @@ impl Keypad {
         {
             return false;
         }
-        self.last_event[button as usize] = match key.kind {
-            KeyEventKind::Press | KeyEventKind::Repeat => Some(now),
-            KeyEventKind::Release => None,
-        };
+        self.holds[button as usize].update(key.kind, now);
         true
     }
 
     /// Whether `button` is held at `now`.
     #[must_use]
     pub fn is_pressed(&self, button: GbaKey, now: Instant) -> bool {
-        match self.last_event[button as usize] {
-            None => false,
-            Some(_) if self.release_events => true,
-            Some(at) => now.duration_since(at) < HOLD_TIMEOUT,
-        }
+        self.holds[button as usize].is_held(now)
     }
 
     /// The `KEYINPUT` register value at `now` (active-low).

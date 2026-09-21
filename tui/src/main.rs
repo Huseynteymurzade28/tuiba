@@ -35,7 +35,7 @@ use ratatui::{Frame, Terminal};
 use tuiba_core::{Cartridge, Gba};
 
 use crate::graphics::KittyGraphics;
-use crate::input::{GbaKey, Keypad};
+use crate::input::{GbaKey, Hold, Keypad};
 use crate::library::Library;
 use crate::picker::{Outcome, Picker};
 use crate::screen::GbaScreen;
@@ -127,7 +127,16 @@ struct App {
     saved: Vec<u8>,
     /// Why the last save write failed, for the status bar.
     save_error: Option<String>,
+    /// Emulation is stopped; `.` runs a single frame.
+    paused: bool,
+    /// A single frame was requested while paused.
+    step: bool,
+    /// Fast-forward key (Tab / F) held: run uncapped.
+    fast: Hold,
 }
+
+/// Nominal GBA frame rate, for the fast-forward multiplier.
+const NOMINAL_FPS: f64 = 1_000_000.0 / 16_743.0;
 
 /// How often the save file is compared against backup memory and, if a
 /// game has written to it, flushed to disk. A crash or a closed terminal
@@ -146,6 +155,16 @@ impl App {
             self.fps_frames = 0;
             self.fps_window_start = now;
         }
+    }
+
+    /// Toggles pause. The rate counter restarts so it does not show a
+    /// stale figure next to "paused", or a partial one after resuming.
+    fn toggle_pause(&mut self, now: Instant) {
+        self.paused = !self.paused;
+        self.step = false;
+        self.fps = 0.0;
+        self.fps_frames = 0;
+        self.fps_window_start = now;
     }
 
     /// Writes the save file if backup memory changed since the last
@@ -238,6 +257,13 @@ impl App {
             .as_ref()
             .map(|err| format!("  [save failed: {err}]"))
             .unwrap_or_default();
+        let mode = if self.paused {
+            "  ⏸ paused  (. = one frame)".to_string()
+        } else if self.fast.is_held(now) {
+            format!("  ▶▶ ×{:.1}", self.fps / NOMINAL_FPS)
+        } else {
+            String::new()
+        };
         let status = Line::from(vec![
             Span::styled(
                 format!(" {}  ", self.title),
@@ -245,12 +271,16 @@ impl App {
             ),
             Span::styled(
                 format!(
-                    "{:.0} fps  {renderer}{size_hint}{keys}{swi_hint}{held}{save}",
+                    "{:.0} fps{mode}  {renderer}{size_hint}{keys}{swi_hint}{held}{save}",
                     self.fps
                 ),
                 Style::default().fg(theme::DIM).bg(theme::SURFACE),
             ),
-            Span::styled("   esc ", theme::key()),
+            Span::styled("   p ", theme::key()),
+            Span::styled("pause  ", theme::hint()),
+            Span::styled(" tab ", theme::key()),
+            Span::styled("fast  ", theme::hint()),
+            Span::styled(" esc ", theme::key()),
             Span::styled("library  ", theme::hint()),
             Span::styled(" ctrl+q ", theme::key()),
             Span::styled("quit", theme::hint()),
@@ -403,6 +433,9 @@ fn play(
         save_path: rom.with_extension("sav"),
         saved,
         save_error: None,
+        paused: false,
+        step: false,
+        fast: Hold::new(release_events),
     };
     let result = std::panic::catch_unwind(AssertUnwindSafe(|| event_loop(terminal, &mut app)));
 
@@ -424,7 +457,10 @@ fn play(
 ///
 /// Emulation and rendering are decoupled: if a frame takes longer than
 /// the period we simply run late rather than skipping emulation, so the
-/// game never sees dropped input or jumps in time.
+/// game never sees dropped input or jumps in time. Fast-forward keeps
+/// drawing at the usual rate but fills each period with as many frames
+/// as the machine manages; pause keeps the loop (and input) alive with
+/// no emulation at all.
 fn event_loop(
     terminal: &mut ratatui::DefaultTerminal,
     app: &mut App,
@@ -433,7 +469,23 @@ fn event_loop(
     let mut next_autosave = next_frame + AUTOSAVE_INTERVAL;
     loop {
         let now = Instant::now();
-        app.emulate_frame(now);
+        if app.paused {
+            if app.step {
+                app.emulate_frame(now);
+                app.step = false;
+            }
+        } else if app.fast.is_held(now) {
+            let deadline = now + FRAME_PERIOD;
+            loop {
+                let now = Instant::now();
+                app.emulate_frame(now);
+                if now >= deadline {
+                    break;
+                }
+            }
+        } else {
+            app.emulate_frame(now);
+        }
         if now >= next_autosave {
             app.flush_save();
             next_autosave = now + AUTOSAVE_INTERVAL;
@@ -445,19 +497,26 @@ fn event_loop(
 
         while event::poll(Duration::ZERO)? {
             if let Event::Key(key) = event::read()? {
+                let now = Instant::now();
                 // Esc leaves the game, Ctrl+Q the program; plain letters
                 // belong to the game.
                 if key.kind == KeyEventKind::Press {
-                    if key.code == KeyCode::Esc {
-                        return Ok(GameExit::Back);
-                    }
-                    if key.code == KeyCode::Char('q')
-                        && key.modifiers.contains(KeyModifiers::CONTROL)
-                    {
-                        return Ok(GameExit::Quit);
+                    match key.code {
+                        KeyCode::Esc => return Ok(GameExit::Back),
+                        KeyCode::Char('q') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                            return Ok(GameExit::Quit);
+                        }
+                        KeyCode::Char('p' | 'P') => app.toggle_pause(now),
+                        KeyCode::Char('.') if app.paused => app.step = true,
+                        _ => {}
                     }
                 }
-                app.keypad.handle(key, Instant::now());
+                match key.code {
+                    KeyCode::Tab | KeyCode::Char('f' | 'F') => app.fast.update(key.kind, now),
+                    _ => {
+                        app.keypad.handle(key, now);
+                    }
+                }
             }
         }
 
@@ -466,7 +525,8 @@ fn event_loop(
         if next_frame > now {
             std::thread::sleep(next_frame - now);
         } else {
-            // Running behind: resynchronise instead of trying to catch up.
+            // Running behind (or fast-forwarding): resynchronise instead
+            // of trying to catch up.
             next_frame = now;
         }
     }
