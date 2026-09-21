@@ -1,10 +1,16 @@
 <p align="center">
-  <img src="https://raw.githubusercontent.com/Huseynteymurzade28/tuiba/master/docs/logo.svg" alt="tuiba — Game Boy Advance in your terminal" width="358">
+  <img src="https://raw.githubusercontent.com/Huseynteymurzade28/tuiba/master/docs/logo.svg" alt="tuiba — Game Boy Advance in your terminal" width="408">
 </p>
 
 <p align="center">
-  A Game Boy Advance emulator that runs in your terminal, written in Rust with
-  <a href="https://ratatui.rs">Ratatui</a>.
+  A Game Boy Advance emulator that runs in your terminal, written in Rust with <a href="https://ratatui.rs">Ratatui</a>.
+</p>
+
+<p align="center">
+  <a href="https://github.com/Huseynteymurzade28/tuiba/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/Huseynteymurzade28/tuiba/ci.yml?branch=master&label=CI&style=flat-square" alt="CI"></a>
+  <a href="https://crates.io/crates/tuiba"><img src="https://img.shields.io/crates/v/tuiba?style=flat-square&color=a896ff" alt="crates.io"></a>
+  <a href="https://aur.archlinux.org/packages/tuiba"><img src="https://img.shields.io/aur/version/tuiba?style=flat-square&color=a896ff" alt="AUR"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-6f6888?style=flat-square" alt="MIT license"></a>
 </p>
 
 ---
@@ -13,7 +19,8 @@ In terminals that speak the Kitty graphics protocol (Kitty, Ghostty,
 WezTerm, Konsole) the 240×160 framebuffer is shown as real pixels, upscaled
 by the largest integer factor that fits. Everywhere else it is drawn with
 Unicode half-block characters and 24-bit colour, so a 240×80-cell terminal
-shows the full screen at 1:1.
+shows the full screen at 1:1. Smaller terminals get a downscaled picture;
+the status bar shows the current scale and the size needed for 1:1.
 
 <p align="center">
   <img src="https://raw.githubusercontent.com/Huseynteymurzade28/tuiba/master/docs/demo.gif" alt="Adding a folder to the library and starting a game" width="720">
@@ -55,6 +62,25 @@ Tested with freely distributed homebrew:
 | Pliko                        | Plays                                                                 |
 
 No ROMs are needed to build or test the project.
+
+## Scope and legal
+
+tuiba is a hobby project, written to learn how the hardware works and
+for the fun of seeing it run in a terminal. It is MIT-licensed and
+contains no proprietary code:
+
+- **No BIOS.** The GBA's system ROM is not included, downloaded or
+  linked. The BIOS calls that games make are emulated in software from
+  public documentation.
+- **No games.** No ROMs are included or linked; you bring your own
+  cartridges. Testing uses freely distributed homebrew and small
+  hand-assembled programs in the test suite.
+- **Homebrew only in this repository.** Screenshots and recordings show
+  homebrew whose licence allows it, credited where they appear. Please
+  keep it that way in contributions.
+
+Game Boy Advance is a trademark of Nintendo. tuiba is not affiliated with
+or endorsed by Nintendo.
 
 ## Installation
 
