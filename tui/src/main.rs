@@ -1,6 +1,9 @@
 //! Terminal frontend for the `tuiba` Game Boy Advance emulator.
 
+mod cli;
+mod headless;
 mod input;
+mod png;
 mod screen;
 
 use std::io::stdout;
@@ -25,9 +28,9 @@ use crate::screen::GbaScreen;
 /// Errors specific to the terminal frontend.
 #[derive(Debug, thiserror::Error)]
 enum AppError {
-    /// No ROM path was supplied on the command line.
-    #[error("usage: tuiba <rom.gba>")]
-    Usage,
+    /// The command line could not be parsed.
+    #[error(transparent)]
+    Args(#[from] cli::ArgError),
 
     /// An error bubbled up from the emulator core.
     #[error(transparent)]
@@ -131,12 +134,18 @@ impl App {
 }
 
 fn run() -> Result<(), AppError> {
-    let rom_path = std::env::args().nth(1).ok_or(AppError::Usage)?;
-    let cartridge = Cartridge::load(&rom_path)?;
-    let save_path = std::path::Path::new(&rom_path).with_extension("sav");
+    let args = cli::Args::parse(std::env::args().skip(1))?;
+    let cartridge = Cartridge::load(&args.rom)?;
+    let save_path = args.rom.with_extension("sav");
     let mut gba = Gba::new(cartridge);
     if let Ok(data) = std::fs::read(&save_path) {
         gba.load_save_data(&data);
+    }
+
+    // Headless runs read the save (so the game boots past its checks) but
+    // never write it: a debugging session must not clobber real progress.
+    if let Some(config) = &args.headless {
+        return Ok(headless::run(&mut gba, config)?);
     }
 
     let mut terminal = ratatui::init();
@@ -210,6 +219,10 @@ fn event_loop(terminal: &mut ratatui::DefaultTerminal, app: &mut App) -> Result<
 fn main() -> ExitCode {
     match run() {
         Ok(()) => ExitCode::SUCCESS,
+        Err(AppError::Args(cli::ArgError::Help)) => {
+            println!("{}", cli::USAGE);
+            ExitCode::SUCCESS
+        }
         Err(err) => {
             eprintln!("error: {err}");
             ExitCode::FAILURE

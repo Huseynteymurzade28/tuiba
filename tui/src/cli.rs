@@ -1,0 +1,259 @@
+//! Command-line argument parsing.
+//!
+//! Hand-rolled rather than pulling in a parser crate: the surface is a
+//! ROM path plus a handful of debugging flags.
+
+use std::fmt;
+use std::path::PathBuf;
+
+use crate::input::GbaKey;
+
+/// Usage text printed on `--help` or a bad invocation.
+pub const USAGE: &str = "\
+usage: tuiba <rom.gba> [options]
+
+Run a Game Boy Advance ROM in the terminal.
+
+Debug options (headless, no terminal UI):
+  --frames N            emulate N frames and exit
+  --screenshot FILE     write the final frame as a PNG (implies --frames)
+  --key BUTTON@FROM-TO  hold BUTTON from frame FROM to frame TO (exclusive);
+                        BUTTON is one of a b select start right left up down r l;
+                        may be given several times
+  -h, --help            show this help";
+
+/// What the user asked us to do.
+#[derive(Debug, PartialEq, Eq)]
+pub struct Args {
+    /// The cartridge to load.
+    pub rom: PathBuf,
+    /// Headless run parameters, when any debug flag was given.
+    pub headless: Option<Headless>,
+}
+
+/// Headless (non-interactive) run configuration.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct Headless {
+    /// Frames to emulate before exiting.
+    pub frames: u32,
+    /// Where to write the final frame, if anywhere.
+    pub screenshot: Option<PathBuf>,
+    /// Scripted key holds.
+    pub keys: Vec<KeyHold>,
+}
+
+/// A button held over a half-open range of frames.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct KeyHold {
+    /// The button to press.
+    pub key: GbaKey,
+    /// First frame during which the button reads as pressed.
+    pub from: u32,
+    /// First frame during which the button reads as released again.
+    pub to: u32,
+}
+
+/// Why the command line could not be parsed.
+#[derive(Debug, PartialEq, Eq)]
+pub enum ArgError {
+    /// `--help` was requested; not really an error.
+    Help,
+    /// The ROM path is missing.
+    MissingRom,
+    /// A flag that needs a value was given without one.
+    MissingValue(String),
+    /// A value could not be parsed.
+    BadValue {
+        /// The flag whose value was rejected.
+        flag: String,
+        /// The offending text.
+        value: String,
+    },
+    /// An option we do not know.
+    Unknown(String),
+}
+
+impl fmt::Display for ArgError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Help => f.write_str(USAGE),
+            Self::MissingRom => write!(f, "missing ROM path\n\n{USAGE}"),
+            Self::MissingValue(flag) => write!(f, "{flag} needs a value\n\n{USAGE}"),
+            Self::BadValue { flag, value } => write!(f, "invalid value for {flag}: {value:?}"),
+            Self::Unknown(arg) => write!(f, "unknown option {arg}\n\n{USAGE}"),
+        }
+    }
+}
+
+impl std::error::Error for ArgError {}
+
+impl Args {
+    /// Parses the process arguments (excluding the program name).
+    pub fn parse<I>(args: I) -> Result<Self, ArgError>
+    where
+        I: IntoIterator,
+        I::Item: Into<String>,
+    {
+        let mut args = args.into_iter().map(Into::into);
+        let mut rom = None;
+        let mut frames = None;
+        let mut screenshot = None;
+        let mut keys = Vec::new();
+
+        while let Some(arg) = args.next() {
+            let mut value = |flag: &str| {
+                args.next()
+                    .ok_or_else(|| ArgError::MissingValue(flag.into()))
+            };
+            match arg.as_str() {
+                "-h" | "--help" => return Err(ArgError::Help),
+                "--frames" => {
+                    let v = value("--frames")?;
+                    frames = Some(v.parse().map_err(|_| bad("--frames", &v))?);
+                }
+                "--screenshot" => screenshot = Some(PathBuf::from(value("--screenshot")?)),
+                "--key" => {
+                    let v = value("--key")?;
+                    keys.push(parse_key_hold(&v).ok_or_else(|| bad("--key", &v))?);
+                }
+                flag if flag.starts_with('-') && flag.len() > 1 => {
+                    return Err(ArgError::Unknown(arg));
+                }
+                _ if rom.is_none() => rom = Some(PathBuf::from(arg)),
+                _ => return Err(ArgError::Unknown(arg)),
+            }
+        }
+
+        let rom = rom.ok_or(ArgError::MissingRom)?;
+        let debug = frames.is_some() || screenshot.is_some() || !keys.is_empty();
+        let headless = debug.then(|| Headless {
+            // A screenshot with no frame count means "the first frame".
+            frames: frames.unwrap_or(1),
+            screenshot,
+            keys,
+        });
+        Ok(Self { rom, headless })
+    }
+}
+
+fn bad(flag: &str, value: &str) -> ArgError {
+    ArgError::BadValue {
+        flag: flag.into(),
+        value: value.into(),
+    }
+}
+
+/// Parses `button@from-to`; `to` defaults to `from + 1` (a single-frame tap).
+fn parse_key_hold(spec: &str) -> Option<KeyHold> {
+    let (name, range) = spec.split_once('@')?;
+    let key = parse_key(name)?;
+    let (from, to) = if let Some((from, to)) = range.split_once('-') {
+        (from.parse().ok()?, to.parse().ok()?)
+    } else {
+        let from: u32 = range.parse().ok()?;
+        (from, from + 1)
+    };
+    (from < to).then_some(KeyHold { key, from, to })
+}
+
+fn parse_key(name: &str) -> Option<GbaKey> {
+    Some(match name.to_ascii_lowercase().as_str() {
+        "a" => GbaKey::A,
+        "b" => GbaKey::B,
+        "select" => GbaKey::Select,
+        "start" => GbaKey::Start,
+        "right" => GbaKey::Right,
+        "left" => GbaKey::Left,
+        "up" => GbaKey::Up,
+        "down" => GbaKey::Down,
+        "r" => GbaKey::R,
+        "l" => GbaKey::L,
+        _ => return None,
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn parse(args: &[&str]) -> Result<Args, ArgError> {
+        Args::parse(args.iter().copied())
+    }
+
+    #[test]
+    fn rom_only_is_interactive() {
+        let args = parse(&["game.gba"]).unwrap();
+        assert_eq!(args.rom, PathBuf::from("game.gba"));
+        assert_eq!(args.headless, None);
+    }
+
+    #[test]
+    fn debug_flags_select_headless_mode() {
+        let args = parse(&[
+            "game.gba",
+            "--frames",
+            "300",
+            "--screenshot",
+            "out.png",
+            "--key",
+            "start@120-130",
+            "--key",
+            "A@200",
+        ])
+        .unwrap();
+        let headless = args.headless.unwrap();
+        assert_eq!(headless.frames, 300);
+        assert_eq!(headless.screenshot, Some(PathBuf::from("out.png")));
+        assert_eq!(
+            headless.keys,
+            vec![
+                KeyHold {
+                    key: GbaKey::Start,
+                    from: 120,
+                    to: 130
+                },
+                KeyHold {
+                    key: GbaKey::A,
+                    from: 200,
+                    to: 201
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn screenshot_alone_runs_one_frame() {
+        let args = parse(&["--screenshot", "x.png", "game.gba"]).unwrap();
+        assert_eq!(args.headless.unwrap().frames, 1);
+    }
+
+    #[test]
+    fn errors() {
+        assert_eq!(parse(&[]), Err(ArgError::MissingRom));
+        assert_eq!(parse(&["--help"]), Err(ArgError::Help));
+        assert_eq!(
+            parse(&["game.gba", "--frames"]),
+            Err(ArgError::MissingValue("--frames".into()))
+        );
+        assert!(matches!(
+            parse(&["game.gba", "--frames", "lots"]),
+            Err(ArgError::BadValue { .. })
+        ));
+        assert!(matches!(
+            parse(&["game.gba", "--key", "start@10-5"]),
+            Err(ArgError::BadValue { .. })
+        ));
+        assert!(matches!(
+            parse(&["game.gba", "--key", "x@1"]),
+            Err(ArgError::BadValue { .. })
+        ));
+        assert_eq!(
+            parse(&["game.gba", "--bogus"]),
+            Err(ArgError::Unknown("--bogus".into()))
+        );
+        assert_eq!(
+            parse(&["a.gba", "b.gba"]),
+            Err(ArgError::Unknown("b.gba".into()))
+        );
+    }
+}
