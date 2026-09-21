@@ -21,7 +21,28 @@ Early development. See the commit log for what exists so far.
 
 ```sh
 cargo build --release
-cargo run --release -- path/to/rom.gba
+```
+
+## Usage
+
+```sh
+tuiba                  # open the library screen
+tuiba ~/roms           # add a folder to the library, then open it
+tuiba path/to/rom.gba  # play a cartridge directly
+```
+
+The library remembers its folders in `~/.config/tuiba/library` (one path
+per line). Saves are written next to the ROM as `.sav`.
+
+In the library: `↑↓` select, `⏎` play, `a` add a folder, `tab` switch to the
+folder list (`x` removes one), `q` quit. In a game the GBA buttons are the
+keys of the same name (`A`, `B`, `L`, `R`, arrows, `Enter` = Start,
+`Space` or `Backspace` = Select); `Esc` returns to the library, `Ctrl+Q` quits.
+
+For debugging there is a headless mode that needs no terminal:
+
+```sh
+tuiba rom.gba --frames 600 --key start@400-410 --screenshot out.png
 ```
 
 ## License

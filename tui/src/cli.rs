@@ -10,11 +10,12 @@ use crate::input::GbaKey;
 
 /// Usage text printed on `--help` or a bad invocation.
 pub const USAGE: &str = "\
-usage: tuiba <rom.gba> [options]
+usage: tuiba [<rom.gba> | <folder>] [options]
 
-Run a Game Boy Advance ROM in the terminal.
+Run a Game Boy Advance ROM in the terminal. With no argument, or with a
+folder, open the library screen (the folder is added to the library).
 
-Debug options (headless, no terminal UI):
+Debug options (headless, no terminal UI; need a ROM path):
   --frames N            emulate N frames and exit
   --screenshot FILE     write the final frame as a PNG (implies --frames)
   --key BUTTON@FROM-TO  hold BUTTON from frame FROM to frame TO (exclusive);
@@ -25,8 +26,9 @@ Debug options (headless, no terminal UI):
 /// What the user asked us to do.
 #[derive(Debug, PartialEq, Eq)]
 pub struct Args {
-    /// The cartridge to load.
-    pub rom: PathBuf,
+    /// The cartridge to load, or a folder for the library. `None` opens
+    /// the library screen.
+    pub rom: Option<PathBuf>,
     /// Headless run parameters, when any debug flag was given.
     pub headless: Option<Headless>,
 }
@@ -58,7 +60,7 @@ pub struct KeyHold {
 pub enum ArgError {
     /// `--help` was requested; not really an error.
     Help,
-    /// The ROM path is missing.
+    /// A headless flag was given without a ROM path.
     MissingRom,
     /// A flag that needs a value was given without one.
     MissingValue(String),
@@ -77,7 +79,7 @@ impl fmt::Display for ArgError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Help => f.write_str(USAGE),
-            Self::MissingRom => write!(f, "missing ROM path\n\n{USAGE}"),
+            Self::MissingRom => write!(f, "headless options need a ROM path\n\n{USAGE}"),
             Self::MissingValue(flag) => write!(f, "{flag} needs a value\n\n{USAGE}"),
             Self::BadValue { flag, value } => write!(f, "invalid value for {flag}: {value:?}"),
             Self::Unknown(arg) => write!(f, "unknown option {arg}\n\n{USAGE}"),
@@ -124,8 +126,10 @@ impl Args {
             }
         }
 
-        let rom = rom.ok_or(ArgError::MissingRom)?;
         let debug = frames.is_some() || screenshot.is_some() || !keys.is_empty();
+        if debug && rom.is_none() {
+            return Err(ArgError::MissingRom);
+        }
         let headless = debug.then(|| Headless {
             // A screenshot with no frame count means "the first frame".
             frames: frames.unwrap_or(1),
@@ -183,8 +187,15 @@ mod tests {
     #[test]
     fn rom_only_is_interactive() {
         let args = parse(&["game.gba"]).unwrap();
-        assert_eq!(args.rom, PathBuf::from("game.gba"));
+        assert_eq!(args.rom, Some(PathBuf::from("game.gba")));
         assert_eq!(args.headless, None);
+        assert_eq!(
+            parse(&[]).unwrap(),
+            Args {
+                rom: None,
+                headless: None
+            }
+        );
     }
 
     #[test]
@@ -229,7 +240,7 @@ mod tests {
 
     #[test]
     fn errors() {
-        assert_eq!(parse(&[]), Err(ArgError::MissingRom));
+        assert_eq!(parse(&["--frames", "1"]), Err(ArgError::MissingRom));
         assert_eq!(parse(&["--help"]), Err(ArgError::Help));
         assert_eq!(
             parse(&["game.gba", "--frames"]),

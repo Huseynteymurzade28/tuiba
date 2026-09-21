@@ -34,6 +34,14 @@ pub struct Header {
 }
 
 impl Header {
+    /// Parses the header from the start of a ROM image, which may be just
+    /// the first [`HEADER_END`] bytes of the file. Returns `None` when
+    /// `rom` is too short to hold a header.
+    #[must_use]
+    pub fn from_prefix(rom: &[u8]) -> Option<Self> {
+        (rom.len() >= HEADER_END).then(|| Self::parse(rom))
+    }
+
     /// Parses the header from the first `HEADER_END` bytes of a ROM.
     ///
     /// # Panics
@@ -192,6 +200,16 @@ mod tests {
         assert_eq!(h.maker_code, "00");
         assert_eq!(h.version, 1);
         assert!(h.valid);
+    }
+
+    #[test]
+    fn header_from_prefix_needs_the_whole_header() {
+        let rom = rom_with_header("PREFIX", 0x100);
+        assert_eq!(
+            Header::from_prefix(&rom[..HEADER_END]).unwrap().title,
+            "PREFIX"
+        );
+        assert_eq!(Header::from_prefix(&rom[..HEADER_END - 1]), None);
     }
 
     #[test]

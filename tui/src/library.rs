@@ -1,0 +1,310 @@
+//! The ROM library: a list of folders remembered between runs, and the
+//! cartridges found in them.
+//!
+//! The folder list lives in `$XDG_CONFIG_HOME/tuiba/library` (or
+//! `~/.config/tuiba/library`), one path per line, so it is trivial to
+//! edit by hand.
+
+use std::fs;
+use std::io;
+use std::path::{Path, PathBuf};
+
+use tuiba_core::memory::Header;
+use tuiba_core::memory::SaveType;
+use tuiba_core::memory::cartridge::HEADER_END;
+
+/// Where the folder list is stored.
+#[must_use]
+pub fn library_file() -> Option<PathBuf> {
+    let base = std::env::var_os("XDG_CONFIG_HOME")
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".config")))?;
+    Some(base.join("tuiba").join("library"))
+}
+
+/// Expands a leading `~` to the home directory.
+#[must_use]
+pub fn expand_home(path: &str) -> PathBuf {
+    if let Some(rest) = path.strip_prefix('~') {
+        if let Some(home) = std::env::var_os("HOME") {
+            let rest = rest.trim_start_matches('/');
+            return if rest.is_empty() {
+                PathBuf::from(home)
+            } else {
+                PathBuf::from(home).join(rest)
+            };
+        }
+    }
+    PathBuf::from(path)
+}
+
+/// Replaces a leading home directory with `~`, for display.
+#[must_use]
+pub fn compact_home(path: &Path) -> String {
+    if let Some(home) = std::env::var_os("HOME") {
+        if let Ok(rest) = path.strip_prefix(&home) {
+            return if rest.as_os_str().is_empty() {
+                "~".to_string()
+            } else {
+                format!("~/{}", rest.display())
+            };
+        }
+    }
+    path.display().to_string()
+}
+
+/// The remembered folders.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct Library {
+    /// Folders to scan, in the order they were added.
+    pub folders: Vec<PathBuf>,
+}
+
+impl Library {
+    /// Reads the folder list; a missing file is an empty library.
+    #[must_use]
+    pub fn load() -> Self {
+        library_file()
+            .and_then(|file| fs::read_to_string(file).ok())
+            .map(|text| Self::parse(&text))
+            .unwrap_or_default()
+    }
+
+    fn parse(text: &str) -> Self {
+        Self {
+            folders: text
+                .lines()
+                .map(str::trim)
+                .filter(|line| !line.is_empty() && !line.starts_with('#'))
+                .map(expand_home)
+                .collect(),
+        }
+    }
+
+    /// Writes the folder list back.
+    pub fn save(&self) -> io::Result<()> {
+        let Some(file) = library_file() else {
+            return Err(io::Error::other("no config directory (HOME unset)"));
+        };
+        if let Some(dir) = file.parent() {
+            fs::create_dir_all(dir)?;
+        }
+        let mut text = String::new();
+        for folder in &self.folders {
+            text.push_str(&folder.display().to_string());
+            text.push('\n');
+        }
+        fs::write(file, text)
+    }
+
+    /// Adds a folder unless it is already listed. Returns whether the
+    /// list changed.
+    pub fn add(&mut self, folder: PathBuf) -> bool {
+        let folder = folder.canonicalize().unwrap_or(folder);
+        if self.folders.contains(&folder) {
+            return false;
+        }
+        self.folders.push(folder);
+        true
+    }
+
+    /// Removes the folder at `index`.
+    pub fn remove(&mut self, index: usize) {
+        if index < self.folders.len() {
+            self.folders.remove(index);
+        }
+    }
+
+    /// Scans every folder for `.gba` files, sorted by title.
+    #[must_use]
+    pub fn scan(&self) -> Vec<Rom> {
+        let mut roms: Vec<Rom> = self
+            .folders
+            .iter()
+            .enumerate()
+            .flat_map(|(folder, dir)| scan_folder(dir, folder))
+            .collect();
+        roms.sort_by_key(Rom::sort_key);
+        roms
+    }
+}
+
+/// Every `.gba` file directly inside `dir`.
+fn scan_folder(dir: &Path, folder: usize) -> Vec<Rom> {
+    let Ok(entries) = fs::read_dir(dir) else {
+        return Vec::new();
+    };
+    entries
+        .filter_map(Result::ok)
+        .map(|e| e.path())
+        .filter(|p| {
+            p.extension()
+                .is_some_and(|ext| ext.eq_ignore_ascii_case("gba"))
+        })
+        .filter_map(|path| Rom::inspect(path, folder))
+        .collect()
+}
+
+/// A cartridge file and what its header says.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Rom {
+    /// The `.gba` file.
+    pub path: PathBuf,
+    /// Index into [`Library::folders`] of the folder it was found in.
+    pub folder: usize,
+    /// Parsed header, if the file is large enough to have one.
+    pub header: Option<Header>,
+    /// File size in bytes.
+    pub size: u64,
+    /// Whether a `.sav` file sits next to it.
+    pub has_save: bool,
+    /// Backup chip type; needs the whole file, so read on demand.
+    pub save_type: Option<SaveType>,
+}
+
+impl Rom {
+    fn inspect(path: PathBuf, folder: usize) -> Option<Self> {
+        let size = fs::metadata(&path).ok()?.len();
+        let mut prefix = vec![0; HEADER_END];
+        let header = {
+            use std::io::Read;
+            let mut file = fs::File::open(&path).ok()?;
+            file.read_exact(&mut prefix)
+                .ok()
+                .and_then(|()| Header::from_prefix(&prefix))
+        };
+        let has_save = path.with_extension("sav").is_file();
+        Some(Self {
+            path,
+            folder,
+            header,
+            size,
+            has_save,
+            save_type: None,
+        })
+    }
+
+    /// Display name: the header title, or the file name for headerless
+    /// or untitled ROMs.
+    #[must_use]
+    pub fn name(&self) -> String {
+        match &self.header {
+            Some(h) if !h.title.trim().is_empty() => h.title.clone(),
+            _ => self.file_name(),
+        }
+    }
+
+    /// The file name without its extension.
+    #[must_use]
+    pub fn file_name(&self) -> String {
+        self.path
+            .file_stem()
+            .map(|s| s.to_string_lossy().into_owned())
+            .unwrap_or_default()
+    }
+
+    fn sort_key(&self) -> (String, PathBuf) {
+        (self.name().to_lowercase(), self.path.clone())
+    }
+
+    /// Reads the whole file to determine the save type, caching it.
+    pub fn save_type(&mut self) -> Option<SaveType> {
+        if self.save_type.is_none() {
+            let rom = fs::read(&self.path).ok()?;
+            self.save_type = Some(SaveType::detect(&rom));
+        }
+        self.save_type
+    }
+}
+
+/// `size` in bytes as a short human-readable string.
+#[must_use]
+pub fn human_size(size: u64) -> String {
+    const MIB: u64 = 1024 * 1024;
+    if size >= MIB {
+        // Tenths of a MiB, rounded.
+        let tenths = (size * 10).div_ceil(MIB);
+        if tenths % 10 == 0 {
+            format!("{} MiB", tenths / 10)
+        } else {
+            format!("{}.{} MiB", tenths / 10, tenths % 10)
+        }
+    } else {
+        format!("{} KiB", size.div_ceil(1024))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_folder_list_ignoring_comments_and_blanks() {
+        let lib = Library::parse("# roms\n\n/a/b \n  /c\n");
+        assert_eq!(
+            lib.folders,
+            vec![PathBuf::from("/a/b"), PathBuf::from("/c")]
+        );
+    }
+
+    #[test]
+    fn add_is_idempotent_and_remove_is_bounds_checked() {
+        let mut lib = Library::default();
+        assert!(lib.add(PathBuf::from("/nonexistent/x")));
+        assert!(!lib.add(PathBuf::from("/nonexistent/x")));
+        lib.remove(5);
+        assert_eq!(lib.folders.len(), 1);
+        lib.remove(0);
+        assert!(lib.folders.is_empty());
+    }
+
+    #[test]
+    fn scans_a_folder_and_reads_headers() {
+        let dir = std::env::temp_dir().join(format!("tuiba-lib-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let mut rom = vec![0u8; 0x400];
+        rom[0xA0..0xA5].copy_from_slice(b"ZELDA");
+        rom[0xAC..0xB0].copy_from_slice(b"AZLE");
+        rom[0xB0..0xB2].copy_from_slice(b"01");
+        rom[0x200..0x208].copy_from_slice(b"EEPROM_V");
+        fs::write(dir.join("b.gba"), &rom).unwrap();
+        fs::write(dir.join("b.sav"), [0; 8]).unwrap();
+        fs::write(dir.join("a.GBA"), [0; 0x10]).unwrap(); // too short for a header
+        fs::write(dir.join("notes.txt"), "x").unwrap();
+
+        let lib = Library {
+            folders: vec![dir.clone()],
+        };
+        let mut roms = lib.scan();
+        assert_eq!(roms.len(), 2);
+        assert_eq!(
+            roms[0].name(),
+            "a",
+            "headerless ROMs fall back to the file name"
+        );
+        assert_eq!(roms[0].header, None);
+        assert_eq!(roms[1].name(), "ZELDA");
+        assert!(roms[1].has_save);
+        assert_eq!(roms[1].size, 0x400);
+        assert_eq!(roms[1].save_type(), Some(SaveType::Eeprom));
+
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn sizes_read_nicely() {
+        assert_eq!(human_size(0x400), "1 KiB");
+        assert_eq!(human_size(16 * 1024 * 1024), "16 MiB");
+        assert_eq!(human_size(1024 * 1024 + 512 * 1024), "1.5 MiB");
+    }
+
+    #[test]
+    fn home_expansion_round_trips() {
+        let home = std::env::var("HOME").unwrap();
+        assert_eq!(expand_home("~/x"), PathBuf::from(format!("{home}/x")));
+        assert_eq!(expand_home("~"), PathBuf::from(&home));
+        assert_eq!(expand_home("/abs"), PathBuf::from("/abs"));
+        assert_eq!(compact_home(Path::new(&format!("{home}/y"))), "~/y");
+        assert_eq!(compact_home(Path::new("/etc")), "/etc");
+    }
+}

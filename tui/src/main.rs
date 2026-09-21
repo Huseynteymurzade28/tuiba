@@ -3,10 +3,14 @@
 mod cli;
 mod headless;
 mod input;
+mod library;
+mod picker;
 mod png;
 mod screen;
+mod theme;
 
 use std::io::stdout;
+use std::path::Path;
 use std::process::ExitCode;
 use std::time::{Duration, Instant};
 
@@ -23,6 +27,8 @@ use ratatui::widgets::Paragraph;
 use tuiba_core::{Cartridge, Gba};
 
 use crate::input::{GbaKey, Keypad};
+use crate::library::Library;
+use crate::picker::{Outcome, Picker};
 use crate::screen::GbaScreen;
 
 /// Errors specific to the terminal frontend.
@@ -121,7 +127,7 @@ impl App {
             self.gba.bus.io.read16(tuiba_core::memory::io::reg::DISPCNT),
         );
         let status = Line::from(format!(
-            " {}{size_hint}{swi_hint}  {:.1} fps  {debug}  keys:{keys} [{}]  Esc: quit",
+            " {}{size_hint}{swi_hint}  {:.1} fps  {debug}  keys:{keys} [{}]  Esc: library  Ctrl+Q: quit",
             self.title,
             self.fps,
             self.held_buttons(now)
@@ -133,20 +139,41 @@ impl App {
     }
 }
 
+/// How the game loop ended.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum GameExit {
+    /// Esc: back to wherever we came from.
+    Back,
+    /// Ctrl+Q: leave the program.
+    Quit,
+}
+
 fn run() -> Result<(), AppError> {
     let args = cli::Args::parse(std::env::args().skip(1))?;
-    let cartridge = Cartridge::load(&args.rom)?;
-    let save_path = args.rom.with_extension("sav");
-    let mut gba = Gba::new(cartridge);
-    if let Ok(data) = std::fs::read(&save_path) {
-        gba.load_save_data(&data);
-    }
 
     // Headless runs read the save (so the game boots past its checks) but
     // never write it: a debugging session must not clobber real progress.
     if let Some(config) = &args.headless {
+        let rom = args
+            .rom
+            .as_deref()
+            .expect("parser requires a ROM for headless flags");
+        let mut gba = load_gba(rom)?;
         return Ok(headless::run(&mut gba, config)?);
     }
+
+    // A ROM plays directly; a folder (or nothing) opens the library.
+    let mut library = Library::load();
+    let direct_rom = match &args.rom {
+        Some(path) if path.is_dir() => {
+            if library.add(path.clone()) {
+                library.save()?;
+            }
+            None
+        }
+        Some(path) => Some(path.clone()),
+        None => None,
+    };
 
     let mut terminal = ratatui::init();
     // Ask for key release events; terminals that lack the protocol simply
@@ -159,6 +186,66 @@ fn run() -> Result<(), AppError> {
         );
     }
 
+    let result = match direct_rom {
+        Some(rom) => play(&mut terminal, &rom, release_events).map(|_| ()),
+        None => library_loop(&mut terminal, library, release_events),
+    };
+
+    if release_events {
+        let _ = execute!(stdout(), PopKeyboardEnhancementFlags);
+    }
+    ratatui::restore();
+    result
+}
+
+/// Library screen ⇄ game, until the user quits.
+fn library_loop(
+    terminal: &mut ratatui::DefaultTerminal,
+    library: Library,
+    release_events: bool,
+) -> Result<(), AppError> {
+    let mut picker = Picker::new(library);
+    loop {
+        terminal.draw(|frame| picker.draw(frame))?;
+        let outcome = match event::read()? {
+            Event::Key(key) => picker.handle(key),
+            _ => None,
+        };
+        match outcome {
+            None => {}
+            Some(Outcome::Quit) => return Ok(()),
+            Some(Outcome::Play(rom)) => {
+                match play(terminal, &rom, release_events) {
+                    Ok(GameExit::Back) => {}
+                    Ok(GameExit::Quit) => return Ok(()),
+                    // A broken ROM should not take the library down with it.
+                    Err(AppError::Core(err)) => picker.notify_error(err.to_string()),
+                    Err(err) => return Err(err),
+                }
+                picker.rescan();
+                terminal.clear()?;
+            }
+        }
+    }
+}
+
+/// Loads a cartridge and its save file.
+fn load_gba(rom: &Path) -> Result<Gba, AppError> {
+    let cartridge = Cartridge::load(rom)?;
+    let mut gba = Gba::new(cartridge);
+    if let Ok(data) = std::fs::read(rom.with_extension("sav")) {
+        gba.load_save_data(&data);
+    }
+    Ok(gba)
+}
+
+/// Runs one cartridge until the user leaves it, then writes its save.
+fn play(
+    terminal: &mut ratatui::DefaultTerminal,
+    rom: &Path,
+    release_events: bool,
+) -> Result<GameExit, AppError> {
+    let gba = load_gba(rom)?;
     let mut app = App {
         title: gba.bus.cartridge.header().title.clone(),
         gba,
@@ -167,14 +254,10 @@ fn run() -> Result<(), AppError> {
         fps_window_start: Instant::now(),
         fps: 0.0,
     };
-    let result = event_loop(&mut terminal, &mut app);
-
-    if release_events {
-        let _ = execute!(stdout(), PopKeyboardEnhancementFlags);
-    }
-    ratatui::restore();
+    let result = event_loop(terminal, &mut app);
 
     // Persist the save even if the loop ended with an error.
+    let save_path = rom.with_extension("sav");
     if let Err(err) = std::fs::write(&save_path, app.gba.save_data()) {
         eprintln!("warning: could not write {}: {err}", save_path.display());
     }
@@ -186,7 +269,10 @@ fn run() -> Result<(), AppError> {
 /// Emulation and rendering are decoupled: if a frame takes longer than
 /// the period we simply run late rather than skipping emulation, so the
 /// game never sees dropped input or jumps in time.
-fn event_loop(terminal: &mut ratatui::DefaultTerminal, app: &mut App) -> Result<(), AppError> {
+fn event_loop(
+    terminal: &mut ratatui::DefaultTerminal,
+    app: &mut App,
+) -> Result<GameExit, AppError> {
     let mut next_frame = Instant::now();
     loop {
         let now = Instant::now();
@@ -195,11 +281,17 @@ fn event_loop(terminal: &mut ratatui::DefaultTerminal, app: &mut App) -> Result<
 
         while event::poll(Duration::ZERO)? {
             if let Event::Key(key) = event::read()? {
-                // Esc or Ctrl+Q quits; plain letters belong to the game.
-                let ctrl_q =
-                    key.code == KeyCode::Char('q') && key.modifiers.contains(KeyModifiers::CONTROL);
-                if key.kind == KeyEventKind::Press && (key.code == KeyCode::Esc || ctrl_q) {
-                    return Ok(());
+                // Esc leaves the game, Ctrl+Q the program; plain letters
+                // belong to the game.
+                if key.kind == KeyEventKind::Press {
+                    if key.code == KeyCode::Esc {
+                        return Ok(GameExit::Back);
+                    }
+                    if key.code == KeyCode::Char('q')
+                        && key.modifiers.contains(KeyModifiers::CONTROL)
+                    {
+                        return Ok(GameExit::Quit);
+                    }
                 }
                 app.keypad.handle(key, Instant::now());
             }
