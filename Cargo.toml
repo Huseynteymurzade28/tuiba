@@ -42,7 +42,6 @@ module_name_repetitions = "allow"
 [profile.release]
 lto = "fat"
 codegen-units = 1
-panic = "abort"
 
 # Emulation is unusably slow at opt-level 0, even during development.
 [profile.dev.package."*"]
