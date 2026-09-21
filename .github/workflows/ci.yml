@@ -1,0 +1,63 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+  # Deny the lints the workspace only warns about locally.
+  RUSTFLAGS: -D warnings
+
+jobs:
+  check:
+    name: fmt, clippy, tests (stable)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo fmt --all -- --check
+      - run: cargo clippy --workspace --all-targets -- -D warnings
+      - run: cargo test --workspace
+      - name: Headless smoke run
+        # A minimal cartridge: entry branch straight into an infinite
+        # loop, plus a title. Enough to prove the binary boots a ROM and
+        # writes a screenshot without a terminal.
+        run: |
+          python3 -c '
+          rom = bytearray(0xC0)
+          rom[0:4] = (0xEAFFFFFE).to_bytes(4, "little")   # b .
+          rom[0xA0:0xAC] = b"CI SMOKE    "
+          open("smoke.gba", "wb").write(rom)'
+          cargo run -p tuiba -- smoke.gba --frames 5 --screenshot smoke.png
+          test -s smoke.png
+
+  msrv:
+    name: tests (MSRV)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          # Keep in step with `rust-version` in Cargo.toml.
+          toolchain: "1.88"
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo test --workspace
+
+  build:
+    name: build (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo build --workspace --all-targets
+      - run: cargo test --workspace
