@@ -138,11 +138,11 @@ impl Cpu {
             ThumbKind::LongBranchLink => self.thumb_long_branch_link(op),
             ThumbKind::Swi => {
                 self.software_interrupt(op as u8);
-                3
+                0
             }
             ThumbKind::Undefined => {
                 self.enter_exception(Exception::Undefined);
-                3
+                0
             }
         }
     }
@@ -151,17 +151,17 @@ impl Cpu {
     fn thumb_branch(&mut self, op: u16) -> u32 {
         let offset = ((i32::from(op) << 21) >> 20) as u32;
         self.set_pc(self.regs.get(PC).wrapping_add(offset));
-        3
+        0
     }
 
     /// Format 16: conditional branch, 8-bit signed halfword offset.
     fn thumb_cond_branch(&mut self, op: u16) -> u32 {
         if !self.regs.cpsr.condition(u32::from(op >> 8)) {
-            return 1;
+            return 0;
         }
         let offset = (i32::from(op as i8) << 1) as u32;
         self.set_pc(self.regs.get(PC).wrapping_add(offset));
-        3
+        0
     }
 
     /// Format 19: `BL` split into two halfwords. The first stashes the
@@ -172,13 +172,13 @@ impl Cpu {
         if op & (1 << 11) == 0 {
             let upper = ((offset << 21) as i32 >> 9) as u32;
             self.regs.set(LR, self.regs.get(PC).wrapping_add(upper));
-            1
+            0
         } else {
             let return_addr = self.regs.get(PC).wrapping_sub(2);
             let target = self.regs.get(LR).wrapping_add(offset << 1);
             self.regs.set(LR, return_addr | 1);
             self.set_pc(target);
-            3
+            0
         }
     }
 }

@@ -1,7 +1,7 @@
 //! THUMB register/immediate arithmetic: formats 1–5, 12 and 13.
 
 use crate::cpu::Cpu;
-use crate::cpu::alu::{ShiftType, add_with_carry, shift_imm, shift_reg};
+use crate::cpu::alu::{ShiftType, add_with_carry, multiply_cycles, shift_imm, shift_reg};
 use crate::cpu::registers::{PC, SP};
 
 #[inline]
@@ -43,7 +43,7 @@ impl Cpu {
         let amount = u32::from((op >> 6) & 0x1F);
         let (value, carry) = shift_imm(kind, self.regs.get(rs(op)), amount, self.regs.cpsr.c());
         self.set_logical(rd(op), value, carry);
-        1
+        0
     }
 
     /// Format 2: `ADD`/`SUB Rd, Rs, Rn|#imm3`.
@@ -61,7 +61,7 @@ impl Cpu {
             add_with_carry(a, operand, false)
         };
         self.set_arith(rd(op), result);
-        1
+        0
     }
 
     /// Format 3: `MOV`/`CMP`/`ADD`/`SUB Rd, #imm8`.
@@ -78,7 +78,7 @@ impl Cpu {
             0b10 => self.set_arith(rd, add_with_carry(a, imm, false)),
             _ => self.set_arith(rd, add_with_carry(a, !imm, true)),
         }
-        1
+        0
     }
 
     /// Format 4: register-register ALU operations.
@@ -87,7 +87,7 @@ impl Cpu {
         let a = self.regs.get(rd);
         let b = self.regs.get(rs(op));
         let carry = self.regs.cpsr.c();
-        let mut cycles = 1;
+        let mut cycles = 0;
 
         let shift = |kind: ShiftType| shift_reg(kind, a, b, carry);
         match (op >> 6) & 0xF {
@@ -96,24 +96,24 @@ impl Cpu {
             0x2 => {
                 let (v, c) = shift(ShiftType::Lsl);
                 self.set_logical(rd, v, c);
-                cycles = 2;
+                cycles = 1;
             }
             0x3 => {
                 let (v, c) = shift(ShiftType::Lsr);
                 self.set_logical(rd, v, c);
-                cycles = 2;
+                cycles = 1;
             }
             0x4 => {
                 let (v, c) = shift(ShiftType::Asr);
                 self.set_logical(rd, v, c);
-                cycles = 2;
+                cycles = 1;
             }
             0x5 => self.set_arith(rd, add_with_carry(a, b, carry)),
             0x6 => self.set_arith(rd, add_with_carry(a, !b, carry)),
             0x7 => {
                 let (v, c) = shift(ShiftType::Ror);
                 self.set_logical(rd, v, c);
-                cycles = 2;
+                cycles = 1;
             }
             0x8 => {
                 self.regs.cpsr.set_nz(a & b);
@@ -127,7 +127,7 @@ impl Cpu {
                 let v = a.wrapping_mul(b);
                 self.regs.set(rd, v);
                 self.regs.cpsr.set_nz(v);
-                cycles = 2;
+                cycles = multiply_cycles(b, true);
             }
             0xE => self.set_logical(rd, a & !b, carry),
             _ => self.set_logical(rd, !b, carry),
@@ -145,13 +145,13 @@ impl Cpu {
             0b00 => self.thumb_write_maybe_pc(rd, a.wrapping_add(b)),
             0b01 => {
                 self.set_arith_flags(add_with_carry(a, !b, true));
-                1
+                0
             }
             0b10 => self.thumb_write_maybe_pc(rd, b),
             _ => {
                 self.regs.cpsr.set_thumb(b & 1 != 0);
                 self.set_pc(b);
-                3
+                0
             }
         }
     }
@@ -161,10 +161,10 @@ impl Cpu {
     fn thumb_write_maybe_pc(&mut self, rd: usize, value: u32) -> u32 {
         if rd == PC {
             self.set_pc(value);
-            3
+            0
         } else {
             self.regs.set(rd, value);
-            1
+            0
         }
     }
 
@@ -178,7 +178,7 @@ impl Cpu {
             self.regs.get(PC) & !2
         };
         self.regs.set(rd, base.wrapping_add(imm));
-        1
+        0
     }
 
     /// Format 13: `ADD SP, #±imm7*4`.
@@ -191,7 +191,7 @@ impl Cpu {
             sp.wrapping_add(imm)
         };
         self.regs.set(SP, sp);
-        1
+        0
     }
 }
 

@@ -109,7 +109,7 @@ impl Cpu {
     /// Executes one ARM instruction.
     pub(super) fn execute_arm(&mut self, mem: &mut impl Memory, op: u32) -> u32 {
         if !self.regs.cpsr.condition(op >> 28) {
-            return 1;
+            return 0;
         }
 
         match decode(op) {
@@ -126,11 +126,11 @@ impl Cpu {
             ArmKind::SoftwareInterrupt => {
                 // The BIOS reads the call number from bits 23:16.
                 self.software_interrupt((op >> 16) as u8);
-                3
+                0
             }
             ArmKind::Undefined | ArmKind::Coprocessor => {
                 self.enter_exception(Exception::Undefined);
-                3
+                0
             }
         }
     }
@@ -144,7 +144,7 @@ impl Cpu {
             self.regs.set(LR, pc.wrapping_sub(4));
         }
         self.set_pc(pc.wrapping_add(offset as u32));
-        3
+        0
     }
 
     /// `BX Rn`: branch and optionally switch to THUMB (bit 0 of Rn).
@@ -152,7 +152,7 @@ impl Cpu {
         let target = self.regs.get((op & 0xF) as usize);
         self.regs.cpsr.set_thumb(target & 1 != 0);
         self.set_pc(target);
-        3
+        0
     }
 }
 

@@ -26,7 +26,7 @@ impl Cpu {
         let rd = usize::from((op >> 8) & 0x7);
         let address = (self.regs.get(PC) & !2).wrapping_add(u32::from(op & 0xFF) << 2);
         self.regs.set(rd, mem.read32(address));
-        3
+        1
     }
 
     /// Format 7: `STR`/`STRB`/`LDR`/`LDRB Rd, [Rb, Ro]`.
@@ -36,19 +36,19 @@ impl Cpu {
         match (op >> 10) & 0b11 {
             0b00 => {
                 mem.write32(address & !3, self.regs.get(rd));
-                2
+                0
             }
             0b01 => {
                 mem.write8(address, self.regs.get(rd) as u8);
-                2
+                0
             }
             0b10 => {
                 self.regs.set(rd, load::word(mem, address));
-                3
+                1
             }
             _ => {
                 self.regs.set(rd, u32::from(mem.read8(address)));
-                3
+                1
             }
         }
     }
@@ -60,19 +60,19 @@ impl Cpu {
         match (op >> 10) & 0b11 {
             0b00 => {
                 mem.write16(address & !1, self.regs.get(rd) as u16);
-                2
+                0
             }
             0b01 => {
                 self.regs.set(rd, load::signed_byte(mem, address));
-                3
+                1
             }
             0b10 => {
                 self.regs.set(rd, load::halfword(mem, address));
-                3
+                1
             }
             _ => {
                 self.regs.set(rd, load::signed_halfword(mem, address));
-                3
+                1
             }
         }
     }
@@ -88,19 +88,19 @@ impl Cpu {
         match (load, byte) {
             (false, false) => {
                 mem.write32(address & !3, self.regs.get(rd));
-                2
+                0
             }
             (false, true) => {
                 mem.write8(address, self.regs.get(rd) as u8);
-                2
+                0
             }
             (true, false) => {
                 self.regs.set(rd, load::word(mem, address));
-                3
+                1
             }
             (true, true) => {
                 self.regs.set(rd, u32::from(mem.read8(address)));
-                3
+                1
             }
         }
     }
@@ -114,10 +114,10 @@ impl Cpu {
         let rd = rd(op);
         if op & (1 << 11) != 0 {
             self.regs.set(rd, load::halfword(mem, address));
-            3
+            1
         } else {
             mem.write16(address & !1, self.regs.get(rd) as u16);
-            2
+            0
         }
     }
 
@@ -127,10 +127,10 @@ impl Cpu {
         let address = self.regs.get(SP).wrapping_add(u32::from(op & 0xFF) << 2);
         if op & (1 << 11) != 0 {
             self.regs.set(rd, load::word(mem, address));
-            3
+            1
         } else {
             mem.write32(address & !3, self.regs.get(rd));
-            2
+            0
         }
     }
 
@@ -140,7 +140,6 @@ impl Cpu {
         let extra = op & (1 << 8) != 0;
         let list = u32::from(op & 0xFF);
         let count = list.count_ones() + u32::from(extra);
-        let mut cycles = 1;
 
         if pop {
             let mut address = self.regs.get(SP);
@@ -148,16 +147,15 @@ impl Cpu {
                 if list & (1 << reg) != 0 {
                     self.regs.set(reg, mem.read32(address));
                     address = address.wrapping_add(4);
-                    cycles += 1;
                 }
             }
             if extra {
                 // ARMv4T: POP pc stays in THUMB regardless of bit 0.
                 self.set_pc(mem.read32(address));
                 address = address.wrapping_add(4);
-                cycles += 3;
             }
             self.regs.set(SP, address);
+            1
         } else {
             let mut address = self.regs.get(SP).wrapping_sub(count * 4);
             self.regs.set(SP, address);
@@ -165,15 +163,13 @@ impl Cpu {
                 if list & (1 << reg) != 0 {
                     mem.write32(address, self.regs.get(reg));
                     address = address.wrapping_add(4);
-                    cycles += 1;
                 }
             }
             if extra {
                 mem.write32(address, self.regs.get(LR));
-                cycles += 1;
             }
+            0
         }
-        cycles
     }
 
     /// Format 15: `STMIA`/`LDMIA Rb!, {rlist}`.
@@ -183,7 +179,7 @@ impl Cpu {
         let list = u32::from(op & 0xFF);
         let base = self.regs.get(rb);
         let mut address = base;
-        let mut cycles = 1;
+        let cycles = u32::from(load);
 
         if list == 0 {
             // Empty-list quirk, as in ARM: r15 is transferred, base += 0x40.
@@ -193,7 +189,7 @@ impl Cpu {
                 mem.write32(base, self.regs.get(PC).wrapping_add(2));
             }
             self.regs.set(rb, base.wrapping_add(0x40));
-            return cycles + 3;
+            return cycles;
         }
 
         let final_base = base.wrapping_add(list.count_ones() * 4);
@@ -213,7 +209,6 @@ impl Cpu {
                 mem.write32(address, value);
             }
             address = address.wrapping_add(4);
-            cycles += 1;
             first = false;
         }
 

@@ -12,6 +12,8 @@ use crate::ppu::{CYCLES_PER_LINE, Framebuffer, Ppu};
 /// Cycles the system skips at a time while the CPU is halted. Small
 /// enough that HBlank/VBlank events are not noticeably delayed.
 const HALT_STEP: u32 = 32;
+/// Internal cycles a DMA transfer spends before its first access.
+const DMA_START_CYCLES: u32 = 2;
 
 /// State of a pending `IntrWait`/`VBlankIntrWait` call.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -127,7 +129,7 @@ impl Gba {
             cycles
         };
 
-        self.run_dma();
+        let cycles = cycles + self.run_dma();
         let timer_irqs = self.bus.io.timers.step(cycles);
         for n in (0..4).filter(|n| timer_irqs & (1 << n) != 0) {
             self.bus.io.request_interrupt(Timers::interrupt(n));
@@ -140,16 +142,21 @@ impl Gba {
         if events.vblank {
             self.bus.io.dma.trigger(Timing::VBlank);
         }
+        // Cycles of DMAs started by this line's events, and of an IRQ
+        // entry, are only picked up with the next step; the PPU has
+        // already moved on for this one.
         self.run_dma();
 
         self.service_interrupts();
         events.vblank
     }
 
-    /// Runs every DMA channel that has been triggered. Transfers are
-    /// instantaneous; the CPU is simply not stepped in the meantime.
-    fn run_dma(&mut self) {
+    /// Runs every DMA channel that has been triggered and returns the
+    /// cycles the transfers took. The CPU is stalled for that long: it
+    /// is simply not stepped in the meantime.
+    fn run_dma(&mut self) -> u32 {
         let pending = self.bus.io.dma.take_pending();
+        let mut cycles = 0;
         for n in (0..4).filter(|n| pending & (1 << n) != 0) {
             // The transfer needs the whole bus, so the controller state is
             // moved out for its duration.
@@ -160,7 +167,10 @@ impl Gba {
             if let Some(irq) = irq {
                 self.bus.io.request_interrupt(irq);
             }
+            // Two internal cycles to start, plus the bus time.
+            cycles += DMA_START_CYCLES + self.bus.take_access_cycles();
         }
+        cycles
     }
 
     /// EEPROM chips cannot tell their own size; the length of the DMA that

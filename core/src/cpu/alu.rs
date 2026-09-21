@@ -97,6 +97,24 @@ pub const fn add_with_carry(a: u32, b: u32, carry_in: bool) -> (u32, bool, bool)
     (result, c1 | c2, overflow)
 }
 
+/// Internal cycles of the multiplier: 1–4 depending on how many
+/// significant bytes the multiplier operand has. For signed multiplies,
+/// leading all-ones bytes are just as cheap as leading zeros.
+#[must_use]
+pub const fn multiply_cycles(rs: u32, signed: bool) -> u32 {
+    let mut cycles = 1;
+    let mut shift = 8;
+    while shift < 32 {
+        let top = rs >> shift;
+        if top == 0 || (signed && top == u32::MAX >> shift) {
+            return cycles;
+        }
+        cycles += 1;
+        shift += 8;
+    }
+    4
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

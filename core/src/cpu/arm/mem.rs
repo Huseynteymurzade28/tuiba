@@ -72,18 +72,17 @@ impl Cpu {
             };
             if rd == PC {
                 self.set_pc(value);
-                5
             } else {
                 self.regs.set(rd, value);
-                3
             }
+            1
         } else {
             if byte {
                 mem.write8(address, value as u8);
             } else {
                 mem.write32(address & !3, value);
             }
-            2
+            0
         }
     }
 
@@ -104,7 +103,7 @@ impl Cpu {
         match ((op >> 5) & 0b11, load) {
             (0b01, false) => {
                 mem.write16(address & !1, value as u16);
-                2
+                0
             }
             (0b01, true) => self.finish_load(rd, load::halfword(mem, address)),
             (0b10, true) => self.finish_load(rd, load::signed_byte(mem, address)),
@@ -112,7 +111,7 @@ impl Cpu {
             // LDRD/STRD slots: undefined on ARMv4T.
             _ => {
                 self.enter_exception(Exception::Undefined);
-                3
+                0
             }
         }
     }
@@ -121,11 +120,10 @@ impl Cpu {
     fn finish_load(&mut self, rd: usize, value: u32) -> u32 {
         if rd == PC {
             self.set_pc(value);
-            5
         } else {
             self.regs.set(rd, value);
-            3
         }
+        1
     }
 
     /// `LDM`/`STM` in all four addressing modes, with the S-bit user-bank
@@ -165,7 +163,7 @@ impl Cpu {
         // S without r15 (or any STM with S) transfers the User bank.
         let user_bank = s_bit && !(load && pc_in_list);
 
-        let mut cycles = if load { 2 } else { 1 };
+        let cycles = u32::from(load);
         let mut first = true;
         for reg in 0..16 {
             if list & (1 << reg) == 0 {
@@ -175,7 +173,6 @@ impl Cpu {
                 let value = mem.read32(address);
                 if reg == PC {
                     self.set_pc(value);
-                    cycles += 2;
                 } else if user_bank {
                     self.regs.set_user(reg, value);
                 } else {
@@ -196,7 +193,6 @@ impl Cpu {
                 mem.write32(address, value);
             }
             address = address.wrapping_add(4);
-            cycles += 1;
             first = false;
         }
 
@@ -241,7 +237,7 @@ impl Cpu {
             old
         };
         self.regs.set(rd, old);
-        4
+        1
     }
 }
 
@@ -390,7 +386,7 @@ mod tests {
         ];
         for (lo, hi) in expected {
             cpu.regs.set(0, 0x1000);
-            mem.0[0xFF0..0x1010].fill(0);
+            mem.bytes[0xFF0..0x1010].fill(0);
             cpu.step(&mut mem);
             assert_eq!(mem.read32(lo), 1, "lo @ {lo:#x}");
             assert_eq!(mem.read32(hi), 2, "hi @ {hi:#x}");

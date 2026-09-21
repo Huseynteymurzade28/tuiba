@@ -1,7 +1,7 @@
 //! ARM data processing, PSR transfer and multiply instructions.
 
 use crate::cpu::Cpu;
-use crate::cpu::alu::{ShiftType, add_with_carry, shift_imm, shift_reg};
+use crate::cpu::alu::{ShiftType, add_with_carry, multiply_cycles, shift_imm, shift_reg};
 use crate::cpu::registers::{Cpsr, PC};
 
 /// Data-processing opcodes (bits 24:21).
@@ -85,7 +85,7 @@ impl Cpu {
             self.regs.get(rn)
         };
         let carry = self.regs.cpsr.c();
-        let cycles = if reg_shift { 2 } else { 1 };
+        let cycles = u32::from(reg_shift);
 
         // `arith` carries the (C, V) produced by an add/sub; logical ops
         // use the shifter carry and leave V alone.
@@ -117,7 +117,7 @@ impl Cpu {
                 }
             }
             self.set_pc(result);
-            return cycles + 2;
+            return cycles;
         }
 
         if set_flags {
@@ -190,7 +190,7 @@ impl Cpu {
             let new = Cpsr((self.regs.cpsr.0 & !mask) | (operand & mask));
             self.regs.set_cpsr(new);
         }
-        1
+        0
     }
 
     /// Executes `MUL`/`MLA`.
@@ -204,7 +204,7 @@ impl Cpu {
 
         let rs_val = self.regs.get(rs);
         let mut result = self.regs.get(rm).wrapping_mul(rs_val);
-        let mut cycles = 1 + multiply_cycles(rs_val, true);
+        let mut cycles = multiply_cycles(rs_val, true);
         if accumulate {
             result = result.wrapping_add(self.regs.get(rn));
             cycles += 1;
@@ -233,7 +233,7 @@ impl Cpu {
         } else {
             u64::from(multiplicand) * u64::from(multiplier)
         };
-        let mut cycles = 2 + multiply_cycles(multiplier, signed);
+        let mut cycles = 1 + multiply_cycles(multiplier, signed);
         if accumulate {
             let acc = (u64::from(self.regs.get(rd_hi)) << 32) | u64::from(self.regs.get(rd_lo));
             result = result.wrapping_add(acc);
@@ -247,23 +247,6 @@ impl Cpu {
         }
         cycles
     }
-}
-
-/// Internal cycles of the multiplier: 1–4 depending on how many
-/// significant bytes the multiplier operand has. For signed multiplies,
-/// leading all-ones bytes are just as cheap as leading zeros.
-const fn multiply_cycles(rs: u32, signed: bool) -> u32 {
-    let mut cycles = 1;
-    let mut shift = 8;
-    while shift < 32 {
-        let top = rs >> shift;
-        if top == 0 || (signed && top == u32::MAX >> shift) {
-            return cycles;
-        }
-        cycles += 1;
-        shift += 8;
-    }
-    4
 }
 
 #[cfg(test)]

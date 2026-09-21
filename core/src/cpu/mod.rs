@@ -251,7 +251,9 @@ impl Cpu {
         self.flush_pipeline(mem, self.regs.get(PC));
     }
 
-    /// Executes a single instruction and returns the cycles it took.
+    /// Executes a single instruction and returns the cycles it took:
+    /// the bus cycles of its fetch and data accesses (including any
+    /// pipeline refill) plus the instruction's internal cycles.
     pub fn step(&mut self, mem: &mut impl Memory) -> u32 {
         let size = self.instruction_size();
         let pc = self.regs.get(PC);
@@ -260,7 +262,7 @@ impl Cpu {
         self.pipeline[0] = self.pipeline[1];
         self.pipeline[1] = self.fetch(mem, pc);
 
-        let cycles = if self.thumb() {
+        let internal = if self.thumb() {
             self.execute_thumb(mem, op as u16)
         } else {
             self.execute_arm(mem, op)
@@ -271,6 +273,7 @@ impl Cpu {
         } else {
             self.regs.set(PC, pc.wrapping_add(size));
         }
+        let cycles = internal + mem.take_access_cycles();
         self.cycles += u64::from(cycles);
         cycles
     }
@@ -278,6 +281,8 @@ impl Cpu {
 
 #[cfg(test)]
 pub(crate) mod test_util {
+    use std::cell::Cell;
+
     use super::{Cpu, Mode};
     use crate::memory::Memory;
 
@@ -287,6 +292,8 @@ pub(crate) mod test_util {
         cpu.reset(mem);
         cpu.regs.switch_mode(Mode::System);
         cpu.flush_pipeline(mem, pc);
+        // Setup accesses must not count against the first instruction.
+        mem.take_access_cycles();
         cpu
     }
 
@@ -295,6 +302,7 @@ pub(crate) mod test_util {
         let mut cpu = arm_at(mem, pc);
         cpu.regs.cpsr.set_thumb(true);
         cpu.flush_pipeline(mem, pc);
+        mem.take_access_cycles();
         cpu
     }
 
@@ -313,11 +321,26 @@ pub(crate) mod test_util {
     }
 
     /// Flat 64 KiB RAM for CPU tests; addresses wrap.
-    pub struct Ram(pub Vec<u8>);
+    pub struct Ram {
+        pub bytes: Vec<u8>,
+        accesses: Cell<u32>,
+    }
 
     impl Ram {
         pub fn new() -> Self {
-            Self(vec![0; 0x1_0000])
+            Self {
+                bytes: vec![0; 0x1_0000],
+                accesses: Cell::new(0),
+            }
+        }
+
+        fn byte(&self, address: u32) -> u8 {
+            self.bytes[self.idx(address)]
+        }
+
+        fn set_byte(&mut self, address: u32, value: u8) {
+            let i = self.idx(address);
+            self.bytes[i] = value;
         }
 
         /// Assembles pre-encoded ARM words at `base`.
@@ -335,38 +358,55 @@ pub(crate) mod test_util {
         }
 
         fn idx(&self, address: u32) -> usize {
-            address as usize % self.0.len()
+            address as usize % self.bytes.len()
         }
     }
 
+    /// Every access costs one cycle, so instruction timings in tests
+    /// read as plain S/N/I counts.
     impl Memory for Ram {
         fn read8(&self, a: u32) -> u8 {
-            self.0[self.idx(a)]
+            self.accesses.set(self.accesses.get() + 1);
+            self.byte(a)
         }
         fn read16(&self, a: u32) -> u16 {
-            u16::from_le_bytes([self.read8(a), self.read8(a + 1)])
+            self.accesses.set(self.accesses.get() + 1);
+            u16::from_le_bytes([self.byte(a), self.byte(a + 1)])
         }
         fn read32(&self, a: u32) -> u32 {
-            u32::from(self.read16(a)) | (u32::from(self.read16(a + 2)) << 16)
+            self.accesses.set(self.accesses.get() + 1);
+            u32::from_le_bytes([
+                self.byte(a),
+                self.byte(a + 1),
+                self.byte(a + 2),
+                self.byte(a + 3),
+            ])
         }
         fn write8(&mut self, a: u32, v: u8) {
-            let i = self.idx(a);
-            self.0[i] = v;
+            self.accesses.set(self.accesses.get() + 1);
+            self.set_byte(a, v);
         }
         fn write16(&mut self, a: u32, v: u16) {
-            self.write8(a, v as u8);
-            self.write8(a + 1, (v >> 8) as u8);
+            self.accesses.set(self.accesses.get() + 1);
+            for (i, b) in v.to_le_bytes().into_iter().enumerate() {
+                self.set_byte(a + i as u32, b);
+            }
         }
         fn write32(&mut self, a: u32, v: u32) {
-            self.write16(a, v as u16);
-            self.write16(a + 2, (v >> 16) as u16);
+            self.accesses.set(self.accesses.get() + 1);
+            for (i, b) in v.to_le_bytes().into_iter().enumerate() {
+                self.set_byte(a + i as u32, b);
+            }
+        }
+        fn take_access_cycles(&self) -> u32 {
+            self.accesses.replace(0)
         }
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::test_util::{Ram, arm_at as cpu_at};
+    use super::test_util::{Ram, arm_at as cpu_at, thumb_at};
     use super::*;
 
     #[test]
@@ -403,7 +443,7 @@ mod tests {
         // 0x110: b 0x100 ; offset = (0x100 - 0x118) / 4 = -6
         mem.load_arm(0x110, &[0xEAFF_FFFA]);
         let mut cpu = cpu_at(&mut mem, 0x100);
-        assert_eq!(cpu.step(&mut mem), 3);
+        assert_eq!(cpu.step(&mut mem), 3, "2S + 1N");
         assert_eq!(cpu.next_pc(), 0x110);
         cpu.step(&mut mem);
         assert_eq!(cpu.next_pc(), 0x100);
@@ -450,6 +490,65 @@ mod tests {
         assert_eq!(cpu.regs.get(PC), 0x308, "ARM r15 reads PC+8");
     }
 
+    /// With one cycle per access, the totals are the S/N/I sums from the
+    /// ARM7TDMI data sheet.
+    #[test]
+    fn instruction_timings() {
+        let cases: &[(u32, u32, &str)] = &[
+            (0xE3A0_0001, 1, "mov r0, #1: 1S"),
+            (0xE1A0_0211, 2, "mov r0, r1, lsl r2: 1S + 1I"),
+            (0xE591_0000, 3, "ldr r0, [r1]: 1S + 1N + 1I"),
+            (0xE581_0000, 2, "str r0, [r1]: 2N"),
+            (0xE1D1_00B0, 3, "ldrh r0, [r1]: 1S + 1N + 1I"),
+            (0xE891_001E, 6, "ldmia r1, {r1-r4}: 4S + 1N + 1I"),
+            (0xE881_001E, 5, "stmia r1, {r1-r4}: 3S + 2N"),
+            (0xE001_0290, 2, "mul r1, r0, r2 (small r2): 1S + 1I"),
+            (0xE101_0092, 4, "swp r0, r2, [r1]: 1S + 2N + 1I"),
+            (0xEA00_0000, 3, "b: 2S + 1N"),
+            (0xE591_F000, 5, "ldr pc, [r1]: 1S + 1N + 1I + refill"),
+            (0xE1A0_F00E, 3, "mov pc, lr: 2S + 1N"),
+        ];
+        for &(word, expected, name) in cases {
+            let mut mem = Ram::new();
+            mem.load_arm(0x100, &[word]);
+            let mut cpu = cpu_at(&mut mem, 0x100);
+            cpu.regs.set(1, 0x2000);
+            cpu.regs.set(2, 3);
+            cpu.regs.set(LR, 0x300);
+            assert_eq!(cpu.step(&mut mem), expected, "{name}");
+        }
+
+        // A large multiplier costs more internal cycles.
+        let mut mem = Ram::new();
+        mem.load_arm(0x100, &[0xE001_0290]);
+        let mut cpu = cpu_at(&mut mem, 0x100);
+        cpu.regs.set(2, 0x1234_5678);
+        assert_eq!(
+            cpu.step(&mut mem),
+            5,
+            "mul with a 4-byte multiplier: 1S + 4I"
+        );
+
+        let thumb: &[(u16, u32, &str)] = &[
+            (0x2001, 1, "movs r0, #1: 1S"),
+            (0x4090, 2, "lsl r0, r2: 1S + 1I"),
+            (0x6808, 3, "ldr r0, [r1]: 1S + 1N + 1I"),
+            (0x6008, 2, "str r0, [r1]: 2N"),
+            (0xBC0E, 5, "pop {r1-r3}: 3S + 1N + 1I"),
+            (0xB40E, 4, "push {r1-r3}: 2S + 2N"),
+            (0xE000, 3, "b: 2S + 1N"),
+        ];
+        for &(half, expected, name) in thumb {
+            let mut mem = Ram::new();
+            mem.load_thumb(0x200, &[half]);
+            let mut cpu = thumb_at(&mut mem, 0x200);
+            cpu.regs.set(1, 0x2000);
+            cpu.regs.set(2, 3);
+            cpu.regs.set(SP, 0x3000);
+            assert_eq!(cpu.step(&mut mem), expected, "{name}");
+        }
+    }
+
     #[test]
     fn thumb_branches() {
         let mut mem = Ram::new();
@@ -466,7 +565,8 @@ mod tests {
         assert_eq!(cpu.next_pc(), 0x206);
         cpu.regs.cpsr.set_z(true);
         cpu.flush_pipeline(&mem, 0x208);
-        assert_eq!(cpu.step(&mut mem), 1);
+        mem.take_access_cycles();
+        assert_eq!(cpu.step(&mut mem), 1, "failed condition: 1S");
         assert_eq!(cpu.next_pc(), 0x20A);
     }
 
