@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 
 use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use ratatui::Frame;
-use ratatui::layout::{Alignment, Constraint, Layout, Rect};
+use ratatui::layout::{Alignment, Constraint, Layout, Margin, Rect};
 use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{
@@ -220,19 +220,28 @@ impl Picker {
         frame.render_widget(Clear, area);
         frame.render_widget(Block::default().style(theme::text()), area);
 
-        let [header, body, footer] = Layout::vertical([
-            Constraint::Length(wordmark::HEIGHT + 1),
+        // Breathing room: a row above the header, a column either side.
+        let [_, content, footer] = Layout::vertical([
+            Constraint::Length(1),
             Constraint::Fill(1),
             Constraint::Length(1),
         ])
         .areas(area);
+        let content = content.inner(Margin::new(1, 0));
+        let [header, rule, body] = Layout::vertical([
+            Constraint::Length(wordmark::HEIGHT),
+            Constraint::Length(2),
+            Constraint::Fill(1),
+        ])
+        .areas(content);
         self.draw_header(frame, header);
+        Self::draw_rule(frame, rule);
 
         let [list_area, side] =
-            Layout::horizontal([Constraint::Percentage(55), Constraint::Fill(1)]).areas(body);
+            Layout::horizontal([Constraint::Percentage(56), Constraint::Fill(1)]).areas(body);
         self.draw_roms(frame, list_area);
         let [detail, folders] =
-            Layout::vertical([Constraint::Length(11), Constraint::Fill(1)]).areas(side);
+            Layout::vertical([Constraint::Length(10), Constraint::Fill(1)]).areas(side);
         self.draw_detail(frame, detail);
         self.draw_folders(frame, folders);
         self.draw_footer(frame, footer);
@@ -240,14 +249,20 @@ impl Picker {
 
     fn draw_header(&self, frame: &mut Frame, area: Rect) {
         let [logo_area, right] = Layout::horizontal([
-            Constraint::Length(wordmark::width() + 4),
+            Constraint::Length(wordmark::width() + 3),
             Constraint::Fill(1),
         ])
         .areas(area);
-        if logo_area.width >= wordmark::width() + 2 {
-            let logo = wordmark::lines(theme::accent().fg(theme::ACCENT_LIGHT), theme::accent());
+        if logo_area.width > wordmark::width() {
+            let shades = [
+                theme::accent().fg(theme::ACCENT_LIGHT),
+                theme::accent().fg(theme::ACCENT_LIGHT),
+                theme::accent(),
+                theme::accent(),
+            ];
             frame.render_widget(
-                Paragraph::new(logo).block(Block::default().padding(Padding::new(2, 0, 0, 0))),
+                Paragraph::new(wordmark::lines(&shades))
+                    .block(Block::default().padding(Padding::left(1))),
                 logo_area,
             );
         } else {
@@ -259,7 +274,7 @@ impl Picker {
         }
 
         let summary = match (self.roms.len(), self.library.folders.len()) {
-            (_, 0) => String::new(),
+            (_, 0) => "no folders yet".to_string(),
             (0, f) => format!("no cartridges in {f} {}", plural(f, "folder")),
             (r, f) => format!(
                 "{r} {}  ·  {f} {}",
@@ -268,13 +283,24 @@ impl Picker {
             ),
         };
         let lines = vec![
+            Line::default(),
             Line::from(vec![
-                Span::styled("GAME BOY ADVANCE", theme::text()),
-                Span::styled("  ·  in your terminal  ", theme::dim()),
+                Span::styled("GAME BOY ADVANCE", theme::text().bold()),
+                Span::styled("  ·  in your terminal ", theme::dim()),
             ]),
-            Line::styled(format!("{summary}  "), theme::dim()),
+            Line::styled(format!("{summary} "), theme::dim()),
         ];
         frame.render_widget(Paragraph::new(lines).alignment(Alignment::Right), right);
+    }
+
+    /// A thin separator under the header.
+    fn draw_rule(frame: &mut Frame, area: Rect) {
+        let width = usize::from(area.width);
+        let rule = Line::from(vec![
+            Span::styled(" ", theme::dim()),
+            Span::styled("─".repeat(width.saturating_sub(2)), theme::border()),
+        ]);
+        frame.render_widget(Paragraph::new(vec![Line::default(), rule]), area);
     }
 
     fn pane(title: &str, focused: bool) -> Block<'static> {
@@ -351,28 +377,31 @@ impl Picker {
     }
 
     /// A label strip across the top of the detail pane, like the sticker
-    /// on a cartridge: the name, plus the game code when there is one.
+    /// on a cartridge: the name in the accent bar, then code, version and
+    /// size in a quieter line beneath it.
     fn draw_cartridge_label(frame: &mut Frame, area: Rect, rom: &Rom) {
         let width = usize::from(area.width);
-        let code = rom
-            .header
-            .as_ref()
-            .map(|h| h.game_code.trim().to_string())
-            .filter(|c| !c.is_empty());
-        let mut label = vec![Span::styled(
-            format!(" {}", truncate(&rom.name(), width.saturating_sub(8))),
+        let name = Line::from(Span::styled(
+            format!(" {}", truncate(&rom.name(), width.saturating_sub(2))),
             theme::selected(),
-        )];
-        if let Some(code) = code {
-            label.push(Span::styled(
-                format!("  {code} "),
-                Style::default().fg(theme::BG).bg(theme::ACCENT_LIGHT),
-            ));
+        ));
+        let mut facts = Vec::new();
+        if let Some(h) = &rom.header {
+            if !h.game_code.trim().is_empty() {
+                facts.push(h.game_code.trim().to_string());
+            }
+            facts.push(format!("v1.{}", h.version));
         }
-        frame.render_widget(
-            Paragraph::new(Line::from(label)).style(theme::selected()),
-            Rect { height: 1, ..area },
-        );
+        facts.push(human_size(rom.size));
+        let meta_style = Style::default().fg(theme::DIM).bg(theme::SURFACE);
+        let meta = Line::from(Span::styled(
+            format!(" {}", facts.join("  ·  ")),
+            meta_style,
+        ));
+        let [name_row, meta_row] =
+            Layout::vertical([Constraint::Length(1), Constraint::Length(1)]).areas(area);
+        frame.render_widget(Paragraph::new(name).style(theme::selected()), name_row);
+        frame.render_widget(Paragraph::new(meta).style(meta_style), meta_row);
     }
 
     fn draw_detail(&mut self, frame: &mut Frame, area: Rect) {
@@ -389,7 +418,7 @@ impl Picker {
         let save_type = rom.save_type();
 
         let [label_area, rows_area] =
-            Layout::vertical([Constraint::Length(2), Constraint::Fill(1)]).areas(inner);
+            Layout::vertical([Constraint::Length(3), Constraint::Fill(1)]).areas(inner);
         Self::draw_cartridge_label(frame, label_area, rom);
 
         let row = |label: &str, value: Span<'static>| {
@@ -405,7 +434,7 @@ impl Picker {
         };
         let plain = |s: String| Span::styled(s, theme::text());
 
-        let mut lines = vec![row("File", plain(rom.file_name()))];
+        let mut lines = vec![row("File", plain(format!("{}.gba", rom.file_name())))];
         match &rom.header {
             Some(h) => {
                 lines.push(row(
@@ -416,7 +445,6 @@ impl Picker {
                         h.maker_code.clone()
                     }),
                 ));
-                lines.push(row("Version", plain(format!("1.{}", h.version))));
                 lines.push(row(
                     "Header",
                     if h.valid {
@@ -431,13 +459,12 @@ impl Picker {
                 Span::styled("missing — file too small", theme::text().fg(theme::WARN)),
             )),
         }
-        lines.push(row("Size", plain(human_size(rom.size))));
         let chip = match save_type {
             Some(SaveType::Sram) => "SRAM 32K",
             Some(SaveType::Flash64K) => "Flash 64K",
             Some(SaveType::Flash128K) => "Flash 128K",
             Some(SaveType::Eeprom) => "EEPROM",
-            Some(SaveType::Unknown) => "none detected",
+            Some(SaveType::Unknown) => "none",
             None => "unreadable",
         };
         lines.push(row_spans(
@@ -445,9 +472,9 @@ impl Picker {
             vec![
                 plain(chip.to_string()),
                 if rom.has_save {
-                    Span::styled("  ·  has save ●", theme::text().fg(theme::OK))
+                    Span::styled("  ·  ● saved", theme::text().fg(theme::OK))
                 } else {
-                    Span::styled("  ·  no save yet", theme::dim())
+                    Span::styled("  ·  no save", theme::dim())
                 },
             ],
         ));
@@ -565,6 +592,19 @@ impl Picker {
             Paragraph::new(line).style(Style::default().bg(theme::SURFACE)),
             area,
         );
+        // Version, tucked into the right corner.
+        let version = format!("tuiba {} ", env!("CARGO_PKG_VERSION"));
+        let width = version.chars().count() as u16;
+        if area.width > width + 40 {
+            frame.render_widget(
+                Paragraph::new(Line::styled(version, theme::hint())),
+                Rect {
+                    x: area.right() - width,
+                    width,
+                    ..area
+                },
+            );
+        }
     }
 }
 
@@ -730,8 +770,12 @@ mod tests {
         let screen = render(&mut picker, 90, 24);
         assert!(screen.contains("▸ TETRIS"), "{screen}");
         assert!(screen.contains("ATET  ●"), "save marker: {screen}");
-        assert!(screen.contains(" TETRIS  ATET "), "label strip: {screen}");
-        assert!(screen.contains("has save ●"), "{screen}");
+        assert!(screen.contains(" TETRIS"), "label strip: {screen}");
+        assert!(
+            screen.contains("ATET  ·  v1.0  ·  1 KiB"),
+            "label facts: {screen}"
+        );
+        assert!(screen.contains("● saved"), "{screen}");
         assert!(screen.contains("⏎ play"), "{screen}");
 
         picker.mode = Mode::AddFolder("~/ro".into());

@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="https://raw.githubusercontent.com/Huseynteymurzade28/tuiba/master/docs/logo.svg" alt="tuiba — Game Boy Advance in your terminal" width="366">
+  <img src="https://raw.githubusercontent.com/Huseynteymurzade28/tuiba/master/docs/logo.svg" alt="tuiba — Game Boy Advance in your terminal" width="358">
 </p>
 
 <p align="center">
