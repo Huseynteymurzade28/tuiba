@@ -68,7 +68,7 @@ pub struct Flash {
 }
 
 impl Flash {
-    /// Sanyo LE26FV10N1TS, 128 KiB — the chip Pokémon expects.
+    /// Sanyo LE26FV10N1TS, 128 KiB — the chip 1 Mbit carts expect.
     const ID_128K: (u8, u8) = (0x62, 0x13);
     /// Macronix MX29L512, 64 KiB.
     const ID_64K: (u8, u8) = (0xC2, 0x1C);
