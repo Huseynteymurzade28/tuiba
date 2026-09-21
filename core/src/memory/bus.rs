@@ -175,10 +175,10 @@ impl Bus {
 
     /// Lets the EEPROM learn its size from a DMA transfer length.
     pub fn hint_eeprom_transfer(&mut self, address: u32, units: u32) {
-        if self.is_eeprom_address(address) {
-            if let Some(eeprom) = self.backup.eeprom_mut() {
-                eeprom.hint_transfer_len(units);
-            }
+        if self.is_eeprom_address(address)
+            && let Some(eeprom) = self.backup.eeprom_mut()
+        {
+            eeprom.hint_transfer_len(units);
         }
     }
 
