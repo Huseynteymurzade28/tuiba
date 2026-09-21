@@ -98,11 +98,13 @@ For the pixel renderer use Kitty, Ghostty, WezTerm or Konsole.
 
 1. Run `tuiba`. The library is empty the first time.
 2. Press `a`, type the folder that holds your `.gba` files (for example
-   `~/Games/GBA`; `~` is expanded) and press `⏎`. The folder is remembered
+   `~/Games/GBA`; `~` is expanded) and press `⏎`. Subfolders up to three
+   levels deep are searched too. The folder is remembered
    in `~/.config/tuiba/library`, one path per line, so you can also edit
    that file by hand.
 3. Pick a cartridge with `↑`/`↓` and press `⏎` to play. `Esc` brings you
-   back to the library; `Ctrl+Q` quits from anywhere.
+   back to the library; `Ctrl+Q` quits from anywhere. The library opens
+   on the cartridge you played last (`~/.config/tuiba/recent`).
 
 Shortcuts:
 
@@ -127,12 +129,12 @@ please attach that to a bug report.
 | -------------------------------- | -------------------------------------------- |
 | `↑` `↓` / `j` `k` — select       | `A` `B` `L` `R` — the buttons of the same name |
 | `⏎` — play                       | arrows — D-pad                               |
-| `a` — add a folder               | `Enter` — Start                              |
-| `tab` — folder list, `x` removes | `Space` or `Backspace` — Select              |
-| `r` — rescan folders             | `P` — pause, `.` — advance one frame         |
-| `q` — quit                       | `Tab` or `F` (held) — fast-forward           |
-|                                  | `?` — show the active bindings               |
-|                                  | `Esc` — back to the library                  |
+| `/` — filter by title, file or code | `Enter` — Start                           |
+| `s` — sort: title, file, last played, size | `Space` or `Backspace` — Select    |
+| `a` — add a folder               | `P` — pause, `.` — advance one frame         |
+| `tab` — folder list, `x` removes | `Tab` or `F` (held) — fast-forward           |
+| `r` — rescan folders             | `?` — show the active bindings               |
+| `q` — quit                       | `Esc` — back to the library                  |
 |                                  | `Ctrl+Q` — quit                              |
 
 Terminals that support the Kitty keyboard protocol report key releases,

@@ -1,5 +1,6 @@
 //! The library screen: pick a cartridge, manage the folders it comes from.
 
+use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 
 use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
@@ -12,7 +13,7 @@ use ratatui::widgets::{
 };
 use tuiba_core::memory::SaveType;
 
-use crate::library::{Library, Rom, compact_home, expand_home, human_size};
+use crate::library::{Library, Recent, Rom, compact_home, expand_home, human_size};
 use crate::{theme, wordmark};
 
 /// What the user decided.
@@ -36,17 +37,58 @@ enum Focus {
 enum Mode {
     Browse,
     AddFolder(String),
+    /// Typing a filter; the list narrows as it grows.
+    Filter,
+}
+
+/// Orderings for the cartridge list, cycled with `s`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Sort {
+    Title,
+    FileName,
+    LastPlayed,
+    Size,
+}
+
+impl Sort {
+    const fn next(self) -> Self {
+        match self {
+            Self::Title => Self::FileName,
+            Self::FileName => Self::LastPlayed,
+            Self::LastPlayed => Self::Size,
+            Self::Size => Self::Title,
+        }
+    }
+
+    const fn label(self) -> &'static str {
+        match self {
+            Self::Title => "title",
+            Self::FileName => "file name",
+            Self::LastPlayed => "last played",
+            Self::Size => "size",
+        }
+    }
 }
 
 /// Screen state.
 #[derive(Debug)]
 pub struct Picker {
     library: Library,
+    recent: Recent,
+    /// Every cartridge found, in scan order.
     roms: Vec<Rom>,
+    /// Indices into `roms` after filtering and sorting: what the list
+    /// shows.
+    visible: Vec<usize>,
+    /// Position in `visible`.
     rom_index: usize,
     folder_index: usize,
     focus: Focus,
     mode: Mode,
+    sort: Sort,
+    /// Current filter text (matched case-insensitively against title,
+    /// file name and game code).
+    filter: String,
     /// Transient feedback shown in the footer until the next key.
     notice: Option<(String, bool)>,
 }
@@ -55,16 +97,28 @@ impl Picker {
     /// Scans `library` and shows it.
     #[must_use]
     pub fn new(library: Library) -> Self {
+        Self::with_recent(library, Recent::load())
+    }
+
+    fn with_recent(library: Library, recent: Recent) -> Self {
         let mut picker = Self {
             library,
+            recent,
             roms: Vec::new(),
+            visible: Vec::new(),
             rom_index: 0,
             folder_index: 0,
             focus: Focus::Roms,
             mode: Mode::Browse,
+            sort: Sort::Title,
+            filter: String::new(),
             notice: None,
         };
         picker.rescan();
+        // Start on whatever was played last.
+        if let Some(last) = picker.recent.last().map(Path::to_path_buf) {
+            picker.select_path(&last);
+        }
         if picker.library.folders.is_empty() {
             picker.focus = Focus::Folders;
         }
@@ -74,15 +128,87 @@ impl Picker {
     /// Re-reads every folder, keeping the selection on the same file
     /// when it still exists.
     pub fn rescan(&mut self) {
-        let keep = self.roms.get(self.rom_index).map(|r| r.path.clone());
+        let keep = self.selected().map(|r| r.path.clone());
         self.roms = self.library.scan();
-        self.rom_index = keep
-            .and_then(|p| self.roms.iter().position(|r| r.path == p))
-            .unwrap_or(0)
-            .min(self.roms.len().saturating_sub(1));
+        self.refresh_view();
+        if let Some(path) = keep {
+            self.select_path(&path);
+        }
         self.folder_index = self
             .folder_index
             .min(self.library.folders.len().saturating_sub(1));
+    }
+
+    /// Records that `path` is being played, so it sorts first under
+    /// "last played" and is preselected next time.
+    pub fn mark_played(&mut self, path: &Path) {
+        self.recent.push(path);
+        if let Err(err) = self.recent.save() {
+            self.notify(format!("could not save recent list: {err}"), false);
+        }
+        self.refresh_view();
+        self.select_path(path);
+    }
+
+    /// The cartridge under the cursor.
+    fn selected(&self) -> Option<&Rom> {
+        self.visible
+            .get(self.rom_index)
+            .and_then(|&i| self.roms.get(i))
+    }
+
+    /// Moves the cursor to `path` if it is in the list.
+    fn select_path(&mut self, path: &Path) {
+        if let Some(pos) = self.visible.iter().position(|&i| self.roms[i].path == path) {
+            self.rom_index = pos;
+        }
+    }
+
+    /// Rebuilds `visible` from the filter and sort, keeping the cursor
+    /// on the same cartridge when it survives.
+    fn refresh_view(&mut self) {
+        let keep = self.selected().map(|r| r.path.clone());
+        let needle = self.filter.trim().to_lowercase();
+        self.visible = (0..self.roms.len())
+            .filter(|&i| needle.is_empty() || Self::matches(&self.roms[i], &needle))
+            .collect();
+        let recent = &self.recent;
+        let roms = &self.roms;
+        match self.sort {
+            Sort::Title => self
+                .visible
+                .sort_by_cached_key(|&i| (roms[i].name().to_lowercase(), roms[i].path.clone())),
+            Sort::FileName => self.visible.sort_by_cached_key(|&i| {
+                (roms[i].file_name().to_lowercase(), roms[i].path.clone())
+            }),
+            // Never played sorts after everything played, then by title.
+            Sort::LastPlayed => self.visible.sort_by_cached_key(|&i| {
+                (
+                    recent.rank(&roms[i].path).unwrap_or(usize::MAX),
+                    roms[i].name().to_lowercase(),
+                )
+            }),
+            // Largest first.
+            Sort::Size => self.visible.sort_by_cached_key(|&i| {
+                (
+                    std::cmp::Reverse(roms[i].size),
+                    roms[i].name().to_lowercase(),
+                )
+            }),
+        }
+        self.rom_index = 0;
+        if let Some(path) = keep {
+            self.select_path(&path);
+        }
+    }
+
+    /// Whether `rom` matches the lower-cased filter `needle`.
+    fn matches(rom: &Rom, needle: &str) -> bool {
+        rom.name().to_lowercase().contains(needle)
+            || rom.file_name().to_lowercase().contains(needle)
+            || rom
+                .game_code()
+                .is_some_and(|code| code.to_lowercase().contains(needle))
     }
 
     /// Adds `folder` to the library, persists it and rescans.
@@ -101,7 +227,7 @@ impl Picker {
         }
         self.rescan();
         self.folder_index = self.library.folders.len() - 1;
-        if !self.roms.is_empty() {
+        if !self.visible.is_empty() {
             self.focus = Focus::Roms;
         }
     }
@@ -135,33 +261,31 @@ impl Picker {
             return None;
         }
         self.notice = None;
-        if let Mode::AddFolder(input) = &mut self.mode {
-            match key.code {
-                KeyCode::Esc => self.mode = Mode::Browse,
-                KeyCode::Enter => {
-                    let path = expand_home(input.trim());
-                    self.mode = Mode::Browse;
-                    if !path.as_os_str().is_empty() {
-                        self.add_folder(&path);
-                    }
-                }
-                KeyCode::Backspace => {
-                    input.pop();
-                }
-                KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                    input.clear();
-                }
-                KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
-                    input.push(c);
-                }
-                _ => {}
+        match &mut self.mode {
+            Mode::Filter => return self.handle_filter(key),
+            Mode::AddFolder(_) => {
+                self.handle_add_folder(key);
+                return None;
             }
-            return None;
+            Mode::Browse => {}
         }
-
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
         match key.code {
+            // Esc first drops an active filter, then quits.
+            KeyCode::Esc if !self.filter.is_empty() => {
+                self.filter.clear();
+                self.refresh_view();
+            }
             KeyCode::Esc | KeyCode::Char('q') => return Some(Outcome::Quit),
+            KeyCode::Char('/') => {
+                self.mode = Mode::Filter;
+                self.focus = Focus::Roms;
+            }
+            KeyCode::Char('s') => {
+                self.sort = self.sort.next();
+                self.refresh_view();
+                self.notify(format!("sorted by {}", self.sort.label()), true);
+            }
             KeyCode::Char('c') if ctrl => return Some(Outcome::Quit),
             KeyCode::Tab | KeyCode::BackTab => {
                 self.focus = match self.focus {
@@ -179,14 +303,14 @@ impl Picker {
             }
             KeyCode::Enter => match self.focus {
                 Focus::Roms => {
-                    if let Some(rom) = self.roms.get(self.rom_index) {
+                    if let Some(rom) = self.selected() {
                         return Some(Outcome::Play(rom.path.clone()));
                     }
                 }
                 Focus::Folders => {
                     if self.library.folders.is_empty() {
                         self.mode = Mode::AddFolder(String::new());
-                    } else if !self.roms.is_empty() {
+                    } else if !self.visible.is_empty() {
                         self.focus = Focus::Roms;
                     }
                 }
@@ -202,9 +326,72 @@ impl Picker {
         None
     }
 
+    /// Keys while typing a filter.
+    fn handle_filter(&mut self, key: KeyEvent) -> Option<Outcome> {
+        match key.code {
+            KeyCode::Esc => {
+                self.filter.clear();
+                self.mode = Mode::Browse;
+                self.refresh_view();
+            }
+            KeyCode::Enter => {
+                self.mode = Mode::Browse;
+                if let Some(rom) = self.selected()
+                    && self.visible.len() == 1
+                {
+                    // One match: Enter plays it straight away.
+                    return Some(Outcome::Play(rom.path.clone()));
+                }
+            }
+            KeyCode::Backspace => {
+                self.filter.pop();
+                self.refresh_view();
+            }
+            KeyCode::Up => self.move_by(-1),
+            KeyCode::Down => self.move_by(1),
+            KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.filter.clear();
+                self.refresh_view();
+            }
+            KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.filter.push(c);
+                self.refresh_view();
+            }
+            _ => {}
+        }
+        None
+    }
+
+    /// Keys while typing a folder path.
+    fn handle_add_folder(&mut self, key: KeyEvent) {
+        let Mode::AddFolder(input) = &mut self.mode else {
+            return;
+        };
+        match key.code {
+            KeyCode::Esc => self.mode = Mode::Browse,
+            KeyCode::Enter => {
+                let path = expand_home(input.trim());
+                self.mode = Mode::Browse;
+                if !path.as_os_str().is_empty() {
+                    self.add_folder(&path);
+                }
+            }
+            KeyCode::Backspace => {
+                input.pop();
+            }
+            KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                input.clear();
+            }
+            KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
+                input.push(c);
+            }
+            _ => {}
+        }
+    }
+
     fn move_by(&mut self, delta: isize) {
         let (index, len) = match self.focus {
-            Focus::Roms => (&mut self.rom_index, self.roms.len()),
+            Focus::Roms => (&mut self.rom_index, self.visible.len()),
             Focus::Folders => (&mut self.folder_index, self.library.folders.len()),
         };
         if len == 0 {
@@ -319,13 +506,26 @@ impl Picker {
 
     fn draw_roms(&self, frame: &mut Frame, area: Rect) {
         let focused = self.focus == Focus::Roms;
-        let block = Self::pane("LIBRARY", focused);
+        // The title carries the sort and, when narrowed, the filter.
+        let mut title = format!("LIBRARY · by {}", self.sort.label());
+        if !self.filter.is_empty() {
+            let _ = write!(
+                title,
+                " · /{} ({} of {})",
+                self.filter,
+                self.visible.len(),
+                self.roms.len()
+            );
+        }
+        let block = Self::pane(&title, focused);
         let inner = block.inner(area);
         frame.render_widget(block, area);
 
-        if self.roms.is_empty() {
+        if self.visible.is_empty() {
             let text = if self.library.folders.is_empty() {
                 "No folders yet.\n\nPress a to add the folder your .gba files live in."
+            } else if !self.filter.is_empty() {
+                "Nothing matches the filter.\n\nKeep typing, or press esc to clear it."
             } else {
                 "No .gba files found in the library folders.\n\nPress r to rescan or a to add another folder."
             };
@@ -340,11 +540,13 @@ impl Picker {
 
         // Name on the left; game code and a save marker pinned right.
         let name_width = usize::from(inner.width).saturating_sub(12);
+        let needle = self.filter.trim().to_lowercase();
         let items: Vec<ListItem> = self
-            .roms
+            .visible
             .iter()
             .enumerate()
-            .map(|(i, rom)| {
+            .map(|(i, &rom_i)| {
+                let rom = &self.roms[rom_i];
                 let selected = i == self.rom_index;
                 let name = truncate(&rom.name(), name_width);
                 let code = rom.game_code().map_or_else(|| "----".to_string(), pad4);
@@ -361,12 +563,14 @@ impl Picker {
                     (theme::text(), theme::dim(), theme::text().fg(theme::OK))
                 };
                 let marker = if selected { "▸ " } else { "  " };
-                ListItem::new(Line::from(vec![
-                    Span::styled(format!("{marker}{name:<name_width$}"), name_style),
-                    Span::styled(format!("  {code}  "), meta_style),
-                    Span::styled(save.to_string(), save_style),
-                    Span::styled(" ", name_style),
-                ]))
+                let mut spans = vec![Span::styled(marker, name_style)];
+                spans.extend(highlight(&name, &needle, name_style));
+                let pad = name_width.saturating_sub(name.chars().count());
+                spans.push(Span::styled(" ".repeat(pad), name_style));
+                spans.push(Span::styled(format!("  {code}  "), meta_style));
+                spans.push(Span::styled(save.to_string(), save_style));
+                spans.push(Span::styled(" ", name_style));
+                ListItem::new(Line::from(spans))
             })
             .collect();
         let mut state = ListState::default().with_selected(Some(self.rom_index));
@@ -405,7 +609,11 @@ impl Picker {
         let block = Self::pane("CARTRIDGE", false);
         let inner = block.inner(area);
         frame.render_widget(block, area);
-        let Some(rom) = self.roms.get_mut(self.rom_index) else {
+        let Some(rom) = self
+            .visible
+            .get(self.rom_index)
+            .and_then(|&i| self.roms.get_mut(i))
+        else {
             frame.render_widget(
                 Paragraph::new("Select a cartridge to see its details.").style(theme::dim()),
                 inner,
@@ -413,6 +621,7 @@ impl Picker {
             return;
         };
         let save_type = rom.save_type();
+        let played = self.recent.rank(&rom.path);
 
         let [label_area, rows_area] =
             Layout::vertical([Constraint::Length(3), Constraint::Fill(1)]).areas(inner);
@@ -474,6 +683,14 @@ impl Picker {
                     Span::styled("  ·  no save", theme::dim())
                 },
             ],
+        ));
+        lines.push(row(
+            "Played",
+            match played {
+                Some(0) => Span::styled("most recent", theme::text()),
+                Some(n) => plain(format!("{n} games ago")),
+                None => Span::styled("never", theme::dim()),
+            },
         ));
         let path_width = usize::from(inner.width).saturating_sub(8);
         lines.push(row(
@@ -550,6 +767,15 @@ impl Picker {
                 Span::styled("█", Style::default().fg(theme::ACCENT).bg(theme::SURFACE)),
                 Span::styled("   ⏎ confirm  esc cancel", theme::hint()),
             ]),
+            Mode::Filter => Line::from(vec![
+                Span::styled(" Filter ", theme::key()),
+                Span::styled(
+                    format!(" {}", self.filter),
+                    Style::default().fg(theme::TEXT).bg(theme::SURFACE),
+                ),
+                Span::styled("█", Style::default().fg(theme::ACCENT).bg(theme::SURFACE)),
+                Span::styled("   ⏎ keep  esc clear  ↑↓ select", theme::hint()),
+            ]),
             Mode::Browse => {
                 if let Some((message, ok)) = &self.notice {
                     let color = if *ok { theme::OK } else { theme::WARN };
@@ -563,6 +789,8 @@ impl Picker {
                         Focus::Roms => &[
                             ("↑↓", "select"),
                             ("⏎", "play"),
+                            ("/", "filter"),
+                            ("s", "sort"),
                             ("tab", "folders"),
                             ("a", "add folder"),
                             ("r", "rescan"),
@@ -642,6 +870,34 @@ fn truncate_start(s: &str, width: usize) -> String {
     }
 }
 
+/// `text` as spans, with the first case-insensitive occurrence of
+/// `needle` in the accent colour.
+fn highlight(text: &str, needle: &str, base: Style) -> Vec<Span<'static>> {
+    let hit = if needle.is_empty() {
+        None
+    } else {
+        text.to_lowercase().find(needle)
+    };
+    match hit {
+        // Byte offsets from the lower-cased copy may not line up with
+        // the original for exotic case mappings; fall back to plain text.
+        Some(start)
+            if text.is_char_boundary(start) && text.is_char_boundary(start + needle.len()) =>
+        {
+            let end = start + needle.len();
+            vec![
+                Span::styled(text[..start].to_string(), base),
+                Span::styled(
+                    text[start..end].to_string(),
+                    base.fg(theme::ACCENT_LIGHT).bold(),
+                ),
+                Span::styled(text[end..].to_string(), base),
+            ]
+        }
+        _ => vec![Span::styled(text.to_string(), base)],
+    }
+}
+
 /// Pads or trims a game code to four columns.
 fn pad4(code: &str) -> String {
     format!("{:<4}", truncate(code, 4))
@@ -656,11 +912,61 @@ mod tests {
     }
 
     fn picker_with(roms: Vec<Rom>, folders: Vec<PathBuf>) -> Picker {
-        let mut picker = Picker::new(Library::default());
+        let mut picker = Picker::with_recent(Library::default(), Recent::default());
         picker.library.folders = folders;
         picker.roms = roms;
+        picker.refresh_view();
         picker.focus = Focus::Roms;
         picker
+    }
+
+    fn names(p: &Picker) -> Vec<String> {
+        p.visible.iter().map(|&i| p.roms[i].name()).collect()
+    }
+
+    #[test]
+    fn filter_narrows_highlights_and_clears() {
+        let mut p = picker_with(
+            vec![rom("Anguna"), rom("Pliko"), rom("Heartwrench")],
+            vec![PathBuf::from("/r")],
+        );
+        p.handle(key(KeyCode::Char('/')));
+        for c in "LI".chars() {
+            p.handle(key(KeyCode::Char(c)));
+        }
+        assert_eq!(names(&p), ["Pliko"], "case-insensitive");
+        assert_eq!(highlight("Pliko", "li", theme::text())[1].content, "li");
+        // One match: Enter plays it.
+        assert_eq!(
+            p.handle(key(KeyCode::Enter)),
+            Some(Outcome::Play(PathBuf::from("/r/Pliko.gba")))
+        );
+        // Esc in browse mode clears the filter before it quits.
+        assert_eq!(p.handle(key(KeyCode::Esc)), None);
+        assert_eq!(names(&p).len(), 3);
+        assert_eq!(p.handle(key(KeyCode::Esc)), Some(Outcome::Quit));
+    }
+
+    #[test]
+    fn sort_cycles_and_last_played_leads() {
+        let mut big = rom("big");
+        big.size = 1 << 20;
+        let mut p = picker_with(vec![rom("b"), big, rom("a")], vec![PathBuf::from("/r")]);
+        assert_eq!(names(&p), ["a", "b", "big"]);
+        p.handle(key(KeyCode::Char('s')));
+        assert_eq!(p.sort, Sort::FileName);
+        p.handle(key(KeyCode::Char('s')));
+        assert_eq!(p.sort, Sort::LastPlayed);
+        assert_eq!(names(&p), ["a", "b", "big"], "nothing played: by title");
+        p.recent.push(Path::new("/r/big.gba"));
+        p.refresh_view();
+        assert_eq!(names(&p), ["big", "a", "b"]);
+        p.handle(key(KeyCode::Char('s')));
+        assert_eq!(p.sort, Sort::Size);
+        assert_eq!(names(&p)[0], "big", "largest first");
+        // Through all of that the cursor followed the cartridge, not the row.
+        assert_eq!(p.selected().map(Rom::name), Some("a".into()));
+        assert_eq!(p.rom_index, 1);
     }
 
     fn rom(name: &str) -> Rom {
