@@ -3,8 +3,11 @@
 A Game Boy Advance emulator that runs in your terminal, written in Rust with
 [Ratatui](https://ratatui.rs).
 
-The 240×160 framebuffer is drawn with Unicode half-block characters and
-24-bit colour, so a 240×80-cell terminal shows the full screen at 1:1.
+In terminals that speak the Kitty graphics protocol (Kitty, Ghostty,
+WezTerm, Konsole) the 240×160 framebuffer is shown as real pixels, upscaled
+by the largest integer factor that fits. Everywhere else it is drawn with
+Unicode half-block characters and 24-bit colour, so a 240×80-cell terminal
+shows the full screen at 1:1.
 
 ## Layout
 
@@ -29,6 +32,7 @@ cargo build --release
 tuiba                  # open the library screen
 tuiba ~/roms           # add a folder to the library, then open it
 tuiba path/to/rom.gba  # play a cartridge directly
+tuiba --no-graphics    # force the half-block renderer
 ```
 
 The library remembers its folders in `~/.config/tuiba/library` (one path

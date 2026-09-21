@@ -21,6 +21,10 @@ Debug options (headless, no terminal UI; need a ROM path):
   --key BUTTON@FROM-TO  hold BUTTON from frame FROM to frame TO (exclusive);
                         BUTTON is one of a b select start right left up down r l;
                         may be given several times
+
+Display options:
+  --no-graphics         always draw with half-block characters, even in
+                        terminals that support the Kitty graphics protocol
   -h, --help            show this help";
 
 /// What the user asked us to do.
@@ -31,6 +35,8 @@ pub struct Args {
     pub rom: Option<PathBuf>,
     /// Headless run parameters, when any debug flag was given.
     pub headless: Option<Headless>,
+    /// Use the terminal's graphics protocol when available.
+    pub graphics: bool,
 }
 
 /// Headless (non-interactive) run configuration.
@@ -101,6 +107,7 @@ impl Args {
         let mut frames = None;
         let mut screenshot = None;
         let mut keys = Vec::new();
+        let mut graphics = true;
 
         while let Some(arg) = args.next() {
             let mut value = |flag: &str| {
@@ -114,6 +121,7 @@ impl Args {
                     frames = Some(v.parse().map_err(|_| bad("--frames", &v))?);
                 }
                 "--screenshot" => screenshot = Some(PathBuf::from(value("--screenshot")?)),
+                "--no-graphics" => graphics = false,
                 "--key" => {
                     let v = value("--key")?;
                     keys.push(parse_key_hold(&v).ok_or_else(|| bad("--key", &v))?);
@@ -136,7 +144,11 @@ impl Args {
             screenshot,
             keys,
         });
-        Ok(Self { rom, headless })
+        Ok(Self {
+            rom,
+            headless,
+            graphics,
+        })
     }
 }
 
@@ -193,9 +205,11 @@ mod tests {
             parse(&[]).unwrap(),
             Args {
                 rom: None,
-                headless: None
+                headless: None,
+                graphics: true
             }
         );
+        assert!(!parse(&["--no-graphics"]).unwrap().graphics);
     }
 
     #[test]

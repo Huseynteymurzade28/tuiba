@@ -1,6 +1,7 @@
 //! Terminal frontend for the `tuiba` Game Boy Advance emulator.
 
 mod cli;
+mod graphics;
 mod headless;
 mod input;
 mod library;
@@ -20,12 +21,13 @@ use crossterm::event::{
 };
 use crossterm::execute;
 use ratatui::Frame;
-use ratatui::layout::{Constraint, Layout};
-use ratatui::style::{Color, Style};
+use ratatui::layout::{Constraint, Layout, Rect};
+use ratatui::style::Style;
 use ratatui::text::Line;
-use ratatui::widgets::Paragraph;
+use ratatui::widgets::{Block, Paragraph};
 use tuiba_core::{Cartridge, Gba};
 
+use crate::graphics::KittyGraphics;
 use crate::input::{GbaKey, Keypad};
 use crate::library::Library;
 use crate::picker::{Outcome, Picker};
@@ -56,6 +58,10 @@ struct App {
     title: String,
     gba: Gba,
     keypad: Keypad,
+    /// Pixel output, when the terminal supports it; otherwise half-blocks.
+    graphics: Option<KittyGraphics>,
+    /// Where the last draw put the screen, for the graphics overlay.
+    screen_area: Rect,
     /// Frames emulated in the current measurement window.
     fps_frames: u32,
     fps_window_start: Instant,
@@ -87,26 +93,38 @@ impl App {
             .join(" ")
     }
 
-    fn draw(&self, frame: &mut Frame) {
+    fn draw(&mut self, frame: &mut Frame) {
         let [screen_area, status_area] =
             Layout::vertical([Constraint::Fill(1), Constraint::Length(1)]).areas(frame.area());
+        self.screen_area = screen_area;
 
-        frame.render_widget(GbaScreen::new(self.gba.framebuffer()), screen_area);
-
-        let scale = GbaScreen::scale_for(screen_area);
-        let size_hint = if !GbaScreen::fits(screen_area) {
-            format!(
-                "  [terminal {}x{} too small: cropped]",
-                screen_area.width, screen_area.height
-            )
-        } else if scale > 1 {
-            format!(
-                "  [1/{scale} scale; {}x{} for full]",
-                screen::CELL_WIDTH,
-                screen::CELL_HEIGHT
-            )
-        } else {
+        frame.render_widget(Block::default().style(theme::text()), screen_area);
+        let size_hint = if self.graphics.is_some() {
+            // The image is overlaid after the frame is flushed; the cells
+            // underneath stay blank.
             String::new()
+        } else {
+            frame.render_widget(GbaScreen::new(self.gba.framebuffer()), screen_area);
+            let scale = GbaScreen::scale_for(screen_area);
+            if !GbaScreen::fits(screen_area) {
+                format!(
+                    "  [terminal {}x{} too small: cropped]",
+                    screen_area.width, screen_area.height
+                )
+            } else if scale > 1 {
+                format!(
+                    "  [1/{scale} scale; {}x{} for full]",
+                    screen::CELL_WIDTH,
+                    screen::CELL_HEIGHT
+                )
+            } else {
+                String::new()
+            }
+        };
+        let renderer = if self.graphics.is_some() {
+            "pixels"
+        } else {
+            "half-blocks"
         };
         let keys = if self.keypad.has_release_events() {
             "kitty"
@@ -127,13 +145,13 @@ impl App {
             self.gba.bus.io.read16(tuiba_core::memory::io::reg::DISPCNT),
         );
         let status = Line::from(format!(
-            " {}{size_hint}{swi_hint}  {:.1} fps  {debug}  keys:{keys} [{}]  Esc: library  Ctrl+Q: quit",
+            " {}{size_hint}{swi_hint}  {:.1} fps  {renderer}  {debug}  keys:{keys} [{}]  Esc: library  Ctrl+Q: quit",
             self.title,
             self.fps,
             self.held_buttons(now)
         ));
         frame.render_widget(
-            Paragraph::new(status).style(Style::default().fg(Color::Black).bg(Color::Gray)),
+            Paragraph::new(status).style(Style::default().fg(theme::DIM).bg(theme::SURFACE)),
             status_area,
         );
     }
@@ -187,8 +205,8 @@ fn run() -> Result<(), AppError> {
     }
 
     let result = match direct_rom {
-        Some(rom) => play(&mut terminal, &rom, release_events).map(|_| ()),
-        None => library_loop(&mut terminal, library, release_events),
+        Some(rom) => play(&mut terminal, &rom, release_events, args.graphics).map(|_| ()),
+        None => library_loop(&mut terminal, library, release_events, args.graphics),
     };
 
     if release_events {
@@ -203,6 +221,7 @@ fn library_loop(
     terminal: &mut ratatui::DefaultTerminal,
     library: Library,
     release_events: bool,
+    graphics: bool,
 ) -> Result<(), AppError> {
     let mut picker = Picker::new(library);
     loop {
@@ -215,7 +234,7 @@ fn library_loop(
             None => {}
             Some(Outcome::Quit) => return Ok(()),
             Some(Outcome::Play(rom)) => {
-                match play(terminal, &rom, release_events) {
+                match play(terminal, &rom, release_events, graphics) {
                     Ok(GameExit::Back) => {}
                     Ok(GameExit::Quit) => return Ok(()),
                     // A broken ROM should not take the library down with it.
@@ -247,12 +266,16 @@ fn play(
     terminal: &mut ratatui::DefaultTerminal,
     rom: &Path,
     release_events: bool,
+    graphics: bool,
 ) -> Result<GameExit, AppError> {
     let gba = load_gba(rom)?;
     let mut app = App {
         title: gba.bus.cartridge.header().title.clone(),
         gba,
         keypad: Keypad::new(release_events),
+        graphics: (graphics && graphics::terminal_supports_kitty_graphics())
+            .then(KittyGraphics::new),
+        screen_area: Rect::default(),
         fps_frames: 0,
         fps_window_start: Instant::now(),
         fps: 0.0,
@@ -281,6 +304,9 @@ fn event_loop(
         let now = Instant::now();
         app.emulate_frame(now);
         terminal.draw(|frame| app.draw(frame))?;
+        if let Some(graphics) = &mut app.graphics {
+            graphics.present(app.gba.framebuffer(), app.screen_area)?;
+        }
 
         while event::poll(Duration::ZERO)? {
             if let Event::Key(key) = event::read()? {
