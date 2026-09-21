@@ -1,8 +1,10 @@
-//! Keyboard → GBA keypad mapping.
+//! GBA keypad state from terminal key events.
 //!
-//! The GBA reports its ten buttons through `KEYINPUT`, active-low. The
-//! hard part in a terminal is *releases*: classic terminals only send key
-//! presses (plus auto-repeat). We handle both worlds:
+//! Which key means which button is decided in [`crate::bindings`]; this
+//! module tracks *held* state. The GBA reports its ten buttons through
+//! `KEYINPUT`, active-low. The hard part in a terminal is *releases*:
+//! classic terminals only send key presses (plus auto-repeat). We handle
+//! both worlds:
 //!
 //! - With the Kitty keyboard protocol (`REPORT_EVENT_TYPES`) we receive
 //!   real `Release` events and track state exactly.
@@ -11,7 +13,7 @@
 
 use std::time::{Duration, Instant};
 
-use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
+use crossterm::event::KeyEventKind;
 use tuiba_core::memory::io::KEYINPUT_ALL_RELEASED;
 
 /// How long a key stays "held" after its last event when the terminal
@@ -56,28 +58,6 @@ impl GbaKey {
     pub const fn mask(self) -> u16 {
         1 << (self as u16)
     }
-}
-
-/// Maps a terminal key to a GBA button.
-///
-/// Buttons are on the keys of the same name: `A`, `B`, `L`, `R`,
-/// arrows for the D-pad, `Enter` = Start, `Space` / `Backspace` = Select.
-/// `Z`/`X` double as A/B for people used to other emulators.
-#[must_use]
-pub fn map_key(code: KeyCode) -> Option<GbaKey> {
-    Some(match code {
-        KeyCode::Up => GbaKey::Up,
-        KeyCode::Down => GbaKey::Down,
-        KeyCode::Left => GbaKey::Left,
-        KeyCode::Right => GbaKey::Right,
-        KeyCode::Char('a' | 'A' | 'z' | 'Z') => GbaKey::A,
-        KeyCode::Char('b' | 'B' | 'x' | 'X') => GbaKey::B,
-        KeyCode::Char('l' | 'L') => GbaKey::L,
-        KeyCode::Char('r' | 'R') => GbaKey::R,
-        KeyCode::Enter => GbaKey::Start,
-        KeyCode::Backspace | KeyCode::Char(' ') => GbaKey::Select,
-        _ => return None,
-    })
 }
 
 /// One key's held state: exact with release events, by timeout without.
@@ -145,26 +125,9 @@ impl Keypad {
         self.release_events
     }
 
-    /// Feeds a terminal key event. Returns `true` if it mapped to a button.
-    pub fn handle(&mut self, key: KeyEvent, now: Instant) -> bool {
-        // Shift as Select: crossterm reports the modifier alone only with
-        // the enhanced protocol, so this is a bonus, not the only binding.
-        let mapped = match key.code {
-            KeyCode::Modifier(crossterm::event::ModifierKeyCode::RightShift) => {
-                Some(GbaKey::Select)
-            }
-            code => map_key(code),
-        };
-        let Some(button) = mapped else { return false };
-        // Ignore chords like Ctrl+Z so terminal shortcuts stay usable.
-        if key
-            .modifiers
-            .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT)
-        {
-            return false;
-        }
-        self.holds[button as usize].update(key.kind, now);
-        true
+    /// Feeds a key event that the bindings resolved to `button`.
+    pub fn handle(&mut self, button: GbaKey, kind: KeyEventKind, now: Instant) {
+        self.holds[button as usize].update(kind, now);
     }
 
     /// Whether `button` is held at `now`.
@@ -192,70 +155,37 @@ impl Keypad {
 mod tests {
     use super::*;
 
-    fn press(code: KeyCode) -> KeyEvent {
-        KeyEvent::new(code, KeyModifiers::NONE)
-    }
-
-    fn release(code: KeyCode) -> KeyEvent {
-        KeyEvent::new_with_kind(code, KeyModifiers::NONE, KeyEventKind::Release)
-    }
-
-    #[test]
-    fn mapping_covers_all_ten_buttons() {
-        let codes = [
-            KeyCode::Char('a'),
-            KeyCode::Char('b'),
-            KeyCode::Backspace,
-            KeyCode::Enter,
-            KeyCode::Right,
-            KeyCode::Left,
-            KeyCode::Up,
-            KeyCode::Down,
-            KeyCode::Char('r'),
-            KeyCode::Char('l'),
-        ];
-        for (code, expected) in codes.into_iter().zip(GbaKey::ALL) {
-            assert_eq!(map_key(code), Some(expected));
-        }
-        assert_eq!(map_key(KeyCode::Char('q')), None);
-        assert_eq!(
-            map_key(KeyCode::Char('Z')),
-            Some(GbaKey::A),
-            "shifted letters still map"
-        );
-    }
-
     #[test]
     fn exact_tracking_with_release_events() {
         let t0 = Instant::now();
         let mut pad = Keypad::new(true);
         assert_eq!(pad.keyinput(t0), 0x03FF);
-        assert!(pad.handle(press(KeyCode::Char('a')), t0));
-        assert!(pad.handle(press(KeyCode::Up), t0));
+        pad.handle(GbaKey::A, KeyEventKind::Press, t0);
+        pad.handle(GbaKey::Up, KeyEventKind::Press, t0);
         assert_eq!(
             pad.keyinput(t0),
             0x03FF & !(GbaKey::A.mask() | GbaKey::Up.mask())
         );
         // Still held long after: no timeout in this mode.
-        assert!(pad.is_pressed(GbaKey::A, t0 + Duration::from_secs(10)));
-        pad.handle(release(KeyCode::Char('a')), t0 + Duration::from_secs(10));
-        assert_eq!(
-            pad.keyinput(t0 + Duration::from_secs(10)),
-            0x03FF & !GbaKey::Up.mask()
-        );
+        let later = t0 + Duration::from_secs(10);
+        assert!(pad.is_pressed(GbaKey::A, later));
+        pad.handle(GbaKey::A, KeyEventKind::Release, later);
+        assert_eq!(pad.keyinput(later), 0x03FF & !GbaKey::Up.mask());
     }
 
     #[test]
     fn timeout_release_without_release_events() {
         let t0 = Instant::now();
         let mut pad = Keypad::new(false);
-        pad.handle(press(KeyCode::Enter), t0);
+        pad.handle(GbaKey::Start, KeyEventKind::Press, t0);
         assert!(pad.is_pressed(GbaKey::Start, t0 + HOLD_TIMEOUT / 2));
         assert!(!pad.is_pressed(GbaKey::Start, t0 + HOLD_TIMEOUT));
         // Auto-repeat refreshes the hold.
-        let repeat =
-            KeyEvent::new_with_kind(KeyCode::Enter, KeyModifiers::NONE, KeyEventKind::Repeat);
-        pad.handle(repeat, t0 + Duration::from_millis(499));
+        pad.handle(
+            GbaKey::Start,
+            KeyEventKind::Repeat,
+            t0 + Duration::from_millis(499),
+        );
         assert!(pad.is_pressed(
             GbaKey::Start,
             t0 + HOLD_TIMEOUT + Duration::from_millis(100)
@@ -263,18 +193,13 @@ mod tests {
     }
 
     #[test]
-    fn modifier_chords_are_ignored() {
+    fn hold_ignores_release_timing_when_exact() {
         let t0 = Instant::now();
-        let mut pad = Keypad::new(true);
-        assert!(!pad.handle(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::CONTROL), t0));
-        assert!(!pad.handle(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::ALT), t0));
-        assert_eq!(pad.keyinput(t0), 0x03FF);
-        assert!(pad.handle(KeyEvent::new(KeyCode::Char('A'), KeyModifiers::SHIFT), t0));
-    }
-
-    #[test]
-    fn unmapped_keys_are_reported_unhandled() {
-        let mut pad = Keypad::new(true);
-        assert!(!pad.handle(press(KeyCode::Char('q')), Instant::now()));
+        let mut hold = Hold::new(true);
+        assert!(!hold.is_held(t0));
+        hold.update(KeyEventKind::Press, t0);
+        assert!(hold.is_held(t0 + Duration::from_secs(60)));
+        hold.update(KeyEventKind::Release, t0);
+        assert!(!hold.is_held(t0));
     }
 }
