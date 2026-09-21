@@ -32,7 +32,7 @@ the status bar shows the current scale and the size needed for 1:1.
   <img src="https://raw.githubusercontent.com/Huseynteymurzade28/tuiba/master/docs/halfblock.png" alt="The half-block renderer showing a game at 1:1 in a 240-column terminal" width="800">
   <br>
   <sub>The same game in a terminal without a graphics protocol: the half-block renderer at 1:1 in 240×80 cells.<br>
-  Game: <a href="https://www.tolberts.net/anguna/">Anguna: Warriors of Virtue</a> © 2008 Nathan Tolbert and Chris Hildenbrand, released under the MIT License (code and assets).</sub>
+  Game: <a href="https://gauauu.itch.io/anguna">Anguna: Warriors of Virtue</a> © 2008 Nathan Tolbert and Chris Hildenbrand, released under the MIT License (code and assets).</sub>
 </p>
 
 ## Features
