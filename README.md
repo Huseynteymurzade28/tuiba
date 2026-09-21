@@ -64,7 +64,7 @@ No ROMs are needed to build or test the project.
 | Any platform with Rust        | `cargo install tuiba`                                          |
 | From source                   | `git clone https://github.com/Huseynteymurzade28/tuiba && cd tuiba && cargo install --path tui` |
 
-Stable Rust 1.85 or newer; no system dependencies. Any terminal with
+Stable Rust 1.88 or newer; no system dependencies. Any terminal with
 24-bit colour and a font that has the block characters (`▀ ▄ █`) works.
 For the pixel renderer use Kitty, Ghostty, WezTerm or Konsole.
 
