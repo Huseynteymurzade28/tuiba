@@ -86,8 +86,14 @@ tuiba path/to/rom.gba  # play a cartridge directly, skipping the library
 tuiba --no-graphics    # force the half-block renderer
 ```
 
-Saves are written next to the ROM as `<name>.sav` when you leave a game.
-The save type (SRAM, flash, EEPROM) is detected from the ROM.
+Saves live next to the ROM as `<name>.sav`. The file is written within a
+second of the game saving and again when you leave, so a crash or a closed
+terminal costs at most a moment of progress. The save type (SRAM, flash,
+EEPROM) is detected from the ROM.
+
+If tuiba ever crashes, the message and a backtrace are appended to
+`~/.local/state/tuiba/crash.log` (or `$XDG_STATE_HOME/tuiba/crash.log`);
+please attach that to a bug report.
 
 ### Keys
 

@@ -1,6 +1,7 @@
 //! Terminal frontend for the `tuiba` Game Boy Advance emulator.
 
 mod cli;
+mod crashlog;
 mod graphics;
 mod headless;
 mod input;
@@ -12,7 +13,8 @@ mod theme;
 mod wordmark;
 
 use std::io::stdout;
-use std::path::Path;
+use std::panic::AssertUnwindSafe;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::time::{Duration, Instant};
 
@@ -21,11 +23,15 @@ use crossterm::event::{
     PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
 };
 use crossterm::execute;
-use ratatui::Frame;
+use crossterm::terminal::{
+    EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
+};
+use ratatui::backend::CrosstermBackend;
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Paragraph};
+use ratatui::{Frame, Terminal};
 use tuiba_core::{Cartridge, Gba};
 
 use crate::graphics::KittyGraphics;
@@ -48,6 +54,52 @@ enum AppError {
     /// Terminal I/O failed.
     #[error("terminal error: {0}")]
     Io(#[from] std::io::Error),
+
+    /// The game loop panicked; the message is what the panic said.
+    #[error("crashed: {0}")]
+    Crash(String),
+}
+
+/// A terminal in raw mode on the alternate screen, restored on drop so
+/// that every exit path (including an unwinding panic) hands the shell
+/// back a usable terminal.
+struct TerminalGuard {
+    terminal: ratatui::DefaultTerminal,
+    release_events: bool,
+}
+
+impl TerminalGuard {
+    fn enter() -> Result<Self, AppError> {
+        enable_raw_mode()?;
+        execute!(stdout(), EnterAlternateScreen)?;
+        let terminal = Terminal::new(CrosstermBackend::new(stdout()))?;
+        // Ask for key release events; terminals that lack the protocol
+        // simply ignore the request and we fall back to timeout-based
+        // releases.
+        let release_events = crossterm::terminal::supports_keyboard_enhancement().unwrap_or(false);
+        if release_events {
+            let _ = execute!(
+                stdout(),
+                PushKeyboardEnhancementFlags(KeyboardEnhancementFlags::REPORT_EVENT_TYPES)
+            );
+        }
+        Ok(Self {
+            terminal,
+            release_events,
+        })
+    }
+}
+
+impl Drop for TerminalGuard {
+    fn drop(&mut self) {
+        if self.release_events {
+            let _ = execute!(stdout(), PopKeyboardEnhancementFlags);
+        }
+        // Raw mode first: it has more side effects than the alternate
+        // screen, so it matters more that it gets undone.
+        let _ = disable_raw_mode();
+        let _ = execute!(stdout(), LeaveAlternateScreen);
+    }
 }
 
 /// Target frame period: the GBA runs at 16.78 MHz / 280 896 cycles per
@@ -68,7 +120,19 @@ struct App {
     fps_window_start: Instant,
     /// Last measured emulation rate.
     fps: f64,
+    /// The `.sav` next to the ROM.
+    save_path: PathBuf,
+    /// Backup memory as of the last save write (or load), so a change can
+    /// be flushed without a dirty flag from the core.
+    saved: Vec<u8>,
+    /// Why the last save write failed, for the status bar.
+    save_error: Option<String>,
 }
+
+/// How often the save file is compared against backup memory and, if a
+/// game has written to it, flushed to disk. A crash or a closed terminal
+/// then costs at most this much progress.
+const AUTOSAVE_INTERVAL: Duration = Duration::from_secs(1);
 
 impl App {
     /// Emulates one frame with the current keypad state.
@@ -81,6 +145,29 @@ impl App {
             self.fps = f64::from(self.fps_frames) / elapsed.as_secs_f64();
             self.fps_frames = 0;
             self.fps_window_start = now;
+        }
+    }
+
+    /// Writes the save file if backup memory changed since the last
+    /// write. Goes through a temporary file so a crash mid-write cannot
+    /// leave a truncated save behind.
+    fn flush_save(&mut self) {
+        let data = self.gba.save_data();
+        if data == self.saved.as_slice() {
+            return;
+        }
+        let tmp = self.save_path.with_extension("sav.tmp");
+        let written =
+            std::fs::write(&tmp, data).and_then(|()| std::fs::rename(&tmp, &self.save_path));
+        match written {
+            Ok(()) => {
+                self.saved = data.to_vec();
+                self.save_error = None;
+            }
+            Err(err) => {
+                let _ = std::fs::remove_file(&tmp);
+                self.save_error = Some(err.to_string());
+            }
         }
     }
 
@@ -146,6 +233,11 @@ impl App {
         } else {
             "  keys: timeout"
         };
+        let save = self
+            .save_error
+            .as_ref()
+            .map(|err| format!("  [save failed: {err}]"))
+            .unwrap_or_default();
         let status = Line::from(vec![
             Span::styled(
                 format!(" {}  ", self.title),
@@ -153,7 +245,7 @@ impl App {
             ),
             Span::styled(
                 format!(
-                    "{:.0} fps  {renderer}{size_hint}{keys}{swi_hint}{held}",
+                    "{:.0} fps  {renderer}{size_hint}{keys}{swi_hint}{held}{save}",
                     self.fps
                 ),
                 Style::default().fg(theme::DIM).bg(theme::SURFACE),
@@ -206,27 +298,15 @@ fn run() -> Result<(), AppError> {
         None => None,
     };
 
-    let mut terminal = ratatui::init();
-    // Ask for key release events; terminals that lack the protocol simply
-    // ignore the request and we fall back to timeout-based releases.
-    let release_events = crossterm::terminal::supports_keyboard_enhancement().unwrap_or(false);
-    if release_events {
-        let _ = execute!(
-            stdout(),
-            PushKeyboardEnhancementFlags(KeyboardEnhancementFlags::REPORT_EVENT_TYPES)
-        );
+    let mut guard = TerminalGuard::enter()?;
+    let TerminalGuard {
+        terminal,
+        release_events,
+    } = &mut guard;
+    match direct_rom {
+        Some(rom) => play(terminal, &rom, *release_events, args.graphics).map(|_| ()),
+        None => library_loop(terminal, library, *release_events, args.graphics),
     }
-
-    let result = match direct_rom {
-        Some(rom) => play(&mut terminal, &rom, release_events, args.graphics).map(|_| ()),
-        None => library_loop(&mut terminal, library, release_events, args.graphics),
-    };
-
-    if release_events {
-        let _ = execute!(stdout(), PopKeyboardEnhancementFlags);
-    }
-    ratatui::restore();
-    result
 }
 
 /// Library screen ⇄ game, until the user quits.
@@ -250,8 +330,12 @@ fn library_loop(
                 match play(terminal, &rom, release_events, graphics) {
                     Ok(GameExit::Back) => {}
                     Ok(GameExit::Quit) => return Ok(()),
-                    // A broken ROM should not take the library down with it.
+                    // A broken ROM, or a bug it trips over, should not
+                    // take the library down with it.
                     Err(AppError::Core(err)) => picker.notify_error(err.to_string()),
+                    Err(err @ AppError::Crash(_)) => {
+                        picker.notify_error(format!("{err} (see {})", crash_log_hint()));
+                    }
                     Err(err) => return Err(err),
                 }
                 // No explicit clear: the next draw diffs against the game's
@@ -262,6 +346,14 @@ fn library_loop(
             }
         }
     }
+}
+
+/// Where to point the user for details of a crash.
+fn crash_log_hint() -> String {
+    crashlog::path().map_or_else(
+        || "crash log unavailable".to_string(),
+        |p| library::compact_home(&p),
+    )
 }
 
 /// Loads a cartridge and its save file.
@@ -275,6 +367,10 @@ fn load_gba(rom: &Path) -> Result<Gba, AppError> {
 }
 
 /// Runs one cartridge until the user leaves it, then writes its save.
+///
+/// A panic inside the game loop is caught here: the save is flushed, the
+/// terminal stays in raw mode for the library, and the message is
+/// reported as [`AppError::Crash`] (the panic hook has already logged it).
 fn play(
     terminal: &mut ratatui::DefaultTerminal,
     rom: &Path,
@@ -291,6 +387,9 @@ fn play(
     } else {
         header_title
     };
+    // Backup memory as loaded: a `.sav` is only ever written once the game
+    // changes it, so cartridges that never save do not grow one.
+    let saved = gba.save_data().to_vec();
     let mut app = App {
         title,
         gba,
@@ -301,15 +400,24 @@ fn play(
         fps_frames: 0,
         fps_window_start: Instant::now(),
         fps: 0.0,
+        save_path: rom.with_extension("sav"),
+        saved,
+        save_error: None,
     };
-    let result = event_loop(terminal, &mut app);
+    let result = std::panic::catch_unwind(AssertUnwindSafe(|| event_loop(terminal, &mut app)));
 
-    // Persist the save even if the loop ended with an error.
-    let save_path = rom.with_extension("sav");
-    if let Err(err) = std::fs::write(&save_path, app.gba.save_data()) {
-        eprintln!("warning: could not write {}: {err}", save_path.display());
+    // Persist the save however the loop ended.
+    app.flush_save();
+    if let Some(err) = &app.save_error {
+        crashlog::record(
+            "save",
+            &format!("could not write {}: {err}", app.save_path.display()),
+        );
     }
-    result
+    match result {
+        Ok(result) => result,
+        Err(payload) => Err(AppError::Crash(crashlog::panic_message(&payload))),
+    }
 }
 
 /// Emulate → draw → handle input, paced to the GBA's frame rate.
@@ -322,9 +430,14 @@ fn event_loop(
     app: &mut App,
 ) -> Result<GameExit, AppError> {
     let mut next_frame = Instant::now();
+    let mut next_autosave = next_frame + AUTOSAVE_INTERVAL;
     loop {
         let now = Instant::now();
         app.emulate_frame(now);
+        if now >= next_autosave {
+            app.flush_save();
+            next_autosave = now + AUTOSAVE_INTERVAL;
+        }
         terminal.draw(|frame| app.draw(frame))?;
         if let Some(graphics) = &mut app.graphics {
             graphics.present(app.gba.framebuffer(), app.screen_area)?;
@@ -360,14 +473,29 @@ fn event_loop(
 }
 
 fn main() -> ExitCode {
-    match run() {
+    crashlog::install_panic_hook();
+    // A panic anywhere unwinds through the terminal guard first, so by the
+    // time we report it the shell has its screen back.
+    let result = std::panic::catch_unwind(run)
+        .unwrap_or_else(|payload| Err(AppError::Crash(crashlog::panic_message(&payload))));
+    match result {
         Ok(()) => ExitCode::SUCCESS,
         Err(AppError::Args(cli::ArgError::Help)) => {
             println!("{}", cli::USAGE);
             ExitCode::SUCCESS
         }
-        Err(err) => {
+        Err(AppError::Args(err)) => {
             eprintln!("error: {err}");
+            ExitCode::FAILURE
+        }
+        Err(err) => {
+            // The terminal guard has been dropped by now, so this lands on
+            // the shell's screen rather than the alternate one.
+            if !matches!(err, AppError::Crash(_)) {
+                crashlog::record("error", &err.to_string());
+            }
+            eprintln!("error: {err}");
+            eprintln!("details in {}", crash_log_hint());
             ExitCode::FAILURE
         }
     }
