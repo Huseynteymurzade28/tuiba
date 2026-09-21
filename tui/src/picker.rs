@@ -347,10 +347,7 @@ impl Picker {
             .map(|(i, rom)| {
                 let selected = i == self.rom_index;
                 let name = truncate(&rom.name(), name_width);
-                let code = rom
-                    .header
-                    .as_ref()
-                    .map_or_else(|| "----".to_string(), |h| pad4(&h.game_code));
+                let code = rom.game_code().map_or_else(|| "----".to_string(), pad4);
                 let save = if rom.has_save { "●" } else { " " };
                 let (name_style, meta_style, save_style) = if selected && focused {
                     (theme::selected(), theme::selected(), theme::selected())
@@ -387,8 +384,8 @@ impl Picker {
         ));
         let mut facts = Vec::new();
         if let Some(h) = &rom.header {
-            if !h.game_code.trim().is_empty() {
-                facts.push(h.game_code.trim().to_string());
+            if let Some(game_code) = rom.game_code() {
+                facts.push(game_code.to_string());
             }
             facts.push(format!("v1.{}", h.version));
         }

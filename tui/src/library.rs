@@ -189,9 +189,25 @@ impl Rom {
     #[must_use]
     pub fn name(&self) -> String {
         match &self.header {
-            Some(h) if !h.title.trim().is_empty() => h.title.clone(),
+            Some(h)
+                if !matches!(
+                    h.title.trim(),
+                    "" | "ROM TITLE" | "GAME TITLE" | "GBA" | "AGB"
+                ) =>
+            {
+                h.title.clone()
+            }
             _ => self.file_name(),
         }
+    }
+
+    /// The game code, unless the header leaves it blank or uses 0000.
+    #[must_use]
+    pub fn game_code(&self) -> Option<&str> {
+        self.header
+            .as_ref()
+            .map(|header| header.game_code.trim())
+            .filter(|code| !code.is_empty() && *code != "0000")
     }
 
     /// The file name without its extension.
@@ -289,6 +305,28 @@ mod tests {
         assert_eq!(roms[1].save_type(), Some(SaveType::Eeprom));
 
         fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn placeholder_header_fields_are_treated_as_absent() {
+        let rom = Rom {
+            path: PathBuf::from("homebrew.gba"),
+            folder: 0,
+            header: Some(Header {
+                title: "ROM TITLE".to_string(),
+                game_code: "0000".to_string(),
+                maker_code: String::new(),
+                version: 0,
+                checksum: 0,
+                valid: false,
+            }),
+            size: 0,
+            has_save: false,
+            save_type: None,
+        };
+
+        assert_eq!(rom.name(), "homebrew");
+        assert_eq!(rom.game_code(), None);
     }
 
     #[test]
