@@ -1,9 +1,10 @@
-//! The ROM library: a list of folders remembered between runs, and the
-//! cartridges found in them.
+//! The ROM library: a list of folders remembered between runs, the
+//! cartridges found in them, and which ones were played recently.
 //!
 //! The folder list lives in `$XDG_CONFIG_HOME/tuiba/library` (or
 //! `~/.config/tuiba/library`), one path per line, so it is trivial to
-//! edit by hand.
+//! edit by hand. `recent` in the same directory holds the last played
+//! cartridges, newest first, in the same format.
 
 use std::fs;
 use std::io;
@@ -121,34 +122,119 @@ impl Library {
         }
     }
 
-    /// Scans every folder for `.gba` files, sorted by title.
+    /// Scans every folder (and subfolders up to [`SCAN_DEPTH`] deep) for
+    /// `.gba` files, sorted by title.
     #[must_use]
     pub fn scan(&self) -> Vec<Rom> {
-        let mut roms: Vec<Rom> = self
-            .folders
-            .iter()
-            .enumerate()
-            .flat_map(|(folder, dir)| scan_folder(dir, folder))
-            .collect();
+        let mut roms = Vec::new();
+        for (folder, dir) in self.folders.iter().enumerate() {
+            scan_folder(dir, folder, SCAN_DEPTH, &mut roms);
+        }
         roms.sort_by_key(Rom::sort_key);
         roms
     }
 }
 
-/// Every `.gba` file directly inside `dir`.
-fn scan_folder(dir: &Path, folder: usize) -> Vec<Rom> {
+/// How many levels of subfolders a library folder is searched. Enough
+/// for `GBA/Homebrew/Jam 2024/`, shallow enough that pointing tuiba at
+/// `~` does not walk the whole disk.
+pub const SCAN_DEPTH: usize = 3;
+
+/// Collects every `.gba` file in `dir`, descending `depth` more levels.
+/// Hidden directories and unreadable ones are skipped.
+fn scan_folder(dir: &Path, folder: usize, depth: usize, out: &mut Vec<Rom>) {
     let Ok(entries) = fs::read_dir(dir) else {
-        return Vec::new();
+        return;
     };
-    entries
-        .filter_map(Result::ok)
-        .map(|e| e.path())
-        .filter(|p| {
-            p.extension()
-                .is_some_and(|ext| ext.eq_ignore_ascii_case("gba"))
-        })
-        .filter_map(|path| Rom::inspect(path, folder))
-        .collect()
+    for path in entries.filter_map(Result::ok).map(|e| e.path()) {
+        if path.is_dir() {
+            let hidden = path
+                .file_name()
+                .is_some_and(|n| n.to_string_lossy().starts_with('.'));
+            if depth > 0 && !hidden {
+                scan_folder(&path, folder, depth - 1, out);
+            }
+        } else if path
+            .extension()
+            .is_some_and(|ext| ext.eq_ignore_ascii_case("gba"))
+            && let Some(rom) = Rom::inspect(path, folder)
+        {
+            out.push(rom);
+        }
+    }
+}
+
+/// The cartridges played most recently, newest first.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct Recent {
+    paths: Vec<PathBuf>,
+}
+
+/// How many entries the recent list keeps.
+const RECENT_LIMIT: usize = 50;
+
+impl Recent {
+    /// Where the list is stored.
+    #[must_use]
+    pub fn file() -> Option<PathBuf> {
+        config_dir().map(|dir| dir.join("recent"))
+    }
+
+    /// Reads the list; a missing file is an empty history.
+    #[must_use]
+    pub fn load() -> Self {
+        Self::file()
+            .and_then(|file| fs::read_to_string(file).ok())
+            .map(|text| Self::parse(&text))
+            .unwrap_or_default()
+    }
+
+    fn parse(text: &str) -> Self {
+        Self {
+            paths: text
+                .lines()
+                .map(str::trim)
+                .filter(|line| !line.is_empty() && !line.starts_with('#'))
+                .map(PathBuf::from)
+                .collect(),
+        }
+    }
+
+    /// Moves `path` to the front.
+    pub fn push(&mut self, path: &Path) {
+        self.paths.retain(|p| p != path);
+        self.paths.insert(0, path.to_path_buf());
+        self.paths.truncate(RECENT_LIMIT);
+    }
+
+    /// Writes the list back.
+    pub fn save(&self) -> io::Result<()> {
+        let Some(file) = Self::file() else {
+            return Err(io::Error::other("no config directory (HOME unset)"));
+        };
+        if let Some(dir) = file.parent() {
+            fs::create_dir_all(dir)?;
+        }
+        let mut text = String::new();
+        for p in &self.paths {
+            text.push_str(&p.display().to_string());
+            text.push('\n');
+        }
+        fs::write(file, text)
+    }
+
+    /// How recently `path` was played: 0 for the last game, `None` if
+    /// never.
+    #[must_use]
+    pub fn rank(&self, path: &Path) -> Option<usize> {
+        self.paths.iter().position(|p| p == path)
+    }
+
+    /// The most recently played path, if any.
+    #[must_use]
+    pub fn last(&self) -> Option<&Path> {
+        self.paths.first().map(PathBuf::as_path)
+    }
 }
 
 /// A cartridge file and what its header says.
@@ -293,12 +379,24 @@ mod tests {
         fs::write(dir.join("b.sav"), [0; 8]).unwrap();
         fs::write(dir.join("a.GBA"), [0; 0x10]).unwrap(); // too short for a header
         fs::write(dir.join("notes.txt"), "x").unwrap();
+        // Nested folders are searched, hidden ones and too-deep ones not.
+        fs::create_dir_all(dir.join("sub/deeper")).unwrap();
+        fs::write(dir.join("sub/deeper/c.gba"), [0; 0x10]).unwrap();
+        fs::create_dir_all(dir.join(".hidden")).unwrap();
+        fs::write(dir.join(".hidden/d.gba"), [0; 0x10]).unwrap();
+        fs::create_dir_all(dir.join("1/2/3/4")).unwrap();
+        fs::write(dir.join("1/2/3/4/e.gba"), [0; 0x10]).unwrap();
 
         let lib = Library {
             folders: vec![dir.clone()],
         };
         let mut roms = lib.scan();
-        assert_eq!(roms.len(), 2);
+        assert_eq!(
+            roms.iter().map(Rom::name).collect::<Vec<_>>(),
+            ["a", "c", "ZELDA"],
+            "a and b at the top, c two levels down; hidden and 4-deep skipped"
+        );
+        roms.remove(1);
         assert_eq!(
             roms[0].name(),
             "a",
@@ -350,5 +448,21 @@ mod tests {
         assert_eq!(expand_home("/abs"), PathBuf::from("/abs"));
         assert_eq!(compact_home(&home.join("y")), "~/y");
         assert_eq!(compact_home(Path::new("/etc")), "/etc");
+    }
+
+    #[test]
+    fn recent_ranks_newest_first_and_dedups() {
+        let mut recent = Recent::parse("/x/a.gba\n/x/b.gba\n");
+        assert_eq!(recent.rank(Path::new("/x/b.gba")), Some(1));
+        assert_eq!(recent.rank(Path::new("/x/z.gba")), None);
+        assert_eq!(recent.last(), Some(Path::new("/x/a.gba")));
+        recent.push(Path::new("/x/b.gba"));
+        assert_eq!(recent.rank(Path::new("/x/b.gba")), Some(0));
+        assert_eq!(recent.rank(Path::new("/x/a.gba")), Some(1));
+        assert_eq!(recent.paths.len(), 2, "moved, not duplicated");
+        for i in 0..100 {
+            recent.push(Path::new(&format!("/x/{i}.gba")));
+        }
+        assert_eq!(recent.paths.len(), RECENT_LIMIT);
     }
 }

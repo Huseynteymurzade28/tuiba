@@ -446,6 +446,7 @@ fn library_loop(
             None => {}
             Some(Outcome::Quit) => return Ok(()),
             Some(Outcome::Play(rom)) => {
+                picker.mark_played(&rom);
                 match play(terminal, &rom, release_events, graphics, bindings.clone()) {
                     Ok(GameExit::Back) => {}
                     Ok(GameExit::Quit) => return Ok(()),
