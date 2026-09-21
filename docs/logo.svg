@@ -1,131 +1,61 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="358" height="145" viewBox="0 0 358 145" role="img" aria-label="tuiba — Game Boy Advance in your terminal">
-  <rect width="358" height="145" rx="14" fill="#12101C"/>
-  <g shape-rendering="crispEdges">
-    <rect x="44" y="26" width="8" height="8" fill="#D2C8FF"/>
-    <rect x="53" y="26" width="8" height="8" fill="#D2C8FF"/>
-    <rect x="62" y="26" width="8" height="8" fill="#D2C8FF"/>
-    <rect x="71" y="26" width="8" height="8" fill="#D2C8FF"/>
-    <rect x="80" y="26" width="8" height="8" fill="#D2C8FF"/>
-    <rect x="89" y="26" width="8" height="8" fill="#D2C8FF"/>
-    <rect x="44" y="35" width="8" height="8" fill="#C4B6FF"/>
-    <rect x="53" y="35" width="8" height="8" fill="#C4B6FF"/>
-    <rect x="62" y="35" width="8" height="8" fill="#C4B6FF"/>
-    <rect x="71" y="35" width="8" height="8" fill="#C4B6FF"/>
-    <rect x="80" y="35" width="8" height="8" fill="#C4B6FF"/>
-    <rect x="89" y="35" width="8" height="8" fill="#C4B6FF"/>
-    <rect x="62" y="44" width="8" height="8" fill="#B8AAFF"/>
-    <rect x="71" y="44" width="8" height="8" fill="#B8AAFF"/>
-    <rect x="62" y="53" width="8" height="8" fill="#A896FF"/>
-    <rect x="71" y="53" width="8" height="8" fill="#A896FF"/>
-    <rect x="62" y="62" width="8" height="8" fill="#A896FF"/>
-    <rect x="71" y="62" width="8" height="8" fill="#A896FF"/>
-    <rect x="62" y="71" width="8" height="8" fill="#9C88F5"/>
-    <rect x="71" y="71" width="8" height="8" fill="#9C88F5"/>
-    <rect x="62" y="80" width="8" height="8" fill="#9C88F5"/>
-    <rect x="71" y="80" width="8" height="8" fill="#9C88F5"/>
-    <rect x="107" y="26" width="8" height="8" fill="#D2C8FF"/>
-    <rect x="116" y="26" width="8" height="8" fill="#D2C8FF"/>
-    <rect x="143" y="26" width="8" height="8" fill="#D2C8FF"/>
-    <rect x="152" y="26" width="8" height="8" fill="#D2C8FF"/>
-    <rect x="107" y="35" width="8" height="8" fill="#C4B6FF"/>
-    <rect x="116" y="35" width="8" height="8" fill="#C4B6FF"/>
-    <rect x="143" y="35" width="8" height="8" fill="#C4B6FF"/>
-    <rect x="152" y="35" width="8" height="8" fill="#C4B6FF"/>
-    <rect x="107" y="44" width="8" height="8" fill="#B8AAFF"/>
-    <rect x="116" y="44" width="8" height="8" fill="#B8AAFF"/>
-    <rect x="143" y="44" width="8" height="8" fill="#B8AAFF"/>
-    <rect x="152" y="44" width="8" height="8" fill="#B8AAFF"/>
-    <rect x="107" y="53" width="8" height="8" fill="#A896FF"/>
-    <rect x="116" y="53" width="8" height="8" fill="#A896FF"/>
-    <rect x="143" y="53" width="8" height="8" fill="#A896FF"/>
-    <rect x="152" y="53" width="8" height="8" fill="#A896FF"/>
-    <rect x="107" y="62" width="8" height="8" fill="#A896FF"/>
-    <rect x="116" y="62" width="8" height="8" fill="#A896FF"/>
-    <rect x="143" y="62" width="8" height="8" fill="#A896FF"/>
-    <rect x="152" y="62" width="8" height="8" fill="#A896FF"/>
-    <rect x="107" y="71" width="8" height="8" fill="#9C88F5"/>
-    <rect x="116" y="71" width="8" height="8" fill="#9C88F5"/>
-    <rect x="143" y="71" width="8" height="8" fill="#9C88F5"/>
-    <rect x="152" y="71" width="8" height="8" fill="#9C88F5"/>
-    <rect x="116" y="80" width="8" height="8" fill="#9C88F5"/>
-    <rect x="125" y="80" width="8" height="8" fill="#9C88F5"/>
-    <rect x="134" y="80" width="8" height="8" fill="#9C88F5"/>
-    <rect x="143" y="80" width="8" height="8" fill="#9C88F5"/>
-    <rect x="170" y="26" width="8" height="8" fill="#D2C8FF"/>
-    <rect x="179" y="26" width="8" height="8" fill="#D2C8FF"/>
-    <rect x="170" y="35" width="8" height="8" fill="#C4B6FF"/>
-    <rect x="179" y="35" width="8" height="8" fill="#C4B6FF"/>
-    <rect x="170" y="44" width="8" height="8" fill="#B8AAFF"/>
-    <rect x="179" y="44" width="8" height="8" fill="#B8AAFF"/>
-    <rect x="170" y="53" width="8" height="8" fill="#A896FF"/>
-    <rect x="179" y="53" width="8" height="8" fill="#A896FF"/>
-    <rect x="170" y="62" width="8" height="8" fill="#A896FF"/>
-    <rect x="179" y="62" width="8" height="8" fill="#A896FF"/>
-    <rect x="170" y="71" width="8" height="8" fill="#9C88F5"/>
-    <rect x="179" y="71" width="8" height="8" fill="#9C88F5"/>
-    <rect x="170" y="80" width="8" height="8" fill="#9C88F5"/>
-    <rect x="179" y="80" width="8" height="8" fill="#9C88F5"/>
-    <rect x="197" y="26" width="8" height="8" fill="#D2C8FF"/>
-    <rect x="206" y="26" width="8" height="8" fill="#D2C8FF"/>
-    <rect x="215" y="26" width="8" height="8" fill="#D2C8FF"/>
-    <rect x="224" y="26" width="8" height="8" fill="#D2C8FF"/>
-    <rect x="233" y="26" width="8" height="8" fill="#D2C8FF"/>
-    <rect x="197" y="35" width="8" height="8" fill="#C4B6FF"/>
-    <rect x="206" y="35" width="8" height="8" fill="#C4B6FF"/>
-    <rect x="233" y="35" width="8" height="8" fill="#C4B6FF"/>
-    <rect x="242" y="35" width="8" height="8" fill="#C4B6FF"/>
-    <rect x="197" y="44" width="8" height="8" fill="#B8AAFF"/>
-    <rect x="206" y="44" width="8" height="8" fill="#B8AAFF"/>
-    <rect x="233" y="44" width="8" height="8" fill="#B8AAFF"/>
-    <rect x="242" y="44" width="8" height="8" fill="#B8AAFF"/>
-    <rect x="197" y="53" width="8" height="8" fill="#A896FF"/>
-    <rect x="206" y="53" width="8" height="8" fill="#A896FF"/>
-    <rect x="215" y="53" width="8" height="8" fill="#A896FF"/>
-    <rect x="224" y="53" width="8" height="8" fill="#A896FF"/>
-    <rect x="233" y="53" width="8" height="8" fill="#A896FF"/>
-    <rect x="197" y="62" width="8" height="8" fill="#A896FF"/>
-    <rect x="206" y="62" width="8" height="8" fill="#A896FF"/>
-    <rect x="233" y="62" width="8" height="8" fill="#A896FF"/>
-    <rect x="242" y="62" width="8" height="8" fill="#A896FF"/>
-    <rect x="197" y="71" width="8" height="8" fill="#9C88F5"/>
-    <rect x="206" y="71" width="8" height="8" fill="#9C88F5"/>
-    <rect x="233" y="71" width="8" height="8" fill="#9C88F5"/>
-    <rect x="242" y="71" width="8" height="8" fill="#9C88F5"/>
-    <rect x="197" y="80" width="8" height="8" fill="#9C88F5"/>
-    <rect x="206" y="80" width="8" height="8" fill="#9C88F5"/>
-    <rect x="215" y="80" width="8" height="8" fill="#9C88F5"/>
-    <rect x="224" y="80" width="8" height="8" fill="#9C88F5"/>
-    <rect x="233" y="80" width="8" height="8" fill="#9C88F5"/>
-    <rect x="269" y="26" width="8" height="8" fill="#D2C8FF"/>
-    <rect x="278" y="26" width="8" height="8" fill="#D2C8FF"/>
-    <rect x="287" y="26" width="8" height="8" fill="#D2C8FF"/>
-    <rect x="296" y="26" width="8" height="8" fill="#D2C8FF"/>
-    <rect x="260" y="35" width="8" height="8" fill="#C4B6FF"/>
-    <rect x="269" y="35" width="8" height="8" fill="#C4B6FF"/>
-    <rect x="296" y="35" width="8" height="8" fill="#C4B6FF"/>
-    <rect x="305" y="35" width="8" height="8" fill="#C4B6FF"/>
-    <rect x="260" y="44" width="8" height="8" fill="#B8AAFF"/>
-    <rect x="269" y="44" width="8" height="8" fill="#B8AAFF"/>
-    <rect x="296" y="44" width="8" height="8" fill="#B8AAFF"/>
-    <rect x="305" y="44" width="8" height="8" fill="#B8AAFF"/>
-    <rect x="260" y="53" width="8" height="8" fill="#A896FF"/>
-    <rect x="269" y="53" width="8" height="8" fill="#A896FF"/>
-    <rect x="278" y="53" width="8" height="8" fill="#A896FF"/>
-    <rect x="287" y="53" width="8" height="8" fill="#A896FF"/>
-    <rect x="296" y="53" width="8" height="8" fill="#A896FF"/>
-    <rect x="305" y="53" width="8" height="8" fill="#A896FF"/>
-    <rect x="260" y="62" width="8" height="8" fill="#A896FF"/>
-    <rect x="269" y="62" width="8" height="8" fill="#A896FF"/>
-    <rect x="296" y="62" width="8" height="8" fill="#A896FF"/>
-    <rect x="305" y="62" width="8" height="8" fill="#A896FF"/>
-    <rect x="260" y="71" width="8" height="8" fill="#9C88F5"/>
-    <rect x="269" y="71" width="8" height="8" fill="#9C88F5"/>
-    <rect x="296" y="71" width="8" height="8" fill="#9C88F5"/>
-    <rect x="305" y="71" width="8" height="8" fill="#9C88F5"/>
-    <rect x="260" y="80" width="8" height="8" fill="#9C88F5"/>
-    <rect x="269" y="80" width="8" height="8" fill="#9C88F5"/>
-    <rect x="296" y="80" width="8" height="8" fill="#9C88F5"/>
-    <rect x="305" y="80" width="8" height="8" fill="#9C88F5"/>
+<svg xmlns="http://www.w3.org/2000/svg" width="408" height="170" viewBox="0 0 408 170" role="img" aria-label="tuiba — Game Boy Advance in your terminal">
+  <defs>
+    <linearGradient id="ink" gradientUnits="userSpaceOnUse" x1="0" y1="24" x2="0" y2="108">
+      <stop offset="0" stop-color="#C4B6FF"/>
+      <stop offset="1" stop-color="#8468F0"/>
+    </linearGradient>
+  </defs>
+  <g fill="url(#ink)" shape-rendering="crispEdges">
+    <rect x="24" y="24" width="72" height="12"/>
+    <rect x="108" y="24" width="24" height="12"/>
+    <rect x="156" y="24" width="24" height="12"/>
+    <rect x="192" y="24" width="24" height="12"/>
+    <rect x="228" y="24" width="60" height="12"/>
+    <rect x="324" y="24" width="48" height="12"/>
+    <rect x="24" y="36" width="72" height="12"/>
+    <rect x="108" y="36" width="24" height="12"/>
+    <rect x="156" y="36" width="24" height="12"/>
+    <rect x="192" y="36" width="24" height="12"/>
+    <rect x="228" y="36" width="24" height="12"/>
+    <rect x="276" y="36" width="24" height="12"/>
+    <rect x="312" y="36" width="24" height="12"/>
+    <rect x="360" y="36" width="24" height="12"/>
+    <rect x="48" y="48" width="24" height="12"/>
+    <rect x="108" y="48" width="24" height="12"/>
+    <rect x="156" y="48" width="24" height="12"/>
+    <rect x="192" y="48" width="24" height="12"/>
+    <rect x="228" y="48" width="24" height="12"/>
+    <rect x="276" y="48" width="24" height="12"/>
+    <rect x="312" y="48" width="24" height="12"/>
+    <rect x="360" y="48" width="24" height="12"/>
+    <rect x="48" y="60" width="24" height="12"/>
+    <rect x="108" y="60" width="24" height="12"/>
+    <rect x="156" y="60" width="24" height="12"/>
+    <rect x="192" y="60" width="24" height="12"/>
+    <rect x="228" y="60" width="60" height="12"/>
+    <rect x="312" y="60" width="72" height="12"/>
+    <rect x="48" y="72" width="24" height="12"/>
+    <rect x="108" y="72" width="24" height="12"/>
+    <rect x="156" y="72" width="24" height="12"/>
+    <rect x="192" y="72" width="24" height="12"/>
+    <rect x="228" y="72" width="24" height="12"/>
+    <rect x="276" y="72" width="24" height="12"/>
+    <rect x="312" y="72" width="24" height="12"/>
+    <rect x="360" y="72" width="24" height="12"/>
+    <rect x="48" y="84" width="24" height="12"/>
+    <rect x="108" y="84" width="24" height="12"/>
+    <rect x="156" y="84" width="24" height="12"/>
+    <rect x="192" y="84" width="24" height="12"/>
+    <rect x="228" y="84" width="24" height="12"/>
+    <rect x="276" y="84" width="24" height="12"/>
+    <rect x="312" y="84" width="24" height="12"/>
+    <rect x="360" y="84" width="24" height="12"/>
+    <rect x="48" y="96" width="24" height="12"/>
+    <rect x="120" y="96" width="48" height="12"/>
+    <rect x="192" y="96" width="24" height="12"/>
+    <rect x="228" y="96" width="60" height="12"/>
+    <rect x="312" y="96" width="24" height="12"/>
+    <rect x="360" y="96" width="24" height="12"/>
   </g>
-  <text x="179.0" y="111" text-anchor="middle" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="12" letter-spacing="2" fill="#6F6888">GAME BOY ADVANCE · IN YOUR TERMINAL</text>
+  <text x="204" y="142" text-anchor="middle" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace" font-size="12" letter-spacing="2.6" fill="#8A83A3">GAME BOY ADVANCE · IN YOUR TERMINAL</text>
 </svg>
