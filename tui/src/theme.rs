@@ -13,6 +13,8 @@ pub const TEXT: Color = Color::Rgb(0xE8, 0xE4, 0xF4);
 pub const DIM: Color = Color::Rgb(0x6F, 0x68, 0x88);
 /// Accent: highlights, the logo, key hints.
 pub const ACCENT: Color = Color::Rgb(0xA8, 0x96, 0xFF);
+/// A lighter accent for the top of the wordmark.
+pub const ACCENT_LIGHT: Color = Color::Rgb(0xC4, 0xB6, 0xFF);
 /// A warmer accent for "good" states (save present, valid header).
 pub const OK: Color = Color::Rgb(0x8C, 0xE0, 0xA0);
 /// Warnings (missing header, unreadable folder).

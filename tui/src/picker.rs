@@ -8,15 +8,12 @@ use ratatui::layout::{Alignment, Constraint, Layout, Rect};
 use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{
-    Block, Borders, Clear, List, ListItem, ListState, Padding, Paragraph, Wrap,
+    Block, BorderType, Borders, Clear, List, ListItem, ListState, Padding, Paragraph, Wrap,
 };
 use tuiba_core::memory::SaveType;
 
 use crate::library::{Library, Rom, compact_home, expand_home, human_size};
-use crate::theme;
-
-/// Two-row half-block wordmark.
-const LOGO: [&str; 2] = ["▀█▀ █ █ █ █▀▄ ▄▀▄", " █  █▄█ █ █▀▄ █▀█"];
+use crate::{theme, wordmark};
 
 /// What the user decided.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -224,54 +221,73 @@ impl Picker {
         frame.render_widget(Block::default().style(theme::text()), area);
 
         let [header, body, footer] = Layout::vertical([
-            Constraint::Length(3),
+            Constraint::Length(wordmark::HEIGHT + 1),
             Constraint::Fill(1),
             Constraint::Length(1),
         ])
         .areas(area);
-        Self::draw_header(frame, header);
+        self.draw_header(frame, header);
 
         let [list_area, side] =
             Layout::horizontal([Constraint::Percentage(55), Constraint::Fill(1)]).areas(body);
         self.draw_roms(frame, list_area);
         let [detail, folders] =
-            Layout::vertical([Constraint::Length(10), Constraint::Fill(1)]).areas(side);
+            Layout::vertical([Constraint::Length(11), Constraint::Fill(1)]).areas(side);
         self.draw_detail(frame, detail);
         self.draw_folders(frame, folders);
         self.draw_footer(frame, footer);
     }
 
-    fn draw_header(frame: &mut Frame, area: Rect) {
-        let logo: Vec<Line> = LOGO
-            .iter()
-            .map(|row| Line::styled(*row, theme::accent()))
-            .collect();
-        frame.render_widget(
-            Paragraph::new(logo).block(Block::default().padding(Padding::new(2, 0, 0, 0))),
-            area,
-        );
-        let tagline = Line::from(vec![
-            Span::styled("GAME BOY ADVANCE", theme::text()),
-            Span::styled("  ·  in your terminal  ", theme::dim()),
-        ]);
-        frame.render_widget(
-            Paragraph::new(tagline)
-                .alignment(Alignment::Right)
-                .block(Block::default().padding(Padding::new(0, 0, 1, 0))),
-            area,
-        );
+    fn draw_header(&self, frame: &mut Frame, area: Rect) {
+        let [logo_area, right] = Layout::horizontal([
+            Constraint::Length(wordmark::width() + 4),
+            Constraint::Fill(1),
+        ])
+        .areas(area);
+        if logo_area.width >= wordmark::width() + 2 {
+            let logo = wordmark::lines(theme::accent().fg(theme::ACCENT_LIGHT), theme::accent());
+            frame.render_widget(
+                Paragraph::new(logo).block(Block::default().padding(Padding::new(2, 0, 0, 0))),
+                logo_area,
+            );
+        } else {
+            // Narrow terminal: plain text beats a cropped wordmark.
+            frame.render_widget(
+                Paragraph::new(Line::styled(" TUIBA", theme::accent().bold())),
+                logo_area,
+            );
+        }
+
+        let summary = match (self.roms.len(), self.library.folders.len()) {
+            (_, 0) => String::new(),
+            (0, f) => format!("no cartridges in {f} {}", plural(f, "folder")),
+            (r, f) => format!(
+                "{r} {}  ·  {f} {}",
+                plural(r, "cartridge"),
+                plural(f, "folder")
+            ),
+        };
+        let lines = vec![
+            Line::from(vec![
+                Span::styled("GAME BOY ADVANCE", theme::text()),
+                Span::styled("  ·  in your terminal  ", theme::dim()),
+            ]),
+            Line::styled(format!("{summary}  "), theme::dim()),
+        ];
+        frame.render_widget(Paragraph::new(lines).alignment(Alignment::Right), right);
     }
 
     fn pane(title: &str, focused: bool) -> Block<'static> {
-        let style = if focused {
-            theme::accent()
+        let (border, title_style) = if focused {
+            (theme::accent(), theme::accent().bold())
         } else {
-            theme::border()
+            (theme::border(), theme::dim())
         };
         Block::default()
             .borders(Borders::ALL)
-            .border_style(theme::border())
-            .title(Line::styled(format!(" {title} "), style))
+            .border_type(BorderType::Rounded)
+            .border_style(border)
+            .title(Line::styled(format!(" {title} "), title_style))
             .padding(Padding::horizontal(1))
     }
 
@@ -334,14 +350,48 @@ impl Picker {
         frame.render_stateful_widget(List::new(items), inner, &mut state);
     }
 
+    /// A label strip across the top of the detail pane, like the sticker
+    /// on a cartridge: the name, plus the game code when there is one.
+    fn draw_cartridge_label(frame: &mut Frame, area: Rect, rom: &Rom) {
+        let width = usize::from(area.width);
+        let code = rom
+            .header
+            .as_ref()
+            .map(|h| h.game_code.trim().to_string())
+            .filter(|c| !c.is_empty());
+        let mut label = vec![Span::styled(
+            format!(" {}", truncate(&rom.name(), width.saturating_sub(8))),
+            theme::selected(),
+        )];
+        if let Some(code) = code {
+            label.push(Span::styled(
+                format!("  {code} "),
+                Style::default().fg(theme::BG).bg(theme::ACCENT_LIGHT),
+            ));
+        }
+        frame.render_widget(
+            Paragraph::new(Line::from(label)).style(theme::selected()),
+            Rect { height: 1, ..area },
+        );
+    }
+
     fn draw_detail(&mut self, frame: &mut Frame, area: Rect) {
         let block = Self::pane("CARTRIDGE", false);
         let inner = block.inner(area);
         frame.render_widget(block, area);
         let Some(rom) = self.roms.get_mut(self.rom_index) else {
+            frame.render_widget(
+                Paragraph::new("Select a cartridge to see its details.").style(theme::dim()),
+                inner,
+            );
             return;
         };
         let save_type = rom.save_type();
+
+        let [label_area, rows_area] =
+            Layout::vertical([Constraint::Length(2), Constraint::Fill(1)]).areas(inner);
+        Self::draw_cartridge_label(frame, label_area, rom);
+
         let row = |label: &str, value: Span<'static>| {
             Line::from(vec![
                 Span::styled(format!("{label:<8}"), theme::dim()),
@@ -358,10 +408,13 @@ impl Picker {
         let mut lines = vec![row("File", plain(rom.file_name()))];
         match &rom.header {
             Some(h) => {
-                lines.push(row("Title", plain(h.title.clone())));
                 lines.push(row(
-                    "Code",
-                    plain(format!("{}  ·  maker {}", pad4(&h.game_code), h.maker_code)),
+                    "Maker",
+                    plain(if h.maker_code.trim().is_empty() {
+                        "unknown".to_string()
+                    } else {
+                        h.maker_code.clone()
+                    }),
                 ));
                 lines.push(row("Version", plain(format!("1.{}", h.version))));
                 lines.push(row(
@@ -406,7 +459,7 @@ impl Picker {
                 theme::dim(),
             ),
         ));
-        frame.render_widget(Paragraph::new(lines), inner);
+        frame.render_widget(Paragraph::new(lines), rows_area);
     }
 
     fn draw_folders(&self, frame: &mut Frame, area: Rect) {
@@ -512,6 +565,15 @@ impl Picker {
             Paragraph::new(line).style(Style::default().bg(theme::SURFACE)),
             area,
         );
+    }
+}
+
+/// `word` or its plural, by count.
+fn plural(n: usize, word: &str) -> String {
+    if n == 1 {
+        word.to_string()
+    } else {
+        format!("{word}s")
     }
 }
 
@@ -668,7 +730,7 @@ mod tests {
         let screen = render(&mut picker, 90, 24);
         assert!(screen.contains("▸ TETRIS"), "{screen}");
         assert!(screen.contains("ATET  ●"), "save marker: {screen}");
-        assert!(screen.contains("Title   TETRIS"), "{screen}");
+        assert!(screen.contains(" TETRIS  ATET "), "label strip: {screen}");
         assert!(screen.contains("has save ●"), "{screen}");
         assert!(screen.contains("⏎ play"), "{screen}");
 

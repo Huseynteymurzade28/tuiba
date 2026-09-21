@@ -9,6 +9,7 @@ mod picker;
 mod png;
 mod screen;
 mod theme;
+mod wordmark;
 
 use std::io::stdout;
 use std::path::Path;

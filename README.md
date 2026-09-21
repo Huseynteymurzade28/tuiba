@@ -22,7 +22,8 @@ shows the full screen at 1:1.
 <p align="center">
   <img src="https://raw.githubusercontent.com/Huseynteymurzade28/tuiba/master/docs/game.png" alt="Anguna: Warriors of Virtue running in tuiba" width="720">
   <br>
-  <sub>The recording above uses the half-block renderer; this is the same game as the pixel renderer shows it. Game: <a href="https://www.tolberts.net/anguna/">Anguna: Warriors of Virtue</a>, free homebrew by Nathan Tolbert.</sub>
+  <sub>The recording above uses the half-block renderer; this is the same game as the pixel renderer shows it.<br>
+  Game: <a href="https://www.tolberts.net/anguna/">Anguna: Warriors of Virtue</a> © 2008 Nathan Tolbert and Chris Hildenbrand, released under the MIT License (code and assets).</sub>
 </p>
 
 ## Features
