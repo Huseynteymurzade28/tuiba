@@ -1,0 +1,65 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="366" height="128" viewBox="0 0 366 128" role="img" aria-label="tuiba — Game Boy Advance in your terminal">
+  <rect width="366" height="128" rx="14" fill="#12101C"/>
+  <g shape-rendering="crispEdges">
+    <rect x="28" y="24" width="9" height="9" fill="#C4B6FF"/>
+    <rect x="38" y="24" width="9" height="9" fill="#C4B6FF"/>
+    <rect x="48" y="24" width="9" height="9" fill="#C4B6FF"/>
+    <rect x="58" y="24" width="9" height="9" fill="#C4B6FF"/>
+    <rect x="68" y="24" width="9" height="9" fill="#C4B6FF"/>
+    <rect x="48" y="34" width="9" height="9" fill="#C4B6FF"/>
+    <rect x="48" y="44" width="9" height="9" fill="#A896FF"/>
+    <rect x="48" y="54" width="9" height="9" fill="#A896FF"/>
+    <rect x="48" y="64" width="9" height="9" fill="#A896FF"/>
+    <rect x="98" y="24" width="9" height="9" fill="#C4B6FF"/>
+    <rect x="138" y="24" width="9" height="9" fill="#C4B6FF"/>
+    <rect x="98" y="34" width="9" height="9" fill="#C4B6FF"/>
+    <rect x="138" y="34" width="9" height="9" fill="#C4B6FF"/>
+    <rect x="98" y="44" width="9" height="9" fill="#A896FF"/>
+    <rect x="138" y="44" width="9" height="9" fill="#A896FF"/>
+    <rect x="98" y="54" width="9" height="9" fill="#A896FF"/>
+    <rect x="138" y="54" width="9" height="9" fill="#A896FF"/>
+    <rect x="108" y="64" width="9" height="9" fill="#A896FF"/>
+    <rect x="118" y="64" width="9" height="9" fill="#A896FF"/>
+    <rect x="128" y="64" width="9" height="9" fill="#A896FF"/>
+    <rect x="168" y="24" width="9" height="9" fill="#C4B6FF"/>
+    <rect x="178" y="24" width="9" height="9" fill="#C4B6FF"/>
+    <rect x="188" y="24" width="9" height="9" fill="#C4B6FF"/>
+    <rect x="178" y="34" width="9" height="9" fill="#C4B6FF"/>
+    <rect x="178" y="44" width="9" height="9" fill="#A896FF"/>
+    <rect x="178" y="54" width="9" height="9" fill="#A896FF"/>
+    <rect x="168" y="64" width="9" height="9" fill="#A896FF"/>
+    <rect x="178" y="64" width="9" height="9" fill="#A896FF"/>
+    <rect x="188" y="64" width="9" height="9" fill="#A896FF"/>
+    <rect x="218" y="24" width="9" height="9" fill="#C4B6FF"/>
+    <rect x="228" y="24" width="9" height="9" fill="#C4B6FF"/>
+    <rect x="238" y="24" width="9" height="9" fill="#C4B6FF"/>
+    <rect x="248" y="24" width="9" height="9" fill="#C4B6FF"/>
+    <rect x="218" y="34" width="9" height="9" fill="#C4B6FF"/>
+    <rect x="258" y="34" width="9" height="9" fill="#C4B6FF"/>
+    <rect x="218" y="44" width="9" height="9" fill="#A896FF"/>
+    <rect x="228" y="44" width="9" height="9" fill="#A896FF"/>
+    <rect x="238" y="44" width="9" height="9" fill="#A896FF"/>
+    <rect x="248" y="44" width="9" height="9" fill="#A896FF"/>
+    <rect x="218" y="54" width="9" height="9" fill="#A896FF"/>
+    <rect x="258" y="54" width="9" height="9" fill="#A896FF"/>
+    <rect x="218" y="64" width="9" height="9" fill="#A896FF"/>
+    <rect x="228" y="64" width="9" height="9" fill="#A896FF"/>
+    <rect x="238" y="64" width="9" height="9" fill="#A896FF"/>
+    <rect x="248" y="64" width="9" height="9" fill="#A896FF"/>
+    <rect x="298" y="24" width="9" height="9" fill="#C4B6FF"/>
+    <rect x="308" y="24" width="9" height="9" fill="#C4B6FF"/>
+    <rect x="318" y="24" width="9" height="9" fill="#C4B6FF"/>
+    <rect x="288" y="34" width="9" height="9" fill="#C4B6FF"/>
+    <rect x="328" y="34" width="9" height="9" fill="#C4B6FF"/>
+    <rect x="288" y="44" width="9" height="9" fill="#A896FF"/>
+    <rect x="298" y="44" width="9" height="9" fill="#A896FF"/>
+    <rect x="308" y="44" width="9" height="9" fill="#A896FF"/>
+    <rect x="318" y="44" width="9" height="9" fill="#A896FF"/>
+    <rect x="328" y="44" width="9" height="9" fill="#A896FF"/>
+    <rect x="288" y="54" width="9" height="9" fill="#A896FF"/>
+    <rect x="328" y="54" width="9" height="9" fill="#A896FF"/>
+    <rect x="288" y="64" width="9" height="9" fill="#A896FF"/>
+    <rect x="328" y="64" width="9" height="9" fill="#A896FF"/>
+  </g>
+  <text x="183.0" y="95" text-anchor="middle" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="12" letter-spacing="2" fill="#6F6888">GAME BOY ADVANCE · IN YOUR TERMINAL</text>
+</svg>
