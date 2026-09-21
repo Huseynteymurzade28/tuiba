@@ -131,6 +131,7 @@ please attach that to a bug report.
 | `tab` — folder list, `x` removes | `Space` or `Backspace` — Select              |
 | `r` — rescan folders             | `P` — pause, `.` — advance one frame         |
 | `q` — quit                       | `Tab` or `F` (held) — fast-forward           |
+|                                  | `?` — show the active bindings               |
 |                                  | `Esc` — back to the library                  |
 |                                  | `Ctrl+Q` — quit                              |
 
@@ -138,6 +139,23 @@ Terminals that support the Kitty keyboard protocol report key releases,
 so holding and releasing buttons works exactly. Elsewhere a key counts as
 held until it stops auto-repeating; the status bar shows `keys: timeout`
 in that case.
+
+To change the in-game keys, create `~/.config/tuiba/keys` (or
+`$XDG_CONFIG_HOME/tuiba/keys`), one action per line:
+
+```ini
+# button = key [key ...]      actions: up down left right a b l r
+a      = j                    #          start select pause step fast
+b      = k
+select = space                # unlisted actions keep their defaults
+fast   = f5 tab               # an empty right-hand side unbinds
+```
+
+Keys are single characters or `up down left right enter space backspace
+tab insert delete home end pageup pagedown f1`–`f12 lshift rshift`.
+Letters match either case. `Esc`, `Ctrl+Q` and `?` cannot be rebound;
+`?` in a game lists what is active, and any problem in the file is
+reported in the library footer.
 
 ### Headless mode
 

@@ -13,13 +13,19 @@ use tuiba_core::memory::Header;
 use tuiba_core::memory::SaveType;
 use tuiba_core::memory::cartridge::HEADER_END;
 
+/// `$XDG_CONFIG_HOME/tuiba`, or `~/.config/tuiba`.
+#[must_use]
+pub fn config_dir() -> Option<PathBuf> {
+    let base = std::env::var_os("XDG_CONFIG_HOME")
+        .map(PathBuf::from)
+        .or_else(|| std::env::home_dir().map(|h| h.join(".config")))?;
+    Some(base.join("tuiba"))
+}
+
 /// Where the folder list is stored.
 #[must_use]
 pub fn library_file() -> Option<PathBuf> {
-    let base = std::env::var_os("XDG_CONFIG_HOME")
-        .map(PathBuf::from)
-        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".config")))?;
-    Some(base.join("tuiba").join("library"))
+    config_dir().map(|dir| dir.join("library"))
 }
 
 /// Expands a leading `~` to the home directory.

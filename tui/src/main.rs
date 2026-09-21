@@ -1,5 +1,6 @@
 //! Terminal frontend for the `tuiba` Game Boy Advance emulator.
 
+mod bindings;
 mod cli;
 mod crashlog;
 mod graphics;
@@ -27,13 +28,14 @@ use crossterm::terminal::{
     EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
 };
 use ratatui::backend::CrosstermBackend;
-use ratatui::layout::{Constraint, Layout, Rect};
+use ratatui::layout::{Alignment, Constraint, Flex, Layout, Rect};
 use ratatui::style::Style;
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Paragraph};
+use ratatui::widgets::{Block, BorderType, Borders, Clear, Padding, Paragraph};
 use ratatui::{Frame, Terminal};
 use tuiba_core::{Cartridge, Gba};
 
+use crate::bindings::{Action, Bindings};
 use crate::graphics::KittyGraphics;
 use crate::input::{GbaKey, Hold, Keypad};
 use crate::library::Library;
@@ -131,8 +133,12 @@ struct App {
     paused: bool,
     /// A single frame was requested while paused.
     step: bool,
-    /// Fast-forward key (Tab / F) held: run uncapped.
+    /// Fast-forward key held: run uncapped.
     fast: Hold,
+    /// Key → action table, from the defaults and the user's keys file.
+    bindings: Bindings,
+    /// The `?` overlay is up; emulation waits while it is.
+    help: bool,
 }
 
 /// Nominal GBA frame rate, for the fast-forward multiplier.
@@ -162,6 +168,16 @@ impl App {
     fn toggle_pause(&mut self, now: Instant) {
         self.paused = !self.paused;
         self.step = false;
+        self.reset_fps(now);
+    }
+
+    /// Toggles the `?` overlay, which also stops emulation.
+    fn toggle_help(&mut self, now: Instant) {
+        self.help = !self.help;
+        self.reset_fps(now);
+    }
+
+    fn reset_fps(&mut self, now: Instant) {
         self.fps = 0.0;
         self.fps_frames = 0;
         self.fps_window_start = now;
@@ -257,7 +273,9 @@ impl App {
             .as_ref()
             .map(|err| format!("  [save failed: {err}]"))
             .unwrap_or_default();
-        let mode = if self.paused {
+        let mode = if self.help {
+            "  ⏸ keys".to_string()
+        } else if self.paused {
             "  ⏸ paused  (. = one frame)".to_string()
         } else if self.fast.is_held(now) {
             format!("  ▶▶ ×{:.1}", self.fps / NOMINAL_FPS)
@@ -276,10 +294,8 @@ impl App {
                 ),
                 Style::default().fg(theme::DIM).bg(theme::SURFACE),
             ),
-            Span::styled("   p ", theme::key()),
-            Span::styled("pause  ", theme::hint()),
-            Span::styled(" tab ", theme::key()),
-            Span::styled("fast  ", theme::hint()),
+            Span::styled("   ? ", theme::key()),
+            Span::styled("keys  ", theme::hint()),
             Span::styled(" esc ", theme::key()),
             Span::styled("library  ", theme::hint()),
             Span::styled(" ctrl+q ", theme::key()),
@@ -288,6 +304,67 @@ impl App {
         frame.render_widget(
             Paragraph::new(status).style(Style::default().fg(theme::DIM).bg(theme::SURFACE)),
             status_area,
+        );
+        if self.help {
+            self.draw_help(frame, screen_area);
+        }
+    }
+
+    /// The `?` overlay: every action with its keys, and where to change
+    /// them.
+    fn draw_help(&self, frame: &mut Frame, area: Rect) {
+        let mut lines: Vec<Line> = Action::ALL
+            .iter()
+            .map(|&action| {
+                let keys = self.bindings.keys_for(action);
+                let keys = if keys.is_empty() {
+                    Span::styled("(unbound)", theme::dim())
+                } else {
+                    Span::styled(keys.join("  "), theme::text())
+                };
+                Line::from(vec![
+                    Span::styled(format!("{:>20}  ", action.label()), theme::dim()),
+                    keys,
+                ])
+            })
+            .collect();
+        lines.push(Line::default());
+        for (label, key) in [("library", "esc"), ("quit", "ctrl+q"), ("this list", "?")] {
+            lines.push(Line::from(vec![
+                Span::styled(format!("{label:>20}  "), theme::dim()),
+                Span::styled(key, theme::text()),
+            ]));
+        }
+        lines.push(Line::default());
+        let file = Bindings::file().map_or_else(
+            || "keys file needs a config directory".to_string(),
+            |p| format!("edit {}", library::compact_home(&p)),
+        );
+        lines.push(Line::styled(file, theme::hint()).alignment(Alignment::Center));
+        // Wide enough for the longest line (usually the path), within
+        // the screen.
+        let width = lines.iter().map(Line::width).max().unwrap_or(0).max(44) as u16 + 4;
+        let width = width.min(area.width);
+
+        let height = lines.len() as u16 + 2;
+        let [popup] = Layout::vertical([Constraint::Length(height)])
+            .flex(Flex::Center)
+            .areas(area);
+        let [popup] = Layout::horizontal([Constraint::Length(width)])
+            .flex(Flex::Center)
+            .areas(popup);
+        frame.render_widget(Clear, popup);
+        frame.render_widget(
+            Paragraph::new(lines).block(
+                Block::default()
+                    .title(Line::styled(" KEYS ", theme::accent().bold()))
+                    .borders(Borders::ALL)
+                    .border_type(BorderType::Rounded)
+                    .border_style(theme::border())
+                    .padding(Padding::horizontal(1))
+                    .style(theme::text().bg(theme::SURFACE)),
+            ),
+            popup,
         );
     }
 }
@@ -328,25 +405,37 @@ fn run() -> Result<(), AppError> {
         None => None,
     };
 
+    let (bindings, key_problems) = Bindings::load();
+    if direct_rom.is_some() {
+        // No library footer to show these in; they stay in the scrollback.
+        for problem in &key_problems {
+            eprintln!("warning: {problem}");
+        }
+    }
+
     let mut guard = TerminalGuard::enter()?;
     let TerminalGuard {
         terminal,
         release_events,
     } = &mut guard;
-    match direct_rom {
-        Some(rom) => play(terminal, &rom, *release_events, args.graphics).map(|_| ()),
-        None => library_loop(terminal, library, *release_events, args.graphics),
+    if let Some(rom) = direct_rom {
+        return play(terminal, &rom, *release_events, args.graphics, bindings).map(|_| ());
     }
+    let mut picker = Picker::new(library);
+    if let Some(problem) = key_problems.first() {
+        picker.notify_error(problem.clone());
+    }
+    library_loop(terminal, picker, *release_events, args.graphics, &bindings)
 }
 
 /// Library screen ⇄ game, until the user quits.
 fn library_loop(
     terminal: &mut ratatui::DefaultTerminal,
-    library: Library,
+    mut picker: Picker,
     release_events: bool,
     graphics: bool,
+    bindings: &Bindings,
 ) -> Result<(), AppError> {
-    let mut picker = Picker::new(library);
     loop {
         terminal.draw(|frame| picker.draw(frame))?;
         let outcome = match event::read()? {
@@ -357,7 +446,7 @@ fn library_loop(
             None => {}
             Some(Outcome::Quit) => return Ok(()),
             Some(Outcome::Play(rom)) => {
-                match play(terminal, &rom, release_events, graphics) {
+                match play(terminal, &rom, release_events, graphics, bindings.clone()) {
                     Ok(GameExit::Back) => {}
                     Ok(GameExit::Quit) => return Ok(()),
                     // A broken ROM, or a bug it trips over, should not
@@ -406,6 +495,7 @@ fn play(
     rom: &Path,
     release_events: bool,
     graphics: bool,
+    bindings: Bindings,
 ) -> Result<GameExit, AppError> {
     let gba = load_gba(rom)?;
     let header_title = gba.bus.cartridge.header().title.trim().to_string();
@@ -436,6 +526,8 @@ fn play(
         paused: false,
         step: false,
         fast: Hold::new(release_events),
+        bindings,
+        help: false,
     };
     let result = std::panic::catch_unwind(AssertUnwindSafe(|| event_loop(terminal, &mut app)));
 
@@ -469,7 +561,9 @@ fn event_loop(
     let mut next_autosave = next_frame + AUTOSAVE_INTERVAL;
     loop {
         let now = Instant::now();
-        if app.paused {
+        if app.help {
+            // The overlay covers the screen; nothing to see, so nothing to run.
+        } else if app.paused {
             if app.step {
                 app.emulate_frame(now);
                 app.step = false;
@@ -492,30 +586,53 @@ fn event_loop(
         }
         terminal.draw(|frame| app.draw(frame))?;
         if let Some(graphics) = &mut app.graphics {
-            graphics.present(app.gba.framebuffer(), app.screen_area)?;
+            if app.help {
+                // The pixel image would sit on top of the overlay.
+                graphics.clear()?;
+            } else {
+                graphics.present(app.gba.framebuffer(), app.screen_area)?;
+            }
         }
 
         while event::poll(Duration::ZERO)? {
             if let Event::Key(key) = event::read()? {
                 let now = Instant::now();
-                // Esc leaves the game, Ctrl+Q the program; plain letters
-                // belong to the game.
+                // Esc, Ctrl+Q and ? are fixed; everything else goes through
+                // the bindings.
                 if key.kind == KeyEventKind::Press {
                     match key.code {
+                        KeyCode::Esc if app.help => {
+                            app.toggle_help(now);
+                            continue;
+                        }
                         KeyCode::Esc => return Ok(GameExit::Back),
                         KeyCode::Char('q') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                             return Ok(GameExit::Quit);
                         }
-                        KeyCode::Char('p' | 'P') => app.toggle_pause(now),
-                        KeyCode::Char('.') if app.paused => app.step = true,
+                        KeyCode::Char('?') => {
+                            app.toggle_help(now);
+                            continue;
+                        }
                         _ => {}
                     }
                 }
-                match key.code {
-                    KeyCode::Tab | KeyCode::Char('f' | 'F') => app.fast.update(key.kind, now),
-                    _ => {
-                        app.keypad.handle(key, now);
+                // Chords like Ctrl+Z stay with the terminal.
+                if key
+                    .modifiers
+                    .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT)
+                {
+                    continue;
+                }
+                match app.bindings.action(key.code) {
+                    Some(Action::Button(button)) => app.keypad.handle(button, key.kind, now),
+                    Some(Action::FastForward) => app.fast.update(key.kind, now),
+                    Some(Action::Pause) if key.kind == KeyEventKind::Press => {
+                        app.toggle_pause(now);
                     }
+                    Some(Action::Step) if key.kind == KeyEventKind::Press && app.paused => {
+                        app.step = true;
+                    }
+                    _ => {}
                 }
             }
         }
