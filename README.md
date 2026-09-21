@@ -56,40 +56,73 @@ Tested with freely distributed homebrew:
 
 No ROMs are needed to build or test the project.
 
-## Building
+## Installation
+
+| Method                        | Command                                                        |
+| ----------------------------- | -------------------------------------------------------------- |
+| Arch Linux (AUR)              | `yay -S tuiba`                                                 |
+| Any platform with Rust        | `cargo install tuiba`                                          |
+| From source                   | `git clone https://github.com/Huseynteymurzade28/tuiba && cd tuiba && cargo install --path tui` |
+
+Stable Rust 1.85 or newer; no system dependencies. Any terminal with
+24-bit colour and a font that has the block characters (`▀ ▄ █`) works.
+For the pixel renderer use Kitty, Ghostty, WezTerm or Konsole.
+
+## Getting started
+
+1. Run `tuiba`. The library is empty the first time.
+2. Press `a`, type the folder that holds your `.gba` files (for example
+   `~/Games/GBA`; `~` is expanded) and press `⏎`. The folder is remembered
+   in `~/.config/tuiba/library`, one path per line, so you can also edit
+   that file by hand.
+3. Pick a cartridge with `↑`/`↓` and press `⏎` to play. `Esc` brings you
+   back to the library; `Ctrl+Q` quits from anywhere.
+
+Shortcuts:
 
 ```sh
-cargo build --release
-cargo test
-```
-
-Stable Rust 1.85 or newer, no system dependencies.
-
-## Usage
-
-```sh
-tuiba                  # open the library screen
-tuiba ~/roms           # add a folder to the library, then open it
-tuiba path/to/rom.gba  # play a cartridge directly
+tuiba ~/Games/GBA      # add a folder and open the library in one go
+tuiba path/to/rom.gba  # play a cartridge directly, skipping the library
 tuiba --no-graphics    # force the half-block renderer
 ```
 
-The library remembers its folders in `~/.config/tuiba/library` (one path
-per line). Saves are written next to the ROM as `.sav`.
+Saves are written next to the ROM as `<name>.sav` when you leave a game.
+The save type (SRAM, flash, EEPROM) is detected from the ROM.
 
-In the library: `↑↓` select, `⏎` play, `a` add a folder, `tab` switch to the
-folder list (`x` removes one), `q` quit. In a game the GBA buttons are the
-keys of the same name (`A`, `B`, `L`, `R`, arrows, `Enter` = Start,
-`Space` or `Backspace` = Select); `Esc` returns to the library, `Ctrl+Q` quits.
+### Keys
 
-For debugging there is a headless mode that needs no terminal:
+| Library                          | In a game                                    |
+| -------------------------------- | -------------------------------------------- |
+| `↑` `↓` / `j` `k` — select       | `A` `B` `L` `R` — the buttons of the same name |
+| `⏎` — play                       | arrows — D-pad                               |
+| `a` — add a folder               | `Enter` — Start                              |
+| `tab` — folder list, `x` removes | `Space` or `Backspace` — Select              |
+| `r` — rescan folders             | `Esc` — back to the library                  |
+| `q` — quit                       | `Ctrl+Q` — quit                              |
+
+Terminals that support the Kitty keyboard protocol report key releases,
+so holding and releasing buttons works exactly. Elsewhere a key counts as
+held until it stops auto-repeating; the status bar shows `keys: timeout`
+in that case.
+
+### Headless mode
+
+For debugging (and for the screenshots in this file) there is a mode
+that needs no terminal:
 
 ```sh
 tuiba rom.gba --frames 600 --key start@400-410 --screenshot out.png
 ```
 
-It runs the given number of frames with scripted input, prints CPU state and
-throughput, and can dump the final frame as a PNG.
+It runs the given number of frames with scripted input, prints CPU state
+and throughput, and can dump the final frame as a PNG.
+
+## Building
+
+```sh
+cargo build --release   # binary in target/release/tuiba
+cargo test
+```
 
 ## Layout
 
