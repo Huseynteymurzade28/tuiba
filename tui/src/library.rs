@@ -25,15 +25,15 @@ pub fn library_file() -> Option<PathBuf> {
 /// Expands a leading `~` to the home directory.
 #[must_use]
 pub fn expand_home(path: &str) -> PathBuf {
-    if let Some(rest) = path.strip_prefix('~') {
-        if let Some(home) = std::env::var_os("HOME") {
-            let rest = rest.trim_start_matches('/');
-            return if rest.is_empty() {
-                PathBuf::from(home)
-            } else {
-                PathBuf::from(home).join(rest)
-            };
-        }
+    if let Some(rest) = path.strip_prefix('~')
+        && let Some(home) = std::env::home_dir()
+    {
+        let rest = rest.trim_start_matches('/');
+        return if rest.is_empty() {
+            home
+        } else {
+            home.join(rest)
+        };
     }
     PathBuf::from(path)
 }
@@ -41,14 +41,14 @@ pub fn expand_home(path: &str) -> PathBuf {
 /// Replaces a leading home directory with `~`, for display.
 #[must_use]
 pub fn compact_home(path: &Path) -> String {
-    if let Some(home) = std::env::var_os("HOME") {
-        if let Ok(rest) = path.strip_prefix(&home) {
-            return if rest.as_os_str().is_empty() {
-                "~".to_string()
-            } else {
-                format!("~/{}", rest.display())
-            };
-        }
+    if let Some(home) = std::env::home_dir()
+        && let Ok(rest) = path.strip_prefix(&home)
+    {
+        return if rest.as_os_str().is_empty() {
+            "~".to_string()
+        } else {
+            format!("~/{}", rest.display())
+        };
     }
     path.display().to_string()
 }
@@ -240,7 +240,7 @@ pub fn human_size(size: u64) -> String {
     if size >= MIB {
         // Tenths of a MiB, rounded.
         let tenths = (size * 10).div_ceil(MIB);
-        if tenths % 10 == 0 {
+        if tenths.is_multiple_of(10) {
             format!("{} MiB", tenths / 10)
         } else {
             format!("{}.{} MiB", tenths / 10, tenths % 10)
@@ -338,11 +338,11 @@ mod tests {
 
     #[test]
     fn home_expansion_round_trips() {
-        let home = std::env::var("HOME").unwrap();
-        assert_eq!(expand_home("~/x"), PathBuf::from(format!("{home}/x")));
-        assert_eq!(expand_home("~"), PathBuf::from(&home));
+        let home = std::env::home_dir().unwrap();
+        assert_eq!(expand_home("~/x"), home.join("x"));
+        assert_eq!(expand_home("~"), home);
         assert_eq!(expand_home("/abs"), PathBuf::from("/abs"));
-        assert_eq!(compact_home(Path::new(&format!("{home}/y"))), "~/y");
+        assert_eq!(compact_home(&home.join("y")), "~/y");
         assert_eq!(compact_home(Path::new("/etc")), "/etc");
     }
 }

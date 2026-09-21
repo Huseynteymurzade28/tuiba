@@ -196,10 +196,12 @@ impl Cpu {
             first = false;
         }
 
-        if load && s_bit && pc_in_list {
-            if let Some(spsr) = self.regs.spsr() {
-                self.regs.set_cpsr(spsr);
-            }
+        if load
+            && s_bit
+            && pc_in_list
+            && let Some(spsr) = self.regs.spsr()
+        {
+            self.regs.set_cpsr(spsr);
         }
 
         // A loaded base wins over writeback; an empty list always writes back.
