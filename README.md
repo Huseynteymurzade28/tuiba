@@ -23,13 +23,15 @@ shows the full screen at 1:1. Smaller terminals get a downscaled picture;
 the status bar shows the current scale and the size needed for 1:1.
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/Huseynteymurzade28/tuiba/master/docs/demo.gif" alt="Adding a folder to the library and starting a game" width="720">
+  <img src="https://raw.githubusercontent.com/Huseynteymurzade28/tuiba/master/docs/demo.gif" alt="Adding a folder, filtering the library and starting a game" width="800">
+  <br>
+  <sub>Add a folder, sort, filter, play. The game part shows the pixel renderer's output, as it looks in Kitty, Ghostty or WezTerm.</sub>
 </p>
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/Huseynteymurzade28/tuiba/master/docs/game.png" alt="Anguna: Warriors of Virtue running in tuiba" width="720">
+  <img src="https://raw.githubusercontent.com/Huseynteymurzade28/tuiba/master/docs/halfblock.png" alt="The half-block renderer showing a game at 1:1 in a 240-column terminal" width="800">
   <br>
-  <sub>The recording above uses the half-block renderer; this is the same game as the pixel renderer shows it.<br>
+  <sub>The same game in a terminal without a graphics protocol: the half-block renderer at 1:1 in 240×80 cells.<br>
   Game: <a href="https://www.tolberts.net/anguna/">Anguna: Warriors of Virtue</a> © 2008 Nathan Tolbert and Chris Hildenbrand, released under the MIT License (code and assets).</sub>
 </p>
 
@@ -41,10 +43,10 @@ the status bar shows the current scale and the size needed for 1:1.
 | Timing   | Wait states from `WAITCNT`, sequential/non-sequential accesses, cartridge prefetch, per-instruction internal cycles |
 | Memory   | Complete address map with mirrors, DMA (immediate, HBlank, VBlank), four timers with cascade                  |
 | Video    | Modes 0–5, text and affine backgrounds, sprites (affine, double-size), windows, alpha blending, mosaic        |
-| Saves    | SRAM, 64/128 KiB flash and serial EEPROM, auto-detected from the ROM and persisted as `.sav`                  |
+| Saves    | SRAM, 64/128 KiB flash and serial EEPROM, auto-detected from the ROM; `.sav` written as you play              |
 | BIOS     | Runs without a BIOS image: `IntrWait`, `Div`, `Sqrt`, `ArcTan2`, `CpuSet`, LZ77/RL/`BitUnPack`, affine helpers are emulated in software |
-| Input    | Keyboard with exact key releases on terminals that support the Kitty keyboard protocol                       |
-| Frontend | Library screen with remembered folders and cartridge details, pixel or half-block rendering, headless debug mode |
+| Input    | Keyboard with exact key releases on terminals that support the Kitty keyboard protocol; bindings in a config file |
+| Frontend | Library with folders, filter, sort and last-played memory; pixel or half-block rendering; pause, frame step and fast-forward; headless debug mode |
 
 Not there yet: sound, serial link, real-time clock, cycle-exact PPU/DMA
 interleaving. Accurate enough for the homebrew below; not a reference

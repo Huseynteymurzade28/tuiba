@@ -563,8 +563,15 @@ impl Picker {
                     (theme::text(), theme::dim(), theme::text().fg(theme::OK))
                 };
                 let marker = if selected { "▸ " } else { "  " };
+                // On the accent-coloured selected row the accent highlight
+                // would vanish; underline there instead.
+                let hit_style = if selected && focused {
+                    name_style.underlined()
+                } else {
+                    name_style.fg(theme::ACCENT_LIGHT).bold()
+                };
                 let mut spans = vec![Span::styled(marker, name_style)];
-                spans.extend(highlight(&name, &needle, name_style));
+                spans.extend(highlight(&name, &needle, name_style, hit_style));
                 let pad = name_width.saturating_sub(name.chars().count());
                 spans.push(Span::styled(" ".repeat(pad), name_style));
                 spans.push(Span::styled(format!("  {code}  "), meta_style));
@@ -871,14 +878,14 @@ fn truncate_start(s: &str, width: usize) -> String {
 }
 
 /// `text` as spans, with the first case-insensitive occurrence of
-/// `needle` in the accent colour.
-fn highlight(text: &str, needle: &str, base: Style) -> Vec<Span<'static>> {
-    let hit = if needle.is_empty() {
+/// `needle` in `hit` instead of `base`.
+fn highlight(text: &str, needle: &str, base: Style, hit: Style) -> Vec<Span<'static>> {
+    let found = if needle.is_empty() {
         None
     } else {
         text.to_lowercase().find(needle)
     };
-    match hit {
+    match found {
         // Byte offsets from the lower-cased copy may not line up with
         // the original for exotic case mappings; fall back to plain text.
         Some(start)
@@ -887,10 +894,7 @@ fn highlight(text: &str, needle: &str, base: Style) -> Vec<Span<'static>> {
             let end = start + needle.len();
             vec![
                 Span::styled(text[..start].to_string(), base),
-                Span::styled(
-                    text[start..end].to_string(),
-                    base.fg(theme::ACCENT_LIGHT).bold(),
-                ),
+                Span::styled(text[start..end].to_string(), hit),
                 Span::styled(text[end..].to_string(), base),
             ]
         }
@@ -935,7 +939,10 @@ mod tests {
             p.handle(key(KeyCode::Char(c)));
         }
         assert_eq!(names(&p), ["Pliko"], "case-insensitive");
-        assert_eq!(highlight("Pliko", "li", theme::text())[1].content, "li");
+        assert_eq!(
+            highlight("Pliko", "li", theme::text(), theme::accent())[1].content,
+            "li"
+        );
         // One match: Enter plays it.
         assert_eq!(
             p.handle(key(KeyCode::Enter)),
