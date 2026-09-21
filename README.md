@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="docs/logo.svg" alt="tuiba — Game Boy Advance in your terminal" width="366">
+  <img src="https://raw.githubusercontent.com/Huseynteymurzade28/tuiba/master/docs/logo.svg" alt="tuiba — Game Boy Advance in your terminal" width="366">
 </p>
 
 <p align="center">
@@ -15,7 +15,15 @@ by the largest integer factor that fits. Everywhere else it is drawn with
 Unicode half-block characters and 24-bit colour, so a 240×80-cell terminal
 shows the full screen at 1:1.
 
-<!-- Screenshots: docs/library.png and docs/game.png (homebrew titles only). -->
+<p align="center">
+  <img src="https://raw.githubusercontent.com/Huseynteymurzade28/tuiba/master/docs/demo.gif" alt="Adding a folder to the library and starting a game" width="720">
+</p>
+
+<p align="center">
+  <img src="https://raw.githubusercontent.com/Huseynteymurzade28/tuiba/master/docs/game.png" alt="Anguna: Warriors of Virtue running in tuiba" width="720">
+  <br>
+  <sub>The recording above uses the half-block renderer; this is the same game as the pixel renderer shows it. Game: <a href="https://www.tolberts.net/anguna/">Anguna: Warriors of Virtue</a>, free homebrew by Nathan Tolbert.</sub>
+</p>
 
 ## Features
 
