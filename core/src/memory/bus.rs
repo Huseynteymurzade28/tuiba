@@ -4,11 +4,14 @@
 //! forces alignment itself (and rotates misaligned loads), so that logic
 //! lives in the CPU, not here.
 
+use std::cell::Cell;
+
 use crate::error::{GbaError, Result};
 use crate::memory::backup::Backup;
 use crate::memory::cartridge::Cartridge;
-use crate::memory::io::IoRegisters;
+use crate::memory::io::{IoRegisters, reg};
 use crate::memory::video::VideoMemory;
+use crate::memory::wait::WaitStates;
 use crate::memory::{BIOS_SIZE, EWRAM_SIZE, IWRAM_SIZE, Memory, MemoryRegion};
 
 /// Offset of an address within its 16 MiB page.
@@ -51,6 +54,13 @@ pub struct Bus {
     pub video: VideoMemory,
     /// The inserted cartridge.
     pub cartridge: Cartridge,
+    /// Access costs, decoded from `WAITCNT`.
+    pub wait: WaitStates,
+    /// Cycles spent on accesses since the last [`Memory::take_access_cycles`].
+    /// Reads take `&self`, hence the cells.
+    access_cycles: Cell<u32>,
+    /// Address just past the previous access, for sequential detection.
+    next_sequential: Cell<u32>,
 }
 
 impl Bus {
@@ -69,6 +79,30 @@ impl Bus {
             io: IoRegisters::new(),
             video: VideoMemory::new(),
             cartridge,
+            wait: WaitStates::default(),
+            access_cycles: Cell::new(0),
+            next_sequential: Cell::new(u32::MAX),
+        }
+    }
+
+    /// Charges an access of `width` bytes at `address`.
+    ///
+    /// An access is sequential when it continues directly from the
+    /// previous one; the cartridge additionally restarts at every 128 KiB
+    /// boundary.
+    #[inline]
+    fn account(&self, address: u32, width: u32) {
+        let sequential = address == self.next_sequential.get() && address & 0x1_FFFF != 0;
+        let cycles = self.wait.page(address).cycles(width, sequential);
+        self.access_cycles.set(self.access_cycles.get() + cycles);
+        self.next_sequential.set(address.wrapping_add(width));
+    }
+
+    /// Re-decodes the timing table after an I/O write that may have
+    /// touched `WAITCNT`.
+    fn after_io_write(&mut self, offset: u32, width: u32) {
+        if offset < reg::WAITCNT + 2 && offset + width > reg::WAITCNT {
+            self.wait = WaitStates::from_waitcnt(self.io.read16(reg::WAITCNT));
         }
     }
 
@@ -130,6 +164,7 @@ impl Bus {
 impl Memory for Bus {
     /// Reads a byte.
     fn read8(&self, address: u32) -> u8 {
+        self.account(address, 1);
         let off = page_offset(address);
         match MemoryRegion::from_address(address) {
             Some(MemoryRegion::Bios) => self.bios.get(off as usize).copied().unwrap_or(0),
@@ -149,6 +184,7 @@ impl Memory for Bus {
     /// Reads a halfword from an even address.
     fn read16(&self, address: u32) -> u16 {
         debug_assert_eq!(address & 1, 0, "unaligned halfword read");
+        self.account(address, 2);
         let off = page_offset(address);
         match MemoryRegion::from_address(address) {
             Some(MemoryRegion::Bios) => self
@@ -166,7 +202,7 @@ impl Memory for Bus {
             Some(MemoryRegion::Rom) if self.is_eeprom_address(address) => self.eeprom_read(),
             Some(MemoryRegion::Rom) => self.cartridge.read16(address & 0x01FF_FFFF),
             // SRAM is on an 8-bit bus: the byte is repeated across the halfword.
-            Some(MemoryRegion::Sram) => u16::from(self.read8(address)) * 0x0101,
+            Some(MemoryRegion::Sram) => u16::from(self.backup.read(off)) * 0x0101,
             None => 0,
         }
     }
@@ -174,6 +210,7 @@ impl Memory for Bus {
     /// Reads a word from a word-aligned address.
     fn read32(&self, address: u32) -> u32 {
         debug_assert_eq!(address & 3, 0, "unaligned word read");
+        self.account(address, 4);
         let off = page_offset(address);
         match MemoryRegion::from_address(address) {
             Some(MemoryRegion::Bios) => self
@@ -192,7 +229,7 @@ impl Memory for Bus {
                 u32::from(self.eeprom_read()) | u32::from(self.eeprom_read()) << 16
             }
             Some(MemoryRegion::Rom) => self.cartridge.read32(address & 0x01FF_FFFF),
-            Some(MemoryRegion::Sram) => u32::from(self.read8(address)) * 0x0101_0101,
+            Some(MemoryRegion::Sram) => u32::from(self.backup.read(off)) * 0x0101_0101,
             None => 0,
         }
     }
@@ -203,11 +240,15 @@ impl Memory for Bus {
     /// (background area only) are duplicated into both bytes of the
     /// halfword, byte writes to OAM and the VRAM object area are ignored.
     fn write8(&mut self, address: u32, value: u8) {
+        self.account(address, 1);
         let off = page_offset(address);
         match MemoryRegion::from_address(address) {
             Some(MemoryRegion::Ewram) => self.ewram[off as usize & (EWRAM_SIZE - 1)] = value,
             Some(MemoryRegion::Iwram) => self.iwram[off as usize & (IWRAM_SIZE - 1)] = value,
-            Some(MemoryRegion::Io) => self.io.write8(off, value),
+            Some(MemoryRegion::Io) => {
+                self.io.write8(off, value);
+                self.after_io_write(off, 1);
+            }
             Some(MemoryRegion::Palette) => {
                 let index = VideoMemory::palette_index(off) & !1;
                 set16(&mut self.video.palette, index, u16::from(value) * 0x0101);
@@ -231,6 +272,7 @@ impl Memory for Bus {
     /// Writes a halfword to an even address.
     fn write16(&mut self, address: u32, value: u16) {
         debug_assert_eq!(address & 1, 0, "unaligned halfword write");
+        self.account(address, 2);
         let off = page_offset(address);
         match MemoryRegion::from_address(address) {
             Some(MemoryRegion::Ewram) => {
@@ -239,7 +281,10 @@ impl Memory for Bus {
             Some(MemoryRegion::Iwram) => {
                 set16(&mut self.iwram, off as usize & (IWRAM_SIZE - 1), value);
             }
-            Some(MemoryRegion::Io) => self.io.write16(off, value),
+            Some(MemoryRegion::Io) => {
+                self.io.write16(off, value);
+                self.after_io_write(off, 2);
+            }
             Some(MemoryRegion::Palette) => {
                 set16(
                     &mut self.video.palette,
@@ -254,7 +299,7 @@ impl Memory for Bus {
                 set16(&mut self.video.oam, VideoMemory::oam_index(off), value);
             }
             // 8-bit bus: only the low byte reaches the chip.
-            Some(MemoryRegion::Sram) => self.write8(address, value as u8),
+            Some(MemoryRegion::Sram) => self.backup.write(off, value as u8),
             Some(MemoryRegion::Rom) if self.is_eeprom_address(address) => self.eeprom_write(value),
             Some(MemoryRegion::Bios | MemoryRegion::Rom) | None => {}
         }
@@ -263,6 +308,7 @@ impl Memory for Bus {
     /// Writes a word to a word-aligned address.
     fn write32(&mut self, address: u32, value: u32) {
         debug_assert_eq!(address & 3, 0, "unaligned word write");
+        self.account(address, 4);
         let off = page_offset(address);
         match MemoryRegion::from_address(address) {
             Some(MemoryRegion::Ewram) => {
@@ -271,7 +317,10 @@ impl Memory for Bus {
             Some(MemoryRegion::Iwram) => {
                 set32(&mut self.iwram, off as usize & (IWRAM_SIZE - 1), value);
             }
-            Some(MemoryRegion::Io) => self.io.write32(off, value),
+            Some(MemoryRegion::Io) => {
+                self.io.write32(off, value);
+                self.after_io_write(off, 4);
+            }
             Some(MemoryRegion::Palette) => {
                 set32(
                     &mut self.video.palette,
@@ -285,13 +334,17 @@ impl Memory for Bus {
             Some(MemoryRegion::Oam) => {
                 set32(&mut self.video.oam, VideoMemory::oam_index(off), value);
             }
-            Some(MemoryRegion::Sram) => self.write8(address, value as u8),
+            Some(MemoryRegion::Sram) => self.backup.write(off, value as u8),
             Some(MemoryRegion::Rom) if self.is_eeprom_address(address) => {
                 self.eeprom_write(value as u16);
                 self.eeprom_write((value >> 16) as u16);
             }
             Some(MemoryRegion::Bios | MemoryRegion::Rom) | None => {}
         }
+    }
+
+    fn take_access_cycles(&self) -> u32 {
+        self.access_cycles.replace(0)
     }
 }
 
@@ -339,6 +392,68 @@ mod tests {
         assert_eq!(bus.read32(base::ROM_WS2 + 0x1F0), 0xDEAD_BEEF);
         assert_eq!(bus.read16(base::ROM_WS0 + 0x1F2), 0xDEAD);
         assert_eq!(bus.read8(base::ROM_WS0 + 0x1F3), 0xDE);
+    }
+
+    #[test]
+    fn accesses_are_charged_by_region_and_sequence() {
+        let mut bus = bus();
+        assert_eq!(bus.take_access_cycles(), 0);
+
+        bus.read32(base::IWRAM);
+        bus.read8(base::IWRAM + 4);
+        assert_eq!(bus.take_access_cycles(), 2, "IWRAM: one cycle each");
+        bus.write32(base::EWRAM, 0);
+        assert_eq!(
+            bus.take_access_cycles(),
+            6,
+            "EWRAM word: two 3-cycle halves"
+        );
+        bus.read16(base::PALETTE);
+        bus.read32(base::VRAM);
+        assert_eq!(bus.take_access_cycles(), 1 + 2);
+
+        // ROM (WS0 default 4/2 waits): first access non-sequential, the
+        // next one continues where it left off.
+        bus.read16(base::ROM_WS0 + 0x100);
+        assert_eq!(bus.take_access_cycles(), 5);
+        bus.read16(base::ROM_WS0 + 0x102);
+        assert_eq!(bus.take_access_cycles(), 3);
+        bus.read32(base::ROM_WS0 + 0x104);
+        assert_eq!(bus.take_access_cycles(), 6, "sequential word: S + S");
+        bus.read32(base::ROM_WS0 + 0x200);
+        assert_eq!(bus.take_access_cycles(), 8, "jump: N + S");
+        // Writes elsewhere break the sequence.
+        bus.read16(base::ROM_WS0 + 0x204);
+        bus.write16(base::IWRAM, 0);
+        bus.read16(base::ROM_WS0 + 0x206);
+        assert_eq!(bus.take_access_cycles(), 3 + 1 + 5);
+        // Every 128 KiB the cartridge restarts its address latch.
+        bus.read16(base::ROM_WS0 + 0x1_FFFE);
+        bus.read16(base::ROM_WS0 + 0x2_0000);
+        assert_eq!(bus.take_access_cycles(), 5 + 5);
+
+        bus.read8(base::SRAM);
+        assert_eq!(bus.take_access_cycles(), 5);
+        assert_eq!(bus.take_access_cycles(), 0, "taking resets");
+    }
+
+    #[test]
+    fn waitcnt_retimes_the_cartridge() {
+        let mut bus = bus();
+        bus.write16(base::IO + reg::WAITCNT, 0x4317);
+        bus.take_access_cycles();
+        assert!(bus.wait.prefetch);
+        bus.read16(base::ROM_WS0);
+        assert_eq!(bus.take_access_cycles(), 4);
+        bus.read16(base::ROM_WS0 + 2);
+        assert_eq!(bus.take_access_cycles(), 2);
+        bus.read8(base::SRAM);
+        assert_eq!(bus.take_access_cycles(), 9);
+        // Byte and word writes reach it too.
+        bus.write8(base::IO + reg::WAITCNT, 0);
+        assert_eq!(bus.wait.page(base::ROM_WS0).n16, 5);
+        bus.write32(base::IO + reg::WAITCNT, 0x0000_0004);
+        assert_eq!(bus.wait.page(base::ROM_WS0).n16, 4);
     }
 
     #[test]

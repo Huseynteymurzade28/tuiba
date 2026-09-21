@@ -28,12 +28,14 @@ pub mod eeprom;
 pub mod io;
 pub mod timers;
 pub mod video;
+pub mod wait;
 
 pub use backup::{Backup, SaveType};
 pub use bus::Bus;
 pub use cartridge::{Cartridge, Header};
 pub use io::{Interrupt, IoRegisters};
 pub use video::VideoMemory;
+pub use wait::WaitStates;
 
 /// Byte-addressable memory as seen by the CPU and DMA.
 ///
@@ -53,6 +55,12 @@ pub trait Memory {
     fn write16(&mut self, address: u32, value: u16);
     /// Writes a word to a word-aligned address.
     fn write32(&mut self, address: u32, value: u32);
+
+    /// Returns the cycles spent on accesses since the previous call and
+    /// resets the count. Memories without timing report zero.
+    fn take_access_cycles(&self) -> u32 {
+        0
+    }
 }
 
 /// Size of the BIOS ROM in bytes.
