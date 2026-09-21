@@ -103,8 +103,10 @@ please attach that to a bug report.
 | `⏎` — play                       | arrows — D-pad                               |
 | `a` — add a folder               | `Enter` — Start                              |
 | `tab` — folder list, `x` removes | `Space` or `Backspace` — Select              |
-| `r` — rescan folders             | `Esc` — back to the library                  |
-| `q` — quit                       | `Ctrl+Q` — quit                              |
+| `r` — rescan folders             | `P` — pause, `.` — advance one frame         |
+| `q` — quit                       | `Tab` or `F` (held) — fast-forward           |
+|                                  | `Esc` — back to the library                  |
+|                                  | `Ctrl+Q` — quit                              |
 
 Terminals that support the Kitty keyboard protocol report key releases,
 so holding and releasing buttons works exactly. Elsewhere a key counts as
