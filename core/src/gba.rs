@@ -14,6 +14,10 @@ use crate::ppu::{CYCLES_PER_LINE, Framebuffer, Ppu};
 const HALT_STEP: u32 = 32;
 /// Internal cycles a DMA transfer spends before its first access.
 const DMA_START_CYCLES: u32 = 2;
+/// The scanline on which the BIOS boot sequence jumps to the cartridge.
+/// Starting there matters: code that races the first VBlank sees the same
+/// phase as on hardware.
+const BOOT_LINE: u16 = 0x7E;
 
 /// State of a pending `IntrWait`/`VBlankIntrWait` call.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -58,10 +62,12 @@ impl Gba {
         cpu.skip_bios(&mut bus);
         // The BIOS leaves this flag set after the boot sequence.
         bus.io.write16(reg::POSTFLG, 1);
+        let mut ppu = Ppu::new();
+        ppu.set_line(BOOT_LINE, &mut bus.io);
         Self {
             cpu,
             bus,
-            ppu: Ppu::new(),
+            ppu,
             intr_wait: None,
             last_unsupported_swi: None,
         }
@@ -262,10 +268,15 @@ mod tests {
             0xEAFF_FFFE,
         ]);
         assert_eq!(gba.cpu.next_pc(), base::ROM_WS0);
+        // Control arrives mid-frame, where the BIOS would hand it over.
+        assert_eq!(gba.ppu.vcount(), BOOT_LINE);
+        assert_eq!(gba.bus.io.read16(reg::VCOUNT), BOOT_LINE);
         gba.run_frame();
         assert_eq!(gba.bus.io.read16(reg::DISPCNT), 0x0403);
-        // A frame ends when VBlank starts, i.e. after the 160 visible lines.
-        assert!(gba.cpu.cycles >= u64::from(160 * CYCLES_PER_LINE - CYCLES_PER_LINE));
+        // A frame ends when VBlank starts, i.e. after the visible lines
+        // left in the boot frame.
+        let lines = u64::from(160 - BOOT_LINE);
+        assert!(gba.cpu.cycles >= (lines - 1) * u64::from(CYCLES_PER_LINE));
         assert!(gba.cpu.cycles < u64::from(CYCLES_PER_FRAME));
         assert_eq!(gba.ppu.vcount(), 160);
     }
@@ -284,6 +295,9 @@ mod tests {
             0xE1C2_30B4,
             0xEAFF_FFFE,
         ]);
+        // The first frame is partial (boot happens on line 126), so line 0
+        // is only rendered in the second one.
+        gba.run_frame();
         gba.run_frame();
         assert_eq!(gba.framebuffer().row(0)[2], 0xFF00_00FF);
         assert_eq!(gba.framebuffer().pixels().len(), SCREEN_WIDTH * 160);

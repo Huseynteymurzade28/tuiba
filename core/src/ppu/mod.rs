@@ -100,6 +100,21 @@ impl Ppu {
         self.vcount
     }
 
+    /// Jumps to the start of scanline `line` and mirrors it into `VCOUNT`.
+    ///
+    /// Used to reproduce where the BIOS hands control to the cartridge.
+    pub fn set_line(&mut self, line: u16, io: &mut IoRegisters) {
+        self.vcount = line % LINES_PER_FRAME;
+        self.line_cycle = 0;
+        self.in_hblank = false;
+        io.set_raw16(reg::VCOUNT, self.vcount);
+        let mut stat = io.read16(reg::DISPSTAT) & !(dispstat::VBLANK | dispstat::HBLANK);
+        if (160..227).contains(&self.vcount) {
+            stat |= dispstat::VBLANK;
+        }
+        io.set_raw16(reg::DISPSTAT, stat);
+    }
+
     /// Advances the PPU by `cycles` and reports the events that occurred.
     pub fn step(&mut self, cycles: u32, io: &mut IoRegisters, video: &VideoMemory) -> Events {
         self.line_cycle += cycles;
@@ -310,6 +325,21 @@ mod tests {
         ppu.step(CYCLES_PER_LINE * 155, &mut io, &video);
         assert_eq!(ppu.vcount(), 160);
         assert_ne!(io.read16(reg::IF) & Interrupt::VBlank.mask(), 0);
+    }
+
+    #[test]
+    fn set_line_updates_vcount_and_vblank_flag() {
+        let (mut ppu, mut io, video) = setup();
+        ppu.set_line(126, &mut io);
+        assert_eq!(io.read16(reg::VCOUNT), 126);
+        assert_eq!(io.read16(reg::DISPSTAT) & dispstat::VBLANK, 0);
+        ppu.set_line(200, &mut io);
+        assert_ne!(io.read16(reg::DISPSTAT) & dispstat::VBLANK, 0);
+        ppu.set_line(126, &mut io);
+        // 34 lines to VBlank from here.
+        let events = ppu.step(CYCLES_PER_LINE * 34, &mut io, &video);
+        assert!(events.vblank);
+        assert_eq!(ppu.vcount(), 160);
     }
 
     #[test]
