@@ -7,11 +7,16 @@ version = "0.1.0"
 edition = "2024"
 rust-version = "1.85"
 license = "MIT"
+authors = ["flear <teymurzadehuseyn14@gmail.com>"]
 repository = "https://github.com/Huseynteymurzade28/tuiba"
+homepage = "https://github.com/Huseynteymurzade28/tuiba"
+readme = "README.md"
+keywords = ["gba", "emulator", "gameboy", "tui", "ratatui"]
+categories = ["emulators", "command-line-utilities", "games"]
 
 [workspace.dependencies]
 # Internal crates
-tuiba-core = { path = "core" }
+tuiba-core = { path = "core", version = "0.1.0" }
 
 # Error handling
 thiserror = "2.0"
