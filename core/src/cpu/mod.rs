@@ -273,6 +273,7 @@ impl Cpu {
         } else {
             self.regs.set(PC, pc.wrapping_add(size));
         }
+        mem.idle(internal);
         let cycles = internal + mem.take_access_cycles();
         self.cycles += u64::from(cycles);
         cycles

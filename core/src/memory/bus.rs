@@ -61,7 +61,16 @@ pub struct Bus {
     access_cycles: Cell<u32>,
     /// Address just past the previous access, for sequential detection.
     next_sequential: Cell<u32>,
+    /// Address just past the previous *cartridge* access: where the
+    /// prefetcher continues from.
+    rom_next: Cell<u32>,
+    /// Cycles the prefetcher has had to itself since the last cartridge
+    /// access; every `S` cycles buffer one more halfword.
+    prefetch_cycles: Cell<u32>,
 }
+
+/// Halfwords the prefetch buffer can hold.
+const PREFETCH_DEPTH: u32 = 8;
 
 impl Bus {
     /// Creates a bus with the given cartridge and an all-zero BIOS.
@@ -82,6 +91,8 @@ impl Bus {
             wait: WaitStates::default(),
             access_cycles: Cell::new(0),
             next_sequential: Cell::new(u32::MAX),
+            rom_next: Cell::new(u32::MAX),
+            prefetch_cycles: Cell::new(0),
         }
     }
 
@@ -89,11 +100,32 @@ impl Bus {
     ///
     /// An access is sequential when it continues directly from the
     /// previous one; the cartridge additionally restarts at every 128 KiB
-    /// boundary.
+    /// boundary. With prefetch enabled, the cartridge keeps fetching
+    /// halfwords on its own whenever the bus is busy elsewhere, and an
+    /// access that continues from the last cartridge access takes one
+    /// cycle per halfword already buffered.
     #[inline]
     fn account(&self, address: u32, width: u32) {
-        let sequential = address == self.next_sequential.get() && address & 0x1_FFFF != 0;
-        let cycles = self.wait.page(address).cycles(width, sequential);
+        let page = self.wait.page(address);
+        let continues = |from: u32| address == from && address & 0x1_FFFF != 0;
+        let cycles = if (0x08..=0x0D).contains(&(address >> 24)) {
+            let cycles = if self.wait.prefetch && continues(self.rom_next.get()) {
+                let halfwords = width.div_ceil(2);
+                let buffered =
+                    (self.prefetch_cycles.get() / u32::from(page.s16)).min(PREFETCH_DEPTH);
+                let hit = buffered.min(halfwords);
+                hit + (halfwords - hit) * u32::from(page.s16)
+            } else {
+                page.cycles(width, continues(self.next_sequential.get()))
+            };
+            self.rom_next.set(address.wrapping_add(width));
+            self.prefetch_cycles.set(0);
+            cycles
+        } else {
+            let cycles = page.cycles(width, address == self.next_sequential.get());
+            self.idle(cycles);
+            cycles
+        };
         self.access_cycles.set(self.access_cycles.get() + cycles);
         self.next_sequential.set(address.wrapping_add(width));
     }
@@ -346,6 +378,14 @@ impl Memory for Bus {
     fn take_access_cycles(&self) -> u32 {
         self.access_cycles.replace(0)
     }
+
+    fn idle(&self, cycles: u32) {
+        // The buffer is at most PREFETCH_DEPTH halfwords deep; the cap
+        // uses the slowest possible S timing so no setting overflows it.
+        const CAP: u32 = PREFETCH_DEPTH * 9;
+        self.prefetch_cycles
+            .set((self.prefetch_cycles.get() + cycles).min(CAP));
+    }
 }
 
 #[cfg(test)]
@@ -435,6 +475,52 @@ mod tests {
         bus.read8(base::SRAM);
         assert_eq!(bus.take_access_cycles(), 5);
         assert_eq!(bus.take_access_cycles(), 0, "taking resets");
+    }
+
+    #[test]
+    fn prefetch_serves_sequential_fetches_after_idle_time() {
+        let mut bus = bus();
+        // Without prefetch, leaving the cartridge makes the next access N.
+        bus.read16(base::ROM_WS0 + 0x100);
+        bus.read32(base::IWRAM);
+        bus.take_access_cycles();
+        bus.read16(base::ROM_WS0 + 0x102);
+        assert_eq!(bus.take_access_cycles(), 5);
+
+        // Prefetch on, WS0 = 4/2.
+        bus.write16(base::IO + reg::WAITCNT, 0x4317);
+        bus.read16(base::ROM_WS0 + 0x200);
+        bus.take_access_cycles();
+        bus.read32(base::IWRAM); // 1 idle cycle: not enough for a halfword
+        bus.take_access_cycles();
+        bus.read16(base::ROM_WS0 + 0x202);
+        assert_eq!(
+            bus.take_access_cycles(),
+            2,
+            "continues, but nothing buffered yet"
+        );
+        bus.read16(base::ROM_WS0 + 0x204);
+        assert_eq!(bus.take_access_cycles(), 2, "back to back: plain S");
+        bus.idle(2);
+        bus.read16(base::ROM_WS0 + 0x206);
+        assert_eq!(bus.take_access_cycles(), 1, "one buffered halfword");
+        bus.idle(100);
+        bus.read32(base::ROM_WS0 + 0x208);
+        assert_eq!(bus.take_access_cycles(), 2, "word from the buffer");
+        bus.read32(base::ROM_WS0 + 0x20C);
+        assert_eq!(bus.take_access_cycles(), 4, "buffer drained: S + S");
+        bus.idle(100);
+        bus.read16(base::ROM_WS0 + 0x400);
+        assert_eq!(bus.take_access_cycles(), 4, "a jump is N, buffer discarded");
+        bus.idle(100);
+        for i in 0..8 {
+            bus.read16(base::ROM_WS0 + 0x402 + i * 2);
+        }
+        assert_eq!(
+            bus.take_access_cycles(),
+            1 + 7 * 2,
+            "the buffer holds 8 halfwords"
+        );
     }
 
     #[test]

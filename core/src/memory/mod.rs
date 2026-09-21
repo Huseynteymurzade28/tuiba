@@ -61,6 +61,12 @@ pub trait Memory {
     fn take_access_cycles(&self) -> u32 {
         0
     }
+
+    /// Reports `cycles` during which the bus was idle (the CPU was busy
+    /// internally), so the cartridge prefetcher can work ahead.
+    fn idle(&self, cycles: u32) {
+        let _ = cycles;
+    }
 }
 
 /// Size of the BIOS ROM in bytes.
