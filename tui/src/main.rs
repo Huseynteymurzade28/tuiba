@@ -23,7 +23,7 @@ use crossterm::execute;
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::Style;
-use ratatui::text::Line;
+use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Paragraph};
 use tuiba_core::{Cartridge, Gba};
 
@@ -126,30 +126,42 @@ impl App {
         } else {
             "half-blocks"
         };
-        let keys = if self.keypad.has_release_events() {
-            "kitty"
-        } else {
-            "timeout"
-        };
         let now = Instant::now();
         let swi_hint = self
             .gba
             .last_unsupported_swi
             .map(|n| format!("  [unsupported SWI {n:#04x}]"))
             .unwrap_or_default();
-        let debug = format!(
-            "pc={:#010x} {:?}{} dispcnt={:#06x}",
-            self.gba.cpu.next_pc(),
-            self.gba.cpu.regs.mode(),
-            if self.gba.cpu.halted { " halt" } else { "" },
-            self.gba.bus.io.read16(tuiba_core::memory::io::reg::DISPCNT),
-        );
-        let status = Line::from(format!(
-            " {}{size_hint}{swi_hint}  {:.1} fps  {renderer}  {debug}  keys:{keys} [{}]  Esc: library  Ctrl+Q: quit",
-            self.title,
-            self.fps,
-            self.held_buttons(now)
-        ));
+        let held = self.held_buttons(now);
+        let held = if held.is_empty() {
+            String::new()
+        } else {
+            format!("  [{held}]")
+        };
+        // Without release events a key counts as held until it times out;
+        // worth knowing when a game feels sticky.
+        let keys = if self.keypad.has_release_events() {
+            ""
+        } else {
+            "  keys: timeout"
+        };
+        let status = Line::from(vec![
+            Span::styled(
+                format!(" {}  ", self.title),
+                theme::text().bg(theme::SURFACE),
+            ),
+            Span::styled(
+                format!(
+                    "{:.0} fps  {renderer}{size_hint}{keys}{swi_hint}{held}",
+                    self.fps
+                ),
+                Style::default().fg(theme::DIM).bg(theme::SURFACE),
+            ),
+            Span::styled("   esc ", theme::key()),
+            Span::styled("library  ", theme::hint()),
+            Span::styled(" ctrl+q ", theme::key()),
+            Span::styled("quit", theme::hint()),
+        ]);
         frame.render_widget(
             Paragraph::new(status).style(Style::default().fg(theme::DIM).bg(theme::SURFACE)),
             status_area,
@@ -269,8 +281,17 @@ fn play(
     graphics: bool,
 ) -> Result<GameExit, AppError> {
     let gba = load_gba(rom)?;
+    let header_title = gba.bus.cartridge.header().title.trim().to_string();
+    let title = if header_title.is_empty() {
+        // Untitled homebrew: fall back to the file name.
+        rom.file_stem()
+            .map(|s| s.to_string_lossy().into_owned())
+            .unwrap_or_default()
+    } else {
+        header_title
+    };
     let mut app = App {
-        title: gba.bus.cartridge.header().title.clone(),
+        title,
         gba,
         keypad: Keypad::new(release_events),
         graphics: (graphics && graphics::terminal_supports_kitty_graphics())

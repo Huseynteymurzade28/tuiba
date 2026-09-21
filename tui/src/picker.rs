@@ -16,7 +16,7 @@ use crate::library::{Library, Rom, compact_home, expand_home, human_size};
 use crate::theme;
 
 /// Two-row half-block wordmark.
-const LOGO: [&str; 2] = ["▀█▀ █ █ █ █▀▄ ▄▀▄", " █  █▄█ █ █▄▀ █▀█"];
+const LOGO: [&str; 2] = ["▀█▀ █ █ █ █▀▄ ▄▀▄", " █  █▄█ █ █▀▄ █▀█"];
 
 /// What the user decided.
 #[derive(Debug, Clone, PartialEq, Eq)]
