@@ -18,11 +18,60 @@ const SCREEN_BLOCK: usize = 0x800;
 /// Upper bound of background tile data in VRAM; object tiles live above.
 const BG_VRAM_END: usize = 0x1_0000;
 
+/// Decoded `MOSAIC`: block sizes in pixels (1 = off).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Mosaic {
+    /// Background block width.
+    pub bg_h: usize,
+    /// Background block height.
+    pub bg_v: usize,
+    /// Object block width.
+    pub obj_h: usize,
+    /// Object block height.
+    pub obj_v: usize,
+}
+
+impl Mosaic {
+    /// Reads `MOSAIC`; each nibble stores the size minus one.
+    #[must_use]
+    pub fn read(io: &IoRegisters) -> Self {
+        let v = io.read16(reg::MOSAIC);
+        let size = |shift: u32| usize::from((v >> shift) & 0xF) + 1;
+        Self {
+            bg_h: size(0),
+            bg_v: size(4),
+            obj_h: size(8),
+            obj_v: size(12),
+        }
+    }
+}
+
+/// Snaps `coord` to the top/left edge of its `size`-pixel mosaic block.
+#[inline]
+#[must_use]
+pub const fn mosaic_snap(coord: usize, size: usize) -> usize {
+    coord - coord % size
+}
+
+/// Applies horizontal mosaic to a rendered line: every pixel takes the
+/// colour of the first pixel of its block.
+pub fn mosaic_h(line: &mut [u16; SCREEN_WIDTH], size: usize) {
+    if size <= 1 {
+        return;
+    }
+    for block in line.chunks_mut(size) {
+        let first = block[0];
+        block.fill(first);
+    }
+}
+
 /// Decoded `BGxCNT`.
 #[derive(Debug, Clone, Copy)]
 pub struct BgControl {
     /// Drawing priority, 0 (front) to 3 (back).
     pub priority: u8,
+    /// Whether the mosaic effect applies to this background.
+    pub mosaic: bool,
     /// Byte offset of tile data in VRAM.
     pub char_base: usize,
     /// Byte offset of the tile map in VRAM.
@@ -42,6 +91,7 @@ impl BgControl {
         let cnt = io.read16(reg::BG0CNT + 2 * bg as u32);
         Self {
             priority: (cnt & 0b11) as u8,
+            mosaic: cnt & (1 << 6) != 0,
             char_base: usize::from((cnt >> 2) & 0b11) * CHAR_BLOCK,
             screen_base: usize::from((cnt >> 8) & 0x1F) * SCREEN_BLOCK,
             color_256: cnt & (1 << 7) != 0,
@@ -232,6 +282,40 @@ mod tests {
         video.palette[(16 + 1) * 2..(16 + 1) * 2 + 2].copy_from_slice(&0x001Fu16.to_le_bytes());
         video.palette[5 * 2..5 * 2 + 2].copy_from_slice(&0x03E0u16.to_le_bytes());
         (IoRegisters::new(), video)
+    }
+
+    #[test]
+    fn mosaic_register_and_horizontal_pass() {
+        let (mut io, _) = setup();
+        assert_eq!(
+            Mosaic::read(&io),
+            Mosaic {
+                bg_h: 1,
+                bg_v: 1,
+                obj_h: 1,
+                obj_v: 1
+            }
+        );
+        io.write16(reg::MOSAIC, 0xF321);
+        assert_eq!(
+            Mosaic::read(&io),
+            Mosaic {
+                bg_h: 2,
+                bg_v: 3,
+                obj_h: 4,
+                obj_v: 16
+            }
+        );
+        assert_eq!(mosaic_snap(7, 3), 6);
+        assert_eq!(mosaic_snap(7, 1), 7);
+
+        let mut line: [u16; SCREEN_WIDTH] = std::array::from_fn(|x| x as u16);
+        mosaic_h(&mut line, 1);
+        assert_eq!(line[5], 5, "size 1 is a no-op");
+        mosaic_h(&mut line, 7);
+        assert_eq!(&line[..8], &[0, 0, 0, 0, 0, 0, 0, 7]);
+        // 240 = 34 * 7 + 2: the last, partial block still snaps.
+        assert_eq!(&line[238..], &[238, 238]);
     }
 
     #[test]

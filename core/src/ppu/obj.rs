@@ -8,7 +8,7 @@
 use crate::memory::VideoMemory;
 use crate::memory::io::{IoRegisters, reg};
 use crate::ppu::framebuffer::SCREEN_WIDTH;
-use crate::ppu::tiled::TRANSPARENT;
+use crate::ppu::tiled::{Mosaic, TRANSPARENT, mosaic_snap};
 
 /// Start of object tile data in VRAM.
 const OBJ_VRAM_BASE: usize = 0x1_0000;
@@ -42,6 +42,7 @@ struct Object {
     palette: usize,
     /// Attribute 0 bits 11:10: 1 = semi-transparent, 2 = object window.
     mode: u8,
+    mosaic: bool,
 }
 
 impl Object {
@@ -89,6 +90,7 @@ impl Object {
             priority: ((a2 >> 10) & 0b11) as u8,
             palette: usize::from(a2 >> 12),
             mode: ((a0 >> 10) & 0b11) as u8,
+            mosaic: a0 & (1 << 12) != 0,
         })
     }
 
@@ -189,6 +191,7 @@ pub fn render_line(io: &IoRegisters, video: &VideoMemory, y: usize, out: &mut Ob
     let dispcnt = io.read16(reg::DISPCNT);
     let one_dimensional = dispcnt & (1 << 6) != 0;
     let bitmap_mode = (dispcnt & 0x7) >= 3;
+    let mosaic = Mosaic::read(io);
     let y = y as i32;
 
     for index in 0..OBJ_COUNT {
@@ -200,7 +203,14 @@ pub fn render_line(io: &IoRegisters, video: &VideoMemory, y: usize, out: &mut Ob
             continue;
         }
         let is_window = obj.mode == 2;
-        let iy = (y - obj.y) as usize;
+        // Mosaic snaps to a screen-aligned grid, but never samples above
+        // or left of the object itself.
+        let src_y = if obj.mosaic {
+            (mosaic_snap(y as usize, mosaic.obj_v) as i32).max(obj.y)
+        } else {
+            y
+        };
+        let iy = (src_y - obj.y) as usize;
 
         let matrix = obj.affine.map(|i| affine_params(video, i));
         let (half_w, half_h) = (box_w as i32 / 2, box_h as i32 / 2);
@@ -214,6 +224,11 @@ pub fn render_line(io: &IoRegisters, video: &VideoMemory, y: usize, out: &mut Ob
             if !is_window && colors[sx] != TRANSPARENT {
                 continue; // an earlier object already owns this pixel
             }
+            let ix = if obj.mosaic {
+                (mosaic_snap(sx, mosaic.obj_h) as i32 - obj.x).max(0) as usize
+            } else {
+                ix
+            };
 
             let (tx, ty) = if let Some([pa, pb, pc, pd]) = matrix {
                 let (dx, dy) = (ix as i32 - half_w, iy as i32 - half_h);
@@ -298,6 +313,36 @@ mod tests {
         );
         let (colors, _) = render(&io, &video, 25);
         assert_eq!(colors[16], 0x001F);
+    }
+
+    #[test]
+    fn mosaic_spreads_the_block_origin_pixel() {
+        const MOSAIC_ATTR: u16 = 1 << 12;
+        let (mut io, mut video) = setup();
+        // Tile 4, 4bpp: only pixel (0, 0) is colour 1.
+        video.vram[OBJ_VRAM_BASE + 4 * 32] = 0x01;
+        io.write16(reg::MOSAIC, 0x1100); // 2×2 object blocks
+        // OBJ 0 at (10, 20) with mosaic (attr0 bit 12), palette 1.
+        write_oam(&mut video, 0, MOSAIC_ATTR + 20, 10, 4 | (1 << 12));
+        for y in 20..22 {
+            let (colors, _) = render(&io, &video, y);
+            assert_eq!(&colors[10..12], &[0x001F; 2], "line {y}");
+            assert_eq!(colors[12], TRANSPARENT);
+        }
+        assert_eq!(render(&io, &video, 22).0[10], TRANSPARENT);
+
+        // Off-grid object: the block origin lies left of the sprite, so
+        // sampling clamps to its first column instead of vanishing.
+        write_oam(&mut video, 0, MOSAIC_ATTR + 20, 11, 4 | (1 << 12));
+        let (colors, _) = render(&io, &video, 20);
+        assert_eq!(colors[11], 0x001F);
+        assert_eq!(colors[12], TRANSPARENT);
+
+        // Without the attribute bit the register has no effect.
+        write_oam(&mut video, 0, 20, 10, 4 | (1 << 12));
+        let (colors, _) = render(&io, &video, 20);
+        assert_eq!(colors[10], 0x001F);
+        assert_eq!(colors[11], TRANSPARENT);
     }
 
     #[test]

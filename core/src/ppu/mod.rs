@@ -23,7 +23,7 @@ pub use framebuffer::{Framebuffer, Rgba, SCREEN_HEIGHT, SCREEN_WIDTH};
 use crate::memory::VideoMemory;
 use crate::memory::io::{Interrupt, IoRegisters, reg};
 use framebuffer::bgr555_to_rgba;
-use tiled::{BgControl, TRANSPARENT};
+use tiled::{BgControl, Mosaic, TRANSPARENT};
 
 /// Cycles per scanline.
 pub const CYCLES_PER_LINE: u32 = 1232;
@@ -194,18 +194,30 @@ impl Ppu {
             _ => ([false; 4], [false; 4]),
         };
 
+        let mosaic = Mosaic::read(io);
         for bg in 0..4 {
             enabled[bg] &= available[bg];
             if !enabled[bg] {
                 continue;
             }
+            let control = BgControl::read(io, bg);
+            // Mosaic backgrounds repeat the first line of each block: draw
+            // that line instead, then spread pixels across the block.
+            let src_y = if control.mosaic {
+                tiled::mosaic_snap(y, mosaic.bg_v)
+            } else {
+                y
+            };
             let line = &mut self.bg_lines[bg];
             match mode {
-                3 => bitmap::render_mode3(video, y, line),
-                4 => bitmap::render_mode4(video, frame1, y, line),
-                5 => bitmap::render_mode5(video, frame1, y, line),
-                _ if affine[bg] => tiled::render_affine(io, video, bg, y, line),
-                _ => tiled::render_text(io, video, bg, y, line),
+                3 => bitmap::render_mode3(video, src_y, line),
+                4 => bitmap::render_mode4(video, frame1, src_y, line),
+                5 => bitmap::render_mode5(video, frame1, src_y, line),
+                _ if affine[bg] => tiled::render_affine(io, video, bg, src_y, line),
+                _ => tiled::render_text(io, video, bg, src_y, line),
+            }
+            if control.mosaic {
+                tiled::mosaic_h(line, mosaic.bg_h);
             }
         }
 
@@ -316,6 +328,31 @@ mod tests {
         assert_eq!(ppu.framebuffer.row(0)[0], 0x0000_00FF, "not rendered yet");
         ppu.step(1, &mut io, &video);
         assert_eq!(ppu.framebuffer.row(0)[0], 0xFF00_00FF);
+    }
+
+    #[test]
+    fn background_mosaic_snaps_to_blocks() {
+        let (mut ppu, mut io, mut video) = setup();
+        // Mode 3 with BG2 mosaic; 4×3 blocks.
+        io.write16(reg::DISPCNT, 0x0403);
+        io.write16(reg::BG2CNT, 1 << 6);
+        io.write16(reg::MOSAIC, 0x23);
+        // Pixel (x, y) = colour x + 32 * y, so each is unique.
+        for y in 0..8 {
+            for x in 0..16 {
+                let c = (x + 32 * y) as u16;
+                let o = (y * SCREEN_WIDTH + x) * 2;
+                video.vram[o..o + 2].copy_from_slice(&c.to_le_bytes());
+            }
+        }
+        ppu.step(CYCLES_PER_LINE * 5, &mut io, &video);
+        let px = |x: usize, y: usize| ppu.framebuffer.row(y)[x] >> 8 & 0xFF;
+        let expect = |x: usize, y: usize| bgr555_to_rgba((x + 32 * y) as u16) >> 8 & 0xFF;
+        assert_eq!(px(0, 0), expect(0, 0));
+        assert_eq!(px(3, 0), expect(0, 0), "x snaps to the block start");
+        assert_eq!(px(4, 0), expect(4, 0));
+        assert_eq!(px(5, 2), expect(4, 0), "y snaps to the block top");
+        assert_eq!(px(9, 4), expect(8, 3));
     }
 
     #[test]
