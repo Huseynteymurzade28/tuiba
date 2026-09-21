@@ -222,8 +222,11 @@ fn library_loop(
                     Err(AppError::Core(err)) => picker.notify_error(err.to_string()),
                     Err(err) => return Err(err),
                 }
+                // No explicit clear: the next draw diffs against the game's
+                // last frame and repaints every cell that differs. (Ratatui's
+                // `clear` also queries the cursor position, which some
+                // terminals never answer, killing the loop with an I/O error.)
                 picker.rescan();
-                terminal.clear()?;
             }
         }
     }
