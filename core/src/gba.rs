@@ -154,12 +154,25 @@ impl Gba {
             // The transfer needs the whole bus, so the controller state is
             // moved out for its duration.
             let mut controller = std::mem::take(&mut self.bus.io.dma);
+            self.hint_eeprom(&controller.channels[n], n);
             let irq = dma::run(&mut controller, n, &mut self.bus);
             self.bus.io.dma = controller;
             if let Some(irq) = irq {
                 self.bus.io.request_interrupt(irq);
             }
         }
+    }
+
+    /// EEPROM chips cannot tell their own size; the length of the DMA that
+    /// carries a request can (see [`memory::eeprom`]).
+    fn hint_eeprom(&mut self, channel: &dma::Channel, n: usize) {
+        if !channel.enabled() {
+            return;
+        }
+        let (src, dst) = channel.latched_addresses();
+        let units = channel.unit_count(n);
+        self.bus.hint_eeprom_transfer(src, units);
+        self.bus.hint_eeprom_transfer(dst, units);
     }
 
     fn service_swi(&mut self, number: u8) {
@@ -379,6 +392,56 @@ mod tests {
         assert_eq!(gba.bus.read16(base::VRAM), 1);
         assert_eq!(gba.bus.read16(base::VRAM + 6), 4);
         assert_eq!(gba.bus.io.read16(reg::DMA3CNT_H) & 0x8000, 0, "done");
+    }
+
+    #[test]
+    fn eeprom_is_driven_by_dma3() {
+        let mut rom = rom_with_header("TEST", 0x1000);
+        rom[..4].copy_from_slice(&0xEAFF_FFFE_u32.to_le_bytes()); // b .
+        rom[0x200..0x209].copy_from_slice(b"EEPROM_V1");
+        let mut gba = Gba::new(Cartridge::from_bytes(rom).unwrap());
+        let dma3 = |gba: &mut Gba, src: u32, dst: u32, units: u32| {
+            gba.bus.io.write32(reg::DMA0SAD + 12 * 3, src);
+            gba.bus.io.write32(reg::DMA0SAD + 12 * 3 + 4, dst);
+            gba.bus
+                .io
+                .write32(reg::DMA0SAD + 12 * 3 + 8, 0x8000_0000 | units);
+            gba.step();
+        };
+        let buffer = base::EWRAM;
+        let put_bits = |gba: &mut Gba, bits: &[u16]| {
+            for (i, &bit) in bits.iter().enumerate() {
+                gba.bus.write16(buffer + i as u32 * 2, bit);
+            }
+        };
+
+        // Write request for a 512 B chip: `10`, 6-bit address 5, 64 data
+        // bits (0x80...01), stop bit — 73 halfwords, which fixes the size.
+        let mut request = vec![1, 0, 0, 0, 0, 1, 0, 1];
+        request.extend((0..64).map(|i| u16::from(i == 0 || i == 63)));
+        request.push(0);
+        put_bits(&mut gba, &request);
+        dma3(&mut gba, buffer, 0x0D00_0000, 73);
+        assert_eq!(gba.save_data().len(), 0x200, "size learnt from the DMA");
+        assert_eq!(&gba.save_data()[5 * 8..6 * 8], &[0x80, 0, 0, 0, 0, 0, 0, 1]);
+
+        // Read request: `11`, address 5, stop bit — 9 halfwords — then fetch
+        // the 68-bit reply.
+        put_bits(&mut gba, &[1, 1, 0, 0, 0, 1, 0, 1, 0]);
+        dma3(&mut gba, buffer, 0x0D00_0000, 9);
+        dma3(&mut gba, 0x0D00_0000, buffer, 68);
+        let reply: Vec<u16> = (0..68)
+            .map(|i| gba.bus.read16(buffer + i * 2) & 1)
+            .collect();
+        let mut expected = vec![0; 4];
+        expected.extend((0..64).map(|i| u16::from(i == 0 || i == 63)));
+        assert_eq!(reply, expected);
+        assert_eq!(gba.bus.read16(0x0D00_0000), 1, "ready again");
+
+        // Loading a save restores the chip.
+        let mut other = Gba::new(Cartridge::from_bytes(gba.bus.cartridge.rom().to_vec()).unwrap());
+        other.load_save_data(gba.save_data());
+        assert_eq!(other.save_data(), gba.save_data());
     }
 
     #[test]

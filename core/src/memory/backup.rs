@@ -1,5 +1,7 @@
-//! Cartridge backup memory: SRAM and flash, selected by the save-type
-//! signature Nintendo's SDK embeds in every ROM.
+//! Cartridge backup memory: SRAM, flash and EEPROM, selected by the
+//! save-type signature Nintendo's SDK embeds in every ROM.
+
+use crate::memory::eeprom::Eeprom;
 
 /// The kind of backup chip a cartridge carries.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -12,7 +14,7 @@ pub enum SaveType {
     Flash64K,
     /// 128 KiB flash in two banks.
     Flash128K,
-    /// Serial EEPROM (not emulated yet).
+    /// Serial EEPROM, mapped in the ROM area rather than at `0x0E00_0000`.
     Eeprom,
 }
 
@@ -163,13 +165,18 @@ impl Flash {
     }
 }
 
-/// The backup device mapped at `0x0E00_0000`.
+/// The cartridge's backup device.
+///
+/// SRAM and flash answer byte accesses at `0x0E00_0000`; EEPROM instead
+/// answers halfword accesses at `0x0D00_0000` (see [`Bus`](crate::Bus)).
 #[derive(Debug, Clone)]
 pub enum Backup {
     /// Plain byte-addressed RAM.
     Sram(Box<[u8]>),
     /// Command-driven flash.
     Flash(Flash),
+    /// Bit-serial EEPROM.
+    Eeprom(Eeprom),
 }
 
 impl Backup {
@@ -179,20 +186,23 @@ impl Backup {
         match save_type {
             SaveType::Flash64K => Self::Flash(Flash::new(0x1_0000)),
             SaveType::Flash128K => Self::Flash(Flash::new(0x2_0000)),
+            SaveType::Eeprom => Self::Eeprom(Eeprom::new()),
             _ => Self::Sram(vec![0xFF; 0x8000].into_boxed_slice()),
         }
     }
 
-    /// Reads a byte at `offset` within the region.
+    /// Reads a byte at `offset` within the SRAM region. EEPROM carts have
+    /// nothing there and read back as open bus.
     #[must_use]
     pub fn read(&self, offset: u32) -> u8 {
         match self {
             Self::Sram(data) => data[offset as usize % data.len()],
             Self::Flash(flash) => flash.read(offset),
+            Self::Eeprom(_) => 0xFF,
         }
     }
 
-    /// Writes a byte at `offset` within the region.
+    /// Writes a byte at `offset` within the SRAM region.
     pub fn write(&mut self, offset: u32, value: u8) {
         match self {
             Self::Sram(data) => {
@@ -200,6 +210,24 @@ impl Backup {
                 data[i] = value;
             }
             Self::Flash(flash) => flash.write(offset, value),
+            Self::Eeprom(_) => {}
+        }
+    }
+
+    /// The EEPROM chip, if this cartridge has one.
+    #[must_use]
+    pub fn eeprom(&self) -> Option<&Eeprom> {
+        match self {
+            Self::Eeprom(eeprom) => Some(eeprom),
+            _ => None,
+        }
+    }
+
+    /// Mutable access to the EEPROM chip, if this cartridge has one.
+    pub fn eeprom_mut(&mut self) -> Option<&mut Eeprom> {
+        match self {
+            Self::Eeprom(eeprom) => Some(eeprom),
+            _ => None,
         }
     }
 
@@ -209,6 +237,7 @@ impl Backup {
         match self {
             Self::Sram(data) => data,
             Self::Flash(flash) => flash.data(),
+            Self::Eeprom(eeprom) => eeprom.data(),
         }
     }
 
@@ -220,6 +249,7 @@ impl Backup {
                 sram[..n].copy_from_slice(&data[..n]);
             }
             Self::Flash(flash) => flash.load(data),
+            Self::Eeprom(eeprom) => eeprom.load(data),
         }
     }
 }

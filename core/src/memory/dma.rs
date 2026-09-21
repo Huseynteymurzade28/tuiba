@@ -43,6 +43,12 @@ impl Channel {
     const REPEAT: u16 = 1 << 9;
     const WORD: u16 = 1 << 10;
 
+    /// The `(source, destination)` the next transfer will start from.
+    #[must_use]
+    pub fn latched_addresses(&self) -> (u32, u32) {
+        (self.latched_source, self.latched_dest)
+    }
+
     /// Whether the channel is armed.
     #[must_use]
     pub fn enabled(&self) -> bool {
@@ -61,7 +67,8 @@ impl Channel {
     }
 
     /// Number of units to transfer; `0` means the maximum.
-    fn unit_count(&self, channel: usize) -> u32 {
+    #[must_use]
+    pub fn unit_count(&self, channel: usize) -> u32 {
         let max = if channel == 3 { 0x1_0000 } else { 0x4000 };
         if self.count == 0 {
             max

@@ -24,6 +24,7 @@ pub mod backup;
 pub mod bus;
 pub mod cartridge;
 pub mod dma;
+pub mod eeprom;
 pub mod io;
 pub mod timers;
 pub mod video;

@@ -96,6 +96,35 @@ impl Bus {
         self.bios.copy_from_slice(bios);
         Ok(())
     }
+
+    /// Whether a ROM-area address reaches the EEPROM chip instead of the
+    /// ROM: the whole `0x0D` page for carts up to 16 MiB, only its top
+    /// 256 bytes for larger ones.
+    #[must_use]
+    pub fn is_eeprom_address(&self, address: u32) -> bool {
+        address >> 24 == 0x0D
+            && self.backup.eeprom().is_some()
+            && (self.cartridge.rom().len() <= 0x100_0000 || address & 0x00FF_FFFF >= 0x00FF_FF00)
+    }
+
+    /// Lets the EEPROM learn its size from a DMA transfer length.
+    pub fn hint_eeprom_transfer(&mut self, address: u32, units: u32) {
+        if self.is_eeprom_address(address) {
+            if let Some(eeprom) = self.backup.eeprom_mut() {
+                eeprom.hint_transfer_len(units);
+            }
+        }
+    }
+
+    fn eeprom_read(&self) -> u16 {
+        self.backup.eeprom().map_or(1, super::eeprom::Eeprom::read)
+    }
+
+    fn eeprom_write(&mut self, value: u16) {
+        if let Some(eeprom) = self.backup.eeprom_mut() {
+            eeprom.write(value);
+        }
+    }
 }
 
 impl Memory for Bus {
@@ -110,6 +139,7 @@ impl Memory for Bus {
             Some(MemoryRegion::Palette) => self.video.palette[VideoMemory::palette_index(off)],
             Some(MemoryRegion::Vram) => self.video.vram[VideoMemory::vram_index(off)],
             Some(MemoryRegion::Oam) => self.video.oam[VideoMemory::oam_index(off)],
+            Some(MemoryRegion::Rom) if self.is_eeprom_address(address) => self.eeprom_read() as u8,
             Some(MemoryRegion::Rom) => self.cartridge.read8(address & 0x01FF_FFFF),
             Some(MemoryRegion::Sram) => self.backup.read(off),
             None => 0,
@@ -133,6 +163,7 @@ impl Memory for Bus {
             }
             Some(MemoryRegion::Vram) => get16(&self.video.vram, VideoMemory::vram_index(off)),
             Some(MemoryRegion::Oam) => get16(&self.video.oam, VideoMemory::oam_index(off)),
+            Some(MemoryRegion::Rom) if self.is_eeprom_address(address) => self.eeprom_read(),
             Some(MemoryRegion::Rom) => self.cartridge.read16(address & 0x01FF_FFFF),
             // SRAM is on an 8-bit bus: the byte is repeated across the halfword.
             Some(MemoryRegion::Sram) => u16::from(self.read8(address)) * 0x0101,
@@ -157,6 +188,9 @@ impl Memory for Bus {
             }
             Some(MemoryRegion::Vram) => get32(&self.video.vram, VideoMemory::vram_index(off)),
             Some(MemoryRegion::Oam) => get32(&self.video.oam, VideoMemory::oam_index(off)),
+            Some(MemoryRegion::Rom) if self.is_eeprom_address(address) => {
+                u32::from(self.eeprom_read()) | u32::from(self.eeprom_read()) << 16
+            }
             Some(MemoryRegion::Rom) => self.cartridge.read32(address & 0x01FF_FFFF),
             Some(MemoryRegion::Sram) => u32::from(self.read8(address)) * 0x0101_0101,
             None => 0,
@@ -187,6 +221,9 @@ impl Memory for Bus {
                 }
             }
             Some(MemoryRegion::Sram) => self.backup.write(off, value),
+            Some(MemoryRegion::Rom) if self.is_eeprom_address(address) => {
+                self.eeprom_write(u16::from(value));
+            }
             Some(MemoryRegion::Bios | MemoryRegion::Oam | MemoryRegion::Rom) | None => {}
         }
     }
@@ -218,6 +255,7 @@ impl Memory for Bus {
             }
             // 8-bit bus: only the low byte reaches the chip.
             Some(MemoryRegion::Sram) => self.write8(address, value as u8),
+            Some(MemoryRegion::Rom) if self.is_eeprom_address(address) => self.eeprom_write(value),
             Some(MemoryRegion::Bios | MemoryRegion::Rom) | None => {}
         }
     }
@@ -248,6 +286,10 @@ impl Memory for Bus {
                 set32(&mut self.video.oam, VideoMemory::oam_index(off), value);
             }
             Some(MemoryRegion::Sram) => self.write8(address, value as u8),
+            Some(MemoryRegion::Rom) if self.is_eeprom_address(address) => {
+                self.eeprom_write(value as u16);
+                self.eeprom_write((value >> 16) as u16);
+            }
             Some(MemoryRegion::Bios | MemoryRegion::Rom) | None => {}
         }
     }
