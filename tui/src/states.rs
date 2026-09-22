@@ -331,7 +331,7 @@ fn describe(slot: &Slot) -> String {
 
 /// "just now", "4 minutes ago", "3 days ago" — relative, so no timezone
 /// has to be guessed at to say something true.
-fn ago(at: SystemTime) -> String {
+pub fn ago(at: SystemTime) -> String {
     let Ok(elapsed) = SystemTime::now().duration_since(at) else {
         // A file from the future: a clock that moved, not worth a story.
         return "just now".to_string();

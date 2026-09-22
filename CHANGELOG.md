@@ -4,6 +4,16 @@ All notable changes to tuiba. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow
 [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+- The library shows the frame a cartridge was last left on, beside its
+  details. The frame is written to the cache directory
+  (`~/.cache/tuiba/previews`, `%LOCALAPPDATA%\tuiba\previews` on
+  Windows) whenever a save state is taken and when a game is left, so it
+  is where you actually were rather than a title screen. It appears when
+  the window is wide enough for it not to crowd out the details. (#19)
+
 ## [0.4.0] – 2026-09-22
 
 ### Added

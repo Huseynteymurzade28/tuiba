@@ -21,7 +21,11 @@ pub const CELL_WIDTH: u16 = SCREEN_WIDTH as u16;
 pub const CELL_HEIGHT: u16 = (SCREEN_HEIGHT / 2) as u16;
 
 /// Largest downscale factor worth trying before giving up and cropping.
+/// Past 1:8 a frame stops being a picture of the game and starts being a
+/// smudge — unless it is a thumbnail, where being small is the point.
 const MAX_SCALE: u16 = 8;
+/// How far a thumbnail may shrink: 1:12 puts a whole frame in 20×7 cells.
+const MAX_THUMBNAIL_SCALE: u16 = 12;
 
 /// Renders a borrowed [`Framebuffer`], centred in the area.
 ///
@@ -31,23 +35,50 @@ const MAX_SCALE: u16 = 8;
 #[derive(Debug, Clone, Copy)]
 pub struct GbaScreen<'a> {
     framebuffer: &'a Framebuffer,
+    /// How far this rendering may shrink the frame before it crops
+    /// instead.
+    max_scale: u16,
 }
 
 impl<'a> GbaScreen<'a> {
     /// Wraps a framebuffer for rendering.
     #[must_use]
     pub const fn new(framebuffer: &'a Framebuffer) -> Self {
-        Self { framebuffer }
+        Self {
+            framebuffer,
+            max_scale: MAX_SCALE,
+        }
+    }
+
+    /// The same, for a frame that is meant to be small: it may shrink
+    /// further rather than lose its edges to a crop.
+    #[must_use]
+    pub const fn thumbnail(framebuffer: &'a Framebuffer) -> Self {
+        Self {
+            framebuffer,
+            max_scale: MAX_THUMBNAIL_SCALE,
+        }
     }
 
     /// The reduction factor used for `area` (1 = full resolution).
     #[must_use]
     pub fn scale_for(area: Rect) -> u16 {
-        (1..=MAX_SCALE)
+        Self::scale_within(area, MAX_SCALE)
+    }
+
+    /// Cells a thumbnail of the whole frame needs at `scale`.
+    #[must_use]
+    pub const fn thumbnail_size(scale: u16) -> (u16, u16) {
+        (CELL_WIDTH.div_ceil(scale), CELL_HEIGHT.div_ceil(scale))
+    }
+
+    /// Smallest reduction that fits `area`, up to `max`.
+    fn scale_within(area: Rect, max: u16) -> u16 {
+        (1..=max)
             .find(|&s| {
                 CELL_WIDTH.div_ceil(s) <= area.width && CELL_HEIGHT.div_ceil(s) <= area.height
             })
-            .unwrap_or(MAX_SCALE)
+            .unwrap_or(max)
     }
 
     /// Whether `area` can show the full screen without cropping at the
@@ -83,7 +114,7 @@ impl<'a> GbaScreen<'a> {
 
 impl Widget for GbaScreen<'_> {
     fn render(self, area: Rect, buf: &mut Buffer) {
-        let scale = Self::scale_for(area);
+        let scale = Self::scale_within(area, self.max_scale);
         let img_cols = CELL_WIDTH.div_ceil(scale);
         let img_rows = CELL_HEIGHT.div_ceil(scale);
         let cols = area.width.min(img_cols);

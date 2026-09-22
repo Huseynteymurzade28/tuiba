@@ -66,6 +66,30 @@ pub fn state_dir() -> Option<PathBuf> {
     Some(platform_state_home()?.join("tuiba"))
 }
 
+/// The platform's root for data a program can always regenerate.
+///
+/// `$XDG_CACHE_HOME` when it is set; on Windows the convention is
+/// `%LOCALAPPDATA%`, the same per-machine root as state, since a cache
+/// has no business following a roaming profile either.
+#[must_use]
+fn platform_cache_home() -> Option<PathBuf> {
+    if let Some(xdg) = std::env::var_os("XDG_CACHE_HOME") {
+        return Some(PathBuf::from(xdg));
+    }
+    #[cfg(windows)]
+    if let Some(local) = std::env::var_os("LOCALAPPDATA") {
+        return Some(PathBuf::from(local));
+    }
+    std::env::home_dir().map(|h| h.join(".cache"))
+}
+
+/// `%LOCALAPPDATA%\tuiba` on Windows, `$XDG_CACHE_HOME/tuiba`, or
+/// `~/.cache/tuiba`.
+#[must_use]
+pub fn cache_dir() -> Option<PathBuf> {
+    Some(platform_cache_home()?.join("tuiba"))
+}
+
 /// Where the folder list is stored.
 #[must_use]
 pub fn library_file() -> Option<PathBuf> {
