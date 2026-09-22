@@ -9,6 +9,7 @@
 //!
 //! Protocol reference: <https://sw.kovidgoyal.net/kitty/graphics-protocol/>
 
+use std::collections::VecDeque;
 use std::fs;
 use std::io::{self, Write};
 use std::path::PathBuf;
@@ -23,6 +24,10 @@ const IMAGE_ID: u32 = 1;
 const MAX_FACTOR: usize = 6;
 /// Base64 payload bytes per escape sequence (the protocol's limit).
 const CHUNK: usize = 4096;
+/// Frame files kept before the oldest is unlinked, for terminals that
+/// take the file transport but are slow to consume (or never delete)
+/// the files.
+const FILE_BACKLOG: usize = 8;
 
 /// How pixels travel to the terminal.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -63,10 +68,16 @@ pub struct KittyGraphics {
     pixels: Vec<u8>,
     /// Scratch for the encoded escape sequences.
     out: Vec<u8>,
-    /// The one temporary file frames go through. The terminal deletes it
-    /// after reading; reusing the name keeps a terminal that ignores the
-    /// escapes from filling the tmpfs with orphaned frames.
-    file: PathBuf,
+    /// Directory the frame files go in.
+    dir: PathBuf,
+    /// Number of the next frame file. Every frame gets a fresh file:
+    /// the terminal maps the file to read it, and truncating one it is
+    /// still reading kills the terminal with SIGBUS.
+    sequence: u64,
+    /// Frame files not yet unlinked by us. The terminal normally deletes
+    /// each after reading, but one that ignores the escapes would leave
+    /// them to pile up on the tmpfs.
+    recent: VecDeque<PathBuf>,
     /// Last placement, to skip re-sending when nothing changed.
     last: Option<Placement>,
 }
@@ -128,9 +139,29 @@ impl KittyGraphics {
             transport,
             pixels: Vec::new(),
             out: Vec::new(),
-            file: shm.join(format!("tuiba-{}", std::process::id())),
+            dir: shm,
+            sequence: 0,
+            recent: VecDeque::with_capacity(FILE_BACKLOG + 1),
             last: None,
         }
+    }
+
+    /// Writes the frame to a new file and returns its path, unlinking
+    /// the oldest one still on our books.
+    fn write_frame_file(&mut self) -> io::Result<PathBuf> {
+        let path = self
+            .dir
+            .join(format!("tuiba-{}-{}", std::process::id(), self.sequence));
+        self.sequence += 1;
+        fs::write(&path, &self.pixels)?;
+        self.recent.push_back(path.clone());
+        if self.recent.len() > FILE_BACKLOG
+            && let Some(old) = self.recent.pop_front()
+        {
+            // Unlinking is safe even mid-read: only truncation is not.
+            let _ = fs::remove_file(old);
+        }
+        Ok(path)
     }
 
     /// Placement for `area`: the largest integer scale that fits, centred.
@@ -205,13 +236,13 @@ impl KittyGraphics {
         let control = format!("a=T,f=24,s={w},v={h}{fit_box},i={IMAGE_ID},p={IMAGE_ID},C=1,q=2");
         match self.transport {
             Transport::SharedFile => {
-                if fs::write(&self.file, &self.pixels).is_err() {
+                let Ok(file) = self.write_frame_file() else {
                     // tmpfs went away: fall back for good.
                     self.transport = Transport::Direct;
                     return self.present(fb, area);
-                }
+                };
                 write!(self.out, "\x1b_G{control},t=t;")?;
-                base64_into(self.file.as_os_str().as_encoded_bytes(), &mut self.out);
+                base64_into(file.as_os_str().as_encoded_bytes(), &mut self.out);
                 self.out.extend_from_slice(b"\x1b\\");
             }
             Transport::Direct => {
@@ -251,7 +282,9 @@ impl KittyGraphics {
 impl Drop for KittyGraphics {
     fn drop(&mut self) {
         let _ = self.clear();
-        let _ = fs::remove_file(&self.file);
+        for file in self.recent.drain(..) {
+            let _ = fs::remove_file(file);
+        }
     }
 }
 
