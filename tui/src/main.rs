@@ -430,6 +430,13 @@ fn run() -> Result<(), AppError> {
     library_loop(terminal, picker, *release_events, args.graphics, &bindings)
 }
 
+/// After a game hands control back, Esc and q are ignored until this
+/// long has passed without either being seen. The Esc that left the game
+/// is usually still held, and terminals without release events report
+/// its repeats as fresh presses; the first one arrives after the OS
+/// repeat delay, up to ~660 ms on X11.
+const QUIT_KEY_COOLDOWN: Duration = Duration::from_millis(750);
+
 /// Library screen ⇄ game, until the user quits.
 fn library_loop(
     terminal: &mut ratatui::DefaultTerminal,
@@ -438,9 +445,20 @@ fn library_loop(
     graphics: bool,
     bindings: &Bindings,
 ) -> Result<(), AppError> {
+    let mut quit_keys_muted_until = Instant::now();
     loop {
         terminal.draw(|frame| picker.draw(frame))?;
         let outcome = match event::read()? {
+            Event::Key(key)
+                if !release_events && matches!(key.code, KeyCode::Esc | KeyCode::Char('q')) =>
+            {
+                let now = Instant::now();
+                if now < quit_keys_muted_until {
+                    quit_keys_muted_until = now + QUIT_KEY_COOLDOWN;
+                    continue;
+                }
+                picker.handle(key)
+            }
             Event::Key(key) => picker.handle(key),
             _ => None,
         };
@@ -460,6 +478,7 @@ fn library_loop(
                     }
                     Err(err) => return Err(err),
                 }
+                quit_keys_muted_until = Instant::now() + QUIT_KEY_COOLDOWN;
                 // No explicit clear: the next draw diffs against the game's
                 // last frame and repaints every cell that differs. (Ratatui's
                 // `clear` also queries the cursor position, which some

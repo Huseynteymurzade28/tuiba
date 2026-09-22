@@ -270,13 +270,16 @@ impl Picker {
             Mode::Browse => {}
         }
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+        // A held key never quits: its repeats would otherwise carry the Esc
+        // that left a game straight through the library.
+        let pressed = key.kind == KeyEventKind::Press;
         match key.code {
             // Esc first drops an active filter, then quits.
             KeyCode::Esc if !self.filter.is_empty() => {
                 self.filter.clear();
                 self.refresh_view();
             }
-            KeyCode::Esc | KeyCode::Char('q') => return Some(Outcome::Quit),
+            KeyCode::Esc | KeyCode::Char('q') if pressed => return Some(Outcome::Quit),
             KeyCode::Char('/') => {
                 self.mode = Mode::Filter;
                 self.focus = Focus::Roms;
@@ -286,7 +289,7 @@ impl Picker {
                 self.refresh_view();
                 self.notify(format!("sorted by {}", self.sort.label()), true);
             }
-            KeyCode::Char('c') if ctrl => return Some(Outcome::Quit),
+            KeyCode::Char('c') if ctrl && pressed => return Some(Outcome::Quit),
             KeyCode::Tab | KeyCode::BackTab => {
                 self.focus = match self.focus {
                     Focus::Roms => Focus::Folders,
@@ -1004,6 +1007,9 @@ mod tests {
             Some(Outcome::Play(PathBuf::from("/r/b.gba")))
         );
         assert_eq!(p.handle(key(KeyCode::Char('q'))), Some(Outcome::Quit));
+        let mut repeat = key(KeyCode::Esc);
+        repeat.kind = KeyEventKind::Repeat;
+        assert_eq!(p.handle(repeat), None, "a held key does not quit");
     }
 
     #[test]
