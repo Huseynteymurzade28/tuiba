@@ -80,14 +80,20 @@ impl TerminalGuard {
         enable_raw_mode()?;
         execute!(stdout(), EnterAlternateScreen)?;
         let terminal = Terminal::new(CrosstermBackend::new(stdout()))?;
-        // Ask for key release events; terminals that lack the protocol
-        // simply ignore the request and we fall back to timeout-based
-        // releases.
+        // Ask for key release events, and for Esc to be sent as its own
+        // escape sequence rather than a bare `\x1b`: without that, a
+        // terminal has no way to tell us a press from a release and one
+        // press of Esc arrives as two indistinguishable events.
+        // Terminals that lack the protocol ignore the request and we
+        // fall back to timeout-based releases.
         let release_events = crossterm::terminal::supports_keyboard_enhancement().unwrap_or(false);
         if release_events {
             let _ = execute!(
                 stdout(),
-                PushKeyboardEnhancementFlags(KeyboardEnhancementFlags::REPORT_EVENT_TYPES)
+                PushKeyboardEnhancementFlags(
+                    KeyboardEnhancementFlags::REPORT_EVENT_TYPES
+                        | KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES
+                )
             );
         }
         Ok(Self {
@@ -182,8 +188,9 @@ const LEAVE_WINDOW: Duration = Duration::from_secs(2);
 /// Shortest gap between the two Esc presses, where the terminal does not
 /// report releases and a release is therefore not something we can wait
 /// for. Two events this close together came from one press of the key,
-/// not from two.
-const MIN_LEAVE_GAP: Duration = Duration::from_millis(80);
+/// not from two: a Kitty asked only for event types sends the press and
+/// the release of one Esc about 80 ms apart, both as a bare `\x1b`.
+const MIN_LEAVE_GAP: Duration = Duration::from_millis(250);
 
 /// How long "state saved" and friends stay in the status bar.
 const NOTICE_WINDOW: Duration = Duration::from_secs(2);
@@ -809,15 +816,27 @@ fn play(
 /// Whether an Esc press is the second of two, and so leaves the game.
 ///
 /// `since_first` is how long ago the previous Esc arrived, if one did.
-/// A press counts as a second one when it is inside [`LEAVE_WINDOW`],
-/// far enough from the first not to be the same press reaching us twice,
-/// and — in a terminal that has shown it reports releases — after the
-/// first has actually been let go of.
+/// A press counts as a second one when it is inside [`LEAVE_WINDOW`]
+/// and either the first has been let go of, in a terminal that has
+/// shown it reports releases, or — where no release will ever come —
+/// far enough from the first not to be that same press reaching us
+/// twice.
 fn esc_leaves_game(since_first: Option<Duration>, esc_released: bool, seen_release: bool) -> bool {
     let Some(since_first) = since_first else {
         return false;
     };
-    since_first < LEAVE_WINDOW && since_first >= MIN_LEAVE_GAP && (esc_released || !seen_release)
+    if since_first >= LEAVE_WINDOW {
+        return false;
+    }
+    if seen_release {
+        // The terminal has shown it reports releases, so the honest
+        // question is whether the first Esc is over — however fast the
+        // two taps came.
+        esc_released
+    } else {
+        // No release will come; distance in time is all there is.
+        since_first >= MIN_LEAVE_GAP
+    }
 }
 
 fn handle_key(app: &mut App, key: crossterm::event::KeyEvent) -> Option<GameExit> {
@@ -1009,43 +1028,30 @@ mod tests {
     /// a burst from a held key. None of that may throw a game away.
     #[test]
     fn one_esc_never_leaves_the_game() {
+        let no_release = |ms| esc_leaves_game(Some(Duration::from_millis(ms)), false, false);
         assert!(!esc_leaves_game(None, false, false));
         // The same press arriving twice, milliseconds apart.
-        assert!(!esc_leaves_game(
-            Some(Duration::from_millis(5)),
-            false,
-            false
-        ));
-        assert!(!esc_leaves_game(
-            Some(Duration::from_millis(30)),
-            false,
-            false
-        ));
-        // Held down in a terminal that reports releases: no release yet,
-        // so however long it is held, it is still one press.
-        assert!(!esc_leaves_game(
-            Some(Duration::from_millis(900)),
-            false,
-            true
-        ));
+        assert!(!no_release(5));
+        // A Kitty asked only for event types: one press of Esc arrives as
+        // two bare escapes 79 ms apart, with no release in sight.
+        assert!(!no_release(79));
+        // Held down where releases are reported: none has come, so
+        // however long it is held, it is still one press.
+        let held = esc_leaves_game(Some(Duration::from_millis(900)), false, true);
+        assert!(!held);
     }
 
     #[test]
     fn two_presses_leave_the_game() {
         // Released in between, as a terminal with the keyboard protocol
-        // reports it.
-        assert!(esc_leaves_game(
-            Some(Duration::from_millis(150)),
-            true,
-            true
-        ));
+        // reports it. A fast double tap counts: the release has already
+        // proved there were two of them.
+        let tapped_twice = esc_leaves_game(Some(Duration::from_millis(120)), true, true);
+        assert!(tapped_twice);
         // A terminal that never sends releases: distance in time is all
         // there is to go on.
-        assert!(esc_leaves_game(
-            Some(Duration::from_millis(150)),
-            false,
-            false
-        ));
+        let far_apart = esc_leaves_game(Some(Duration::from_millis(400)), false, false);
+        assert!(far_apart);
     }
 
     #[test]

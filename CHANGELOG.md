@@ -22,11 +22,13 @@ All notable changes to tuiba. The format follows
   does.
 
 ### Fixed
-- Leaving a game really does take two presses of `Esc`. A single press
-  that the terminal reports as more than one event — some send a key's
-  press and its release as the same bare `\x1b` — no longer counts as
-  two: the second press must come after the first has been let go of,
-  or, where releases are not reported, far enough apart in time.
+- Leaving a game really does take two presses of `Esc`. tuiba now asks
+  the terminal to send `Esc` as its own escape sequence rather than a
+  bare `\x1b`, so a press can be told from a release; without that, one
+  press of `Esc` reached the emulator as two indistinguishable events
+  (measured at 79 ms apart in Kitty) and left the game on its own. Where
+  a terminal reports no releases at all, two events have to be at least
+  250 ms apart to count as two presses.
 
 - Windows: the library, recents and key bindings are stored under
   `%APPDATA%\tuiba` instead of `%USERPROFILE%\.config\tuiba`.
