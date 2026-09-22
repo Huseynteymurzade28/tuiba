@@ -3,18 +3,22 @@
 //! A state file lives in the state directory rather than next to the
 //! ROM: the ROM folder may be read-only, shared, or a mount the user
 //! would rather not have written to, and a state is our data, not the
-//! cartridge's. Files are named after the ROM and its fingerprint —
-//! `anguna-3f7c1a9e08d4b210.state` — so two cartridges with the same
-//! file name in different folders do not collide, and a state whose ROM
-//! was renamed is still refused by the core rather than silently
+//! cartridge's. Files are named after the ROM, its fingerprint and the
+//! slot — `anguna-3f7c1a9e08d4b210-1.state` — so two cartridges with the
+//! same file name in different folders do not collide, and a state whose
+//! ROM was renamed is still refused by the core rather than silently
 //! restored into the wrong game.
 
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::time::SystemTime;
 
 use tuiba_core::{Cartridge, Snapshot};
 
 use crate::library::state_dir;
+
+/// Save-state slots a cartridge has.
+pub const SLOTS: usize = 4;
 
 /// Where states are kept.
 #[must_use]
@@ -22,16 +26,35 @@ pub fn dir() -> Option<PathBuf> {
     state_dir().map(|dir| dir.join("states"))
 }
 
-/// The quick slot's file for one cartridge.
+/// One slot's file for one cartridge. Slots are numbered from 1, as the
+/// panel shows them.
 #[must_use]
-pub fn slot_path(rom: &Path, cartridge: &Cartridge) -> Option<PathBuf> {
+pub fn slot_path(rom: &Path, cartridge: &Cartridge, slot: usize) -> Option<PathBuf> {
     let stem = rom.file_stem()?.to_string_lossy().into_owned();
     let stem: String = stem
         .chars()
         .map(|c| if c.is_alphanumeric() { c } else { '-' })
         .collect();
-    let name = format!("{stem}-{:016x}.state", cartridge.fingerprint());
+    let name = format!("{stem}-{:016x}-{slot}.state", cartridge.fingerprint());
     Some(dir()?.join(name))
+}
+
+/// When the state in `path` was written, if it is there at all.
+#[must_use]
+pub fn written_at(path: &Path) -> Option<SystemTime> {
+    fs::metadata(path).ok()?.modified().ok()
+}
+
+/// Throws a slot away. A slot that is already empty is not an error.
+///
+/// # Errors
+///
+/// The file is there but could not be removed.
+pub fn remove(path: &Path) -> std::io::Result<()> {
+    match fs::remove_file(path) {
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        other => other,
+    }
 }
 
 /// Writes a state, through a temporary file so that an interrupted write
@@ -87,11 +110,11 @@ mod tests {
     #[test]
     fn the_file_name_follows_the_rom_and_its_fingerprint() {
         let cart = cartridge(b"ANGUNA      ");
-        let path = slot_path(Path::new("/roms/My Game (demo).gba"), &cart).unwrap();
+        let path = slot_path(Path::new("/roms/My Game (demo).gba"), &cart, 2).unwrap();
         let name = path.file_name().unwrap().to_string_lossy().into_owned();
         assert_eq!(
             name,
-            format!("My-Game--demo--{:016x}.state", cart.fingerprint())
+            format!("My-Game--demo--{:016x}-2.state", cart.fingerprint())
         );
         assert!(path.parent().unwrap().ends_with("tuiba/states"));
     }
@@ -100,9 +123,26 @@ mod tests {
     /// share a slot.
     #[test]
     fn different_cartridges_get_different_files() {
-        let one = slot_path(Path::new("/a/game.gba"), &cartridge(b"ONE         ")).unwrap();
-        let two = slot_path(Path::new("/b/game.gba"), &cartridge(b"TWO         ")).unwrap();
+        let one = slot_path(Path::new("/a/game.gba"), &cartridge(b"ONE         "), 1).unwrap();
+        let two = slot_path(Path::new("/b/game.gba"), &cartridge(b"TWO         "), 1).unwrap();
         assert_ne!(one, two);
+    }
+
+    #[test]
+    fn slots_of_one_cartridge_get_different_files() {
+        let cart = cartridge(b"ANGUNA      ");
+        let rom = Path::new("/roms/anguna.gba");
+        let paths: Vec<_> = (1..=SLOTS)
+            .map(|n| slot_path(rom, &cart, n).unwrap())
+            .collect();
+        let unique: std::collections::HashSet<_> = paths.iter().collect();
+        assert_eq!(unique.len(), SLOTS);
+    }
+
+    #[test]
+    fn removing_an_empty_slot_is_not_an_error() {
+        let missing = std::env::temp_dir().join("tuiba-no-such-slot-12345.state");
+        assert!(remove(&missing).is_ok());
     }
 
     #[test]

@@ -7,11 +7,14 @@ All notable changes to tuiba. The format follows
 ## [Unreleased]
 
 ### Added
-- Save states: `F5` freezes the whole machine and `F8` restores it, from
-  anywhere in a game. States are written to the state directory
-  (`~/.local/state/tuiba/states`, `%LOCALAPPDATA%\tuiba\states` on
-  Windows) under the cartridge's fingerprint, so they outlive the session
-  and cannot be restored into the wrong game. (#15)
+- Save states: `F5` freezes the whole machine into the current slot and
+  `F8` restores it, from anywhere in a game. `F2` opens a panel with the
+  cartridge's four slots, each showing the frame it was taken on and how
+  long ago — load, overwrite or delete from there. States are written to
+  the state directory (`~/.local/state/tuiba/states`,
+  `%LOCALAPPDATA%\tuiba\states` on Windows) under the cartridge's
+  fingerprint, so they outlive the session and cannot be restored into
+  the wrong game. (#15)
 
 ### Changed
 - The crash log's directory now follows the platform convention on

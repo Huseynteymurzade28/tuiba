@@ -12,6 +12,7 @@ mod picker;
 mod png;
 mod savestate;
 mod screen;
+mod states;
 mod theme;
 mod wordmark;
 
@@ -44,6 +45,7 @@ use crate::input::{GbaKey, Hold, Keypad};
 use crate::library::Library;
 use crate::picker::{Outcome, Picker};
 use crate::screen::GbaScreen;
+use crate::states::StatesPanel;
 
 /// Errors specific to the terminal frontend.
 #[derive(Debug, thiserror::Error)]
@@ -150,12 +152,16 @@ struct App {
     audio: Result<AudioOutput, String>,
     /// Sound switched off by the user; samples are dropped.
     muted: bool,
-    /// The quick save state, kept in memory so reloading it costs
-    /// nothing. The copy on disk is what survives leaving the game.
-    state: Option<Snapshot>,
-    /// Where this cartridge's quick slot is written, when there is a
-    /// state directory to write it to.
-    state_path: Option<PathBuf>,
+    /// The cartridge being played, for naming its state files.
+    rom: PathBuf,
+    /// Which slot `F5` and `F8` act on, counting from zero. The panel
+    /// moves it; it starts on the first slot.
+    slot: usize,
+    /// A state with nowhere to be written: when there is no state
+    /// directory, states still work, they just do not outlive the game.
+    held_state: Option<Snapshot>,
+    /// The save-state panel, while it is up. Emulation waits for it.
+    panel: Option<StatesPanel>,
     /// What the last save/load did and when, for the status bar.
     state_notice: Option<(String, Instant)>,
 }
@@ -211,66 +217,129 @@ impl App {
         self.reset_fps(now);
     }
 
-    /// Freezes the machine into the quick slot, replacing whatever was
-    /// there, and writes it out so it survives the session.
+    /// Freezes the machine into the current slot and writes it out.
     ///
     /// A state that cannot reach the disk is still in memory and still
     /// loadable now; the status bar says so rather than pretending the
     /// save was clean.
     fn save_state(&mut self, now: Instant) {
         let snapshot = self.gba.snapshot();
-        let notice = match &self.state_path {
-            Some(path) => match savestate::write(path, &snapshot) {
-                Ok(()) => "state saved".to_string(),
+        let notice = if let Some(path) = self.slot_path() {
+            match savestate::write(&path, &snapshot) {
+                Ok(()) => format!("slot {} saved", self.slot + 1),
                 Err(err) => {
                     crashlog::record(
                         "state",
                         &format!("could not write {}: {err}", path.display()),
                     );
-                    format!("state saved, but not to disk: {err}")
+                    self.held_state = Some(snapshot.clone());
+                    format!("slot {} saved, but not to disk: {err}", self.slot + 1)
                 }
-            },
-            None => "state saved (no state directory; this session only)".to_string(),
+            }
+        } else {
+            self.held_state = Some(snapshot.clone());
+            "state saved (no state directory; this session only)".to_string()
         };
-        self.state = Some(snapshot);
+        if let Some(panel) = &mut self.panel {
+            panel.replace_selected(Some(snapshot));
+        }
         self.state_notice = Some((notice, now));
     }
 
-    /// Puts the quick slot back: the one in memory, or failing that the
-    /// one on disk from an earlier session.
+    /// Puts the current slot back into the machine.
     ///
     /// The sound queue is flushed with it: it holds samples from the
     /// moment being replaced, and playing them after the jump is a
     /// click. Backup memory comes back with the state, so the next
     /// autosave writes the `.sav` the state expects.
     fn load_state(&mut self, now: Instant) {
-        if self.state.is_none() {
-            match self.read_state_from_disk() {
-                Ok(snapshot) => self.state = snapshot,
-                Err(err) => {
-                    self.state_notice = Some((err, now));
-                    return;
-                }
+        match self.read_slot() {
+            Ok(Some(snapshot)) => {
+                let notice = format!("slot {} loaded", self.slot + 1);
+                self.restore(&snapshot, now, notice);
             }
+            Ok(None) => {
+                self.state_notice = Some((format!("slot {} is empty", self.slot + 1), now));
+            }
+            Err(err) => self.state_notice = Some((err, now)),
         }
-        let Some(snapshot) = &self.state else {
-            self.state_notice = Some(("no state saved yet".to_string(), now));
-            return;
-        };
+    }
+
+    /// Puts a state back and tells the player it happened.
+    fn restore(&mut self, snapshot: &Snapshot, now: Instant, notice: String) {
         self.gba.restore(snapshot);
         if let Ok(audio) = &self.audio {
             audio.flush();
         }
         self.reset_fps(now);
-        self.state_notice = Some(("state loaded".to_string(), now));
+        self.state_notice = Some((notice, now));
     }
 
-    /// The state file for this cartridge, if there is one to read.
-    fn read_state_from_disk(&self) -> Result<Option<Snapshot>, String> {
-        let Some(path) = &self.state_path else {
-            return Ok(None);
+    /// Where the current slot lives, when there is a state directory.
+    fn slot_path(&self) -> Option<PathBuf> {
+        savestate::slot_path(&self.rom, &self.gba.bus.cartridge, self.slot + 1)
+    }
+
+    /// Reads the current slot: its file, or the state held in memory
+    /// when there is nowhere to write one.
+    fn read_slot(&self) -> Result<Option<Snapshot>, String> {
+        let Some(path) = self.slot_path() else {
+            return Ok(self.held_state.clone());
         };
-        savestate::read(path, &self.gba.bus.cartridge)
+        savestate::read(&path, &self.gba.bus.cartridge)
+    }
+
+    /// Opens the panel, which pauses the game the way the `?` overlay
+    /// does.
+    fn open_panel(&mut self, now: Instant) {
+        self.panel = Some(StatesPanel::open(
+            &self.rom,
+            &self.gba.bus.cartridge,
+            self.slot,
+        ));
+        self.reset_fps(now);
+    }
+
+    /// Handles one key while the panel is up, and acts on what it asks
+    /// for.
+    fn handle_panel_key(&mut self, key: crossterm::event::KeyEvent, now: Instant) {
+        let Some(panel) = &mut self.panel else { return };
+        // The cursor is the current slot, whether or not this key asked
+        // for anything: F5 and F8 act on wherever the panel was left.
+        let action = panel.handle(key);
+        self.slot = panel.selected();
+        let Some(action) = action else { return };
+        match action {
+            states::Action::Close => self.panel = None,
+            states::Action::Save => self.save_state(now),
+            states::Action::Load => {
+                let snapshot = panel.selected_snapshot().cloned();
+                match snapshot {
+                    Some(snapshot) => {
+                        let notice = format!("slot {} loaded", self.slot + 1);
+                        self.restore(&snapshot, now, notice);
+                        self.panel = None;
+                    }
+                    None => {
+                        self.state_notice = Some((format!("slot {} is empty", self.slot + 1), now));
+                    }
+                }
+            }
+            states::Action::Delete => {
+                let notice = match self.slot_path() {
+                    Some(path) => match savestate::remove(&path) {
+                        Ok(()) => format!("slot {} deleted", self.slot + 1),
+                        Err(err) => format!("could not delete slot {}: {err}", self.slot + 1),
+                    },
+                    None => format!("slot {} deleted", self.slot + 1),
+                };
+                if let Some(panel) = &mut self.panel {
+                    panel.replace_selected(None);
+                }
+                self.held_state = None;
+                self.state_notice = Some((notice, now));
+            }
+        }
     }
 
     fn reset_fps(&mut self, now: Instant) {
@@ -312,34 +381,9 @@ impl App {
             .join(" ")
     }
 
-    fn draw(&mut self, frame: &mut Frame) {
-        let [screen_area, status_area] =
-            Layout::vertical([Constraint::Fill(1), Constraint::Length(1)]).areas(frame.area());
-        self.screen_area = screen_area;
-
-        frame.render_widget(Block::default().style(theme::text()), screen_area);
-        let size_hint = if self.graphics.is_some() {
-            // The image is overlaid after the frame is flushed; the cells
-            // underneath stay blank.
-            String::new()
-        } else {
-            frame.render_widget(GbaScreen::new(self.gba.framebuffer()), screen_area);
-            let scale = GbaScreen::scale_for(screen_area);
-            if !GbaScreen::fits(screen_area) {
-                format!(
-                    "  [terminal {}x{} too small: cropped]",
-                    screen_area.width, screen_area.height
-                )
-            } else if scale > 1 {
-                format!(
-                    "  [1/{scale} scale; {}x{} for full]",
-                    screen::CELL_WIDTH,
-                    screen::CELL_HEIGHT
-                )
-            } else {
-                String::new()
-            }
-        };
+    /// The status bar: what the emulator is doing, and the three keys
+    /// that are never rebindable.
+    fn status_line(&self, size_hint: &str) -> Line<'_> {
         let renderer = if self.graphics.is_some() {
             "pixels"
         } else {
@@ -382,6 +426,8 @@ impl App {
             .unwrap_or_default();
         let mode = if self.help {
             "  ⏸ keys".to_string()
+        } else if self.panel.is_some() {
+            format!("  ⏸ states  (slot {})", self.slot + 1)
         } else if self.leave_armed.is_some_and(|t| now < t + LEAVE_WINDOW) {
             "  esc again to leave".to_string()
         } else if self.paused {
@@ -391,7 +437,7 @@ impl App {
         } else {
             String::new()
         };
-        let status = Line::from(vec![
+        Line::from(vec![
             Span::styled(
                 format!(" {}  ", self.title),
                 theme::text().bg(theme::SURFACE),
@@ -405,17 +451,53 @@ impl App {
             ),
             Span::styled("   ? ", theme::key()),
             Span::styled("keys  ", theme::hint()),
+            Span::styled(" f2 ", theme::key()),
+            Span::styled("states  ", theme::hint()),
             Span::styled(" esc esc ", theme::key()),
             Span::styled("library  ", theme::hint()),
             Span::styled(" ctrl+q ", theme::key()),
             Span::styled("quit", theme::hint()),
-        ]);
+        ])
+    }
+
+    fn draw(&mut self, frame: &mut Frame) {
+        let [screen_area, status_area] =
+            Layout::vertical([Constraint::Fill(1), Constraint::Length(1)]).areas(frame.area());
+        self.screen_area = screen_area;
+
+        frame.render_widget(Block::default().style(theme::text()), screen_area);
+        let size_hint = if self.graphics.is_some() {
+            // The image is overlaid after the frame is flushed; the cells
+            // underneath stay blank.
+            String::new()
+        } else {
+            frame.render_widget(GbaScreen::new(self.gba.framebuffer()), screen_area);
+            let scale = GbaScreen::scale_for(screen_area);
+            if !GbaScreen::fits(screen_area) {
+                format!(
+                    "  [terminal {}x{} too small: cropped]",
+                    screen_area.width, screen_area.height
+                )
+            } else if scale > 1 {
+                format!(
+                    "  [1/{scale} scale; {}x{} for full]",
+                    screen::CELL_WIDTH,
+                    screen::CELL_HEIGHT
+                )
+            } else {
+                String::new()
+            }
+        };
+        let status = self.status_line(&size_hint);
         frame.render_widget(
             Paragraph::new(status).style(Style::default().fg(theme::DIM).bg(theme::SURFACE)),
             status_area,
         );
         if self.help {
             self.draw_help(frame, screen_area);
+        }
+        if let Some(panel) = &self.panel {
+            panel.draw(frame, screen_area);
         }
     }
 
@@ -657,7 +739,6 @@ fn play(
     // Backup memory as loaded: a `.sav` is only ever written once the game
     // changes it, so cartridges that never save do not grow one.
     let saved = gba.save_data().to_vec();
-    let state_path = savestate::slot_path(rom, &gba.bus.cartridge);
     let mut app = App {
         title,
         gba,
@@ -683,8 +764,10 @@ fn play(
             Err("muted".into())
         },
         muted: !session.sound,
-        state: None,
-        state_path,
+        rom: rom.to_path_buf(),
+        slot: 0,
+        held_state: None,
+        panel: None,
         state_notice: None,
     };
     let result = std::panic::catch_unwind(AssertUnwindSafe(|| event_loop(terminal, &mut app)));
@@ -703,6 +786,75 @@ fn play(
     }
 }
 
+/// One key in a game: the fixed keys, the panel while it is up, then the
+/// bindings. Returns how the game ended, when the key ends it.
+fn handle_key(app: &mut App, key: crossterm::event::KeyEvent) -> Option<GameExit> {
+    let now = Instant::now();
+    // Ctrl+Q is fixed, and reaches even the panel: no overlay should be
+    // able to stand between the player and the way out.
+    if key.code == KeyCode::Char('q') && key.modifiers.contains(KeyModifiers::CONTROL) {
+        return Some(GameExit::Quit);
+    }
+    // The panel has the keyboard while it is up, Esc included.
+    if app.panel.is_some() {
+        app.handle_panel_key(key, now);
+        return None;
+    }
+    if key.kind == KeyEventKind::Press {
+        match key.code {
+            KeyCode::Esc if app.help => {
+                app.toggle_help(now);
+                return None;
+            }
+            // Twice within the window: one Esc is too easy to
+            // hit by accident to throw a game away on.
+            KeyCode::Esc => {
+                if app.leave_armed.is_some_and(|t| now < t + LEAVE_WINDOW) {
+                    return Some(GameExit::Back);
+                }
+                app.leave_armed = Some(now);
+                return None;
+            }
+            KeyCode::Char('?') => {
+                app.toggle_help(now);
+                return None;
+            }
+            _ => {}
+        }
+    }
+    // Chords like Ctrl+Z stay with the terminal.
+    if key
+        .modifiers
+        .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT)
+    {
+        return None;
+    }
+    match app.bindings.action(key.code) {
+        Some(Action::Button(button)) => app.keypad.handle(button, key.kind, now),
+        Some(Action::FastForward) => app.fast.update(key.kind, now),
+        Some(Action::Mute) if key.kind == KeyEventKind::Press => {
+            app.muted = !app.muted;
+        }
+        Some(Action::Pause) if key.kind == KeyEventKind::Press => {
+            app.toggle_pause(now);
+        }
+        Some(Action::Step) if key.kind == KeyEventKind::Press && app.paused => {
+            app.step = true;
+        }
+        Some(Action::SaveState) if key.kind == KeyEventKind::Press => {
+            app.save_state(now);
+        }
+        Some(Action::LoadState) if key.kind == KeyEventKind::Press => {
+            app.load_state(now);
+        }
+        Some(Action::States) if key.kind == KeyEventKind::Press => {
+            app.open_panel(now);
+        }
+        _ => {}
+    }
+    None
+}
+
 /// Emulate → draw → handle input, paced to the GBA's frame rate.
 ///
 /// Emulation and rendering are decoupled: if a frame takes longer than
@@ -719,8 +871,8 @@ fn event_loop(
     let mut next_autosave = next_frame + AUTOSAVE_INTERVAL;
     loop {
         let now = Instant::now();
-        if app.help {
-            // The overlay covers the screen; nothing to see, so nothing to run.
+        if app.help || app.panel.is_some() {
+            // An overlay covers the screen; nothing to see, so nothing to run.
         } else if app.paused {
             if app.step {
                 app.emulate_frame(now);
@@ -744,7 +896,7 @@ fn event_loop(
         }
         terminal.draw(|frame| app.draw(frame))?;
         if let Some(graphics) = &mut app.graphics {
-            if app.help {
+            if app.help || app.panel.is_some() {
                 // The pixel image would sit on top of the overlay.
                 graphics.clear()?;
             } else {
@@ -753,62 +905,10 @@ fn event_loop(
         }
 
         while event::poll(Duration::ZERO)? {
-            if let Event::Key(key) = event::read()? {
-                let now = Instant::now();
-                // Esc, Ctrl+Q and ? are fixed; everything else goes through
-                // the bindings.
-                if key.kind == KeyEventKind::Press {
-                    match key.code {
-                        KeyCode::Esc if app.help => {
-                            app.toggle_help(now);
-                            continue;
-                        }
-                        // Twice within the window: one Esc is too easy to
-                        // hit by accident to throw a game away on.
-                        KeyCode::Esc => {
-                            if app.leave_armed.is_some_and(|t| now < t + LEAVE_WINDOW) {
-                                return Ok(GameExit::Back);
-                            }
-                            app.leave_armed = Some(now);
-                            continue;
-                        }
-                        KeyCode::Char('q') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                            return Ok(GameExit::Quit);
-                        }
-                        KeyCode::Char('?') => {
-                            app.toggle_help(now);
-                            continue;
-                        }
-                        _ => {}
-                    }
-                }
-                // Chords like Ctrl+Z stay with the terminal.
-                if key
-                    .modifiers
-                    .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT)
-                {
-                    continue;
-                }
-                match app.bindings.action(key.code) {
-                    Some(Action::Button(button)) => app.keypad.handle(button, key.kind, now),
-                    Some(Action::FastForward) => app.fast.update(key.kind, now),
-                    Some(Action::Mute) if key.kind == KeyEventKind::Press => {
-                        app.muted = !app.muted;
-                    }
-                    Some(Action::Pause) if key.kind == KeyEventKind::Press => {
-                        app.toggle_pause(now);
-                    }
-                    Some(Action::Step) if key.kind == KeyEventKind::Press && app.paused => {
-                        app.step = true;
-                    }
-                    Some(Action::SaveState) if key.kind == KeyEventKind::Press => {
-                        app.save_state(now);
-                    }
-                    Some(Action::LoadState) if key.kind == KeyEventKind::Press => {
-                        app.load_state(now);
-                    }
-                    _ => {}
-                }
+            if let Event::Key(key) = event::read()?
+                && let Some(exit) = handle_key(app, key)
+            {
+                return Ok(exit);
             }
         }
 

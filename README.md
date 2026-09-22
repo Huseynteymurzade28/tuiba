@@ -127,13 +127,29 @@ tuiba --no-graphics    # force the half-block renderer
 tuiba --mute           # start silent; M toggles sound in a game
 ```
 
-`F5` freezes the machine and `F8` puts it back — the whole console, not
-just the game's own save, so it works in cartridges that never save and
-in the middle of a boss fight alike. The state is written to
-`~/.local/state/tuiba/states/` (or `$XDG_STATE_HOME`, or
-`%LOCALAPPDATA%\tuiba\states` on Windows) under the cartridge's
-fingerprint, so it survives closing tuiba and can only ever be loaded
-back into the game it came from.
+`F5` freezes the machine into the current slot and `F8` puts it back —
+the whole console, not just the game's own save, so it works in
+cartridges that never save and in the middle of a boss fight alike.
+`F2` opens the panel: four slots, each showing the frame it was taken
+on and how long ago that was, with the game paused behind it.
+
+```
+╭ SAVE STATES ──────────────────────────────────────────╮
+│ ╭ 1 ─────────────────────╮   ┏▸ 2 ━━━━━━━━━━━━━━━━━━━┓ │
+│ │      (the frame it     │   ┃     (…and this one)   ┃ │
+│ │       was taken on)    │   ┃                       ┃ │
+│ ╰ 4 minutes ago ─────────╯   ┗ just now ━━━━━━━━━━━━━┛ │
+│ ╭ 3 ─────────────────────╮   ╭ 4 ─────────────────────╮ │
+│ │         empty          │   │         empty          │ │
+│ ╰ empty ─────────────────╯   ╰ empty ─────────────────╯ │
+│           ⏎ load   s overwrite   x delete   esc close   │
+╰─────────────────────────────────────────────────────────╯
+```
+
+States are written to `~/.local/state/tuiba/states/` (or
+`$XDG_STATE_HOME`, or `%LOCALAPPDATA%\tuiba\states` on Windows) under
+the cartridge's fingerprint, so they survive closing tuiba and can only
+ever be loaded back into the game they came from.
 
 Saves live next to the ROM as `<name>.sav`. The file is written within a
 second of the game saving and again when you leave, so a crash or a closed
@@ -156,6 +172,7 @@ report.
 | `tab` — folder list, `x` removes | `Tab` or `F` (held) — fast-forward           |
 | `r` — rescan folders             | `M` — mute                                   |
 |                                  | `F5` — save state, `F8` — load it back       |
+|                                  | `F2` — the four save-state slots             |
 |                                  | `?` — show the active bindings               |
 | `q` — quit (asks first)          | `Esc` `Esc` — back to the library            |
 |                                  | `Ctrl+Q` — quit                              |
@@ -172,7 +189,7 @@ Windows), one action per line:
 ```ini
 # button = key [key ...]      actions: up down left right a b l r
 a      = j                    #          start select pause step fast
-b      = k                    #          mute save load
+b      = k                    #          mute save load states
 select = space                # unlisted actions keep their defaults
 fast   = f9 tab               # an empty right-hand side unbinds
 ```
