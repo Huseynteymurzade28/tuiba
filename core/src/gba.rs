@@ -150,10 +150,7 @@ impl Gba {
         };
 
         let cycles = cycles + self.run_dma();
-        let timer_irqs = self.bus.io.timers.step(cycles);
-        for n in (0..4).filter(|n| timer_irqs & (1 << n) != 0) {
-            self.bus.io.request_interrupt(Timers::interrupt(n));
-        }
+        self.step_timers(cycles);
         self.bus.io.apu.step(cycles);
 
         let events = self.ppu.step(cycles, &mut self.bus.io, &self.bus.video);
@@ -170,6 +167,27 @@ impl Gba {
 
         self.service_interrupts();
         events.vblank
+    }
+
+    /// Advances the timers, raising their interrupts and feeding the sound
+    /// FIFOs that timers 0 and 1 clock.
+    fn step_timers(&mut self, cycles: u32) {
+        let overflows = self.bus.io.timers.step(cycles);
+        let mut refill = 0;
+        for (n, &count) in overflows.iter().enumerate() {
+            if count == 0 {
+                continue;
+            }
+            if self.bus.io.timers.irq_enabled(n) {
+                self.bus.io.request_interrupt(Timers::interrupt(n));
+            }
+            if n < 2 {
+                refill |= self.bus.io.apu.timer_overflow(n, count);
+            }
+        }
+        for fifo in (0..2).filter(|n| refill & (1 << n) != 0) {
+            self.bus.io.dma.trigger_fifo(fifo);
+        }
     }
 
     /// Runs every DMA channel that has been triggered and returns the
@@ -493,6 +511,44 @@ mod tests {
             gba.step();
         }
         assert_ne!(gba.bus.io.read16(reg::IF) & (1 << 3), 0);
+    }
+
+    #[test]
+    fn timer_driven_fifo_is_refilled_by_dma_and_reaches_the_mix() {
+        use crate::apu::reg as snd;
+        let mut gba = gba_with(&[0xEAFF_FFFE]); // b .
+        // A ramp of 64 signed samples in EWRAM.
+        for i in 0..64u32 {
+            gba.bus.write8(base::EWRAM + i, (i * 2) as u8);
+        }
+        gba.bus.io.write16(snd::SOUNDCNT_X, 0x80);
+        // FIFO A: 100 %, both sides, timer 0, reset.
+        gba.bus.io.write16(snd::SOUNDCNT_H, 0x0B04);
+        // DMA1 -> FIFO A: enable, special timing, repeat, word.
+        gba.bus.io.write32(reg::DMA0SAD + 12, base::EWRAM);
+        gba.bus
+            .io
+            .write32(reg::DMA0SAD + 12 + 4, base::IO + snd::FIFO_A);
+        gba.bus.io.write16(reg::DMA0SAD + 12 + 10, 0xB600);
+        // Timer 0 overflows every 512 cycles: one FIFO sample per output
+        // sample.
+        gba.bus.io.write16(reg::TM0CNT_L, 0xFE00);
+        gba.bus.io.write16(reg::TM0CNT_H, 0x80);
+
+        // The FIFO starts empty: the first overflow finds nothing, asks
+        // for a refill, and DMA brings the first 16 bytes.
+        while gba.audio().len() < 2 * 40 {
+            gba.step();
+        }
+        let (src, _) = gba.bus.io.dma.channels[1].latched_addresses();
+        assert!(src > base::EWRAM, "DMA1 has moved data");
+        let left: Vec<i16> = gba.audio().iter().step_by(2).copied().collect();
+        // Output sample `i` carries ramp entry `i - 1` (the first sample
+        // precedes the first overflow). 100 % direct sound is sample * 4
+        // in 10-bit units, << 6 to 16 bits.
+        let expected: Vec<i16> = (0..40i16).map(|i| ((i - 1).max(0) * 2 * 4) << 6).collect();
+        assert_eq!(&left[..expected.len()], &expected[..]);
+        assert_eq!(gba.audio()[1], gba.audio()[0], "same on the right");
     }
 
     #[test]

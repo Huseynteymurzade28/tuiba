@@ -101,15 +101,14 @@ impl Timers {
         }
     }
 
-    /// Advances all timers by `cycles`. Returns a bit mask (bit `n` = timer
-    /// `n`) of timers that overflowed with their IRQ enabled; see
-    /// [`Timers::interrupt`].
-    pub fn step(&mut self, cycles: u32) -> u8 {
-        let mut irqs = 0u8;
+    /// Advances all timers by `cycles`. Returns how many times each timer
+    /// overflowed; see [`Timers::irq_enabled`] and [`Timers::interrupt`]
+    /// for turning that into interrupts.
+    pub fn step(&mut self, cycles: u32) -> [u32; 4] {
+        let mut overflows = [0; 4];
         let mut carried = 0;
-        for n in 0..4 {
-            let timer = &mut self.timers[n];
-            let overflows = if !timer.enabled() {
+        for (n, (timer, overflow)) in self.timers.iter_mut().zip(&mut overflows).enumerate() {
+            *overflow = if !timer.enabled() {
                 0
             } else if timer.cascade() && n > 0 {
                 timer.tick(carried)
@@ -119,12 +118,15 @@ impl Timers {
                 timer.fraction %= timer.prescaler();
                 timer.tick(ticks)
             };
-            if overflows > 0 && timer.control & Timer::IRQ != 0 {
-                irqs |= 1 << n;
-            }
-            carried = overflows;
+            carried = *overflow;
         }
-        irqs
+        overflows
+    }
+
+    /// Whether timer `n` raises an interrupt when it overflows.
+    #[must_use]
+    pub fn irq_enabled(&self, n: usize) -> bool {
+        self.timers[n].control & Timer::IRQ != 0
     }
 
     /// The interrupt source for timer `n`.
@@ -149,12 +151,13 @@ mod tests {
         t.set_reload(0, 0xFFF0);
         t.set_control(0, 0x80 | 1); // enable, /64
         assert_eq!(t.counter(0), 0xFFF0);
-        assert_eq!(t.step(63), 0);
+        assert_eq!(t.step(63), [0; 4]);
         assert_eq!(t.counter(0), 0xFFF0);
         t.step(1);
         assert_eq!(t.counter(0), 0xFFF1);
         // 15 more ticks overflow: 0xFFF1 + 15 -> wraps to reload
-        assert_eq!(t.step(15 * 64), 0, "IRQ bit not set");
+        assert_eq!(t.step(15 * 64), [1, 0, 0, 0]);
+        assert!(!t.irq_enabled(0), "IRQ bit not set");
         assert_eq!(t.counter(0), 0xFFF0);
     }
 
@@ -165,9 +168,10 @@ mod tests {
         t.set_control(0, 0x80 | 0x40); // enable, IRQ, /1
         t.set_reload(1, 0xFFFE);
         t.set_control(1, 0x80 | 0x40 | 0x04); // enable, IRQ, cascade
-        assert_eq!(t.step(1), 0b01);
+        assert_eq!(t.step(1), [1, 0, 0, 0]);
         assert_eq!(t.counter(1), 0xFFFF, "cascaded once");
-        assert_eq!(t.step(1), 0b11);
+        assert_eq!(t.step(1), [1, 1, 0, 0]);
+        assert!(t.irq_enabled(0) && t.irq_enabled(1));
         assert_eq!(Timers::interrupt(1), Interrupt::Timer1);
         assert_eq!(t.counter(1), 0xFFFE);
     }
@@ -192,7 +196,7 @@ mod tests {
         let mut t = Timers::new();
         t.set_reload(3, 0xFF00);
         t.set_control(3, 0x80 | 0x40);
-        assert_eq!(t.step(0x100 * 3 + 5), 0b1000);
+        assert_eq!(t.step(0x100 * 3 + 5), [0, 0, 0, 3]);
         assert_eq!(t.counter(3), 0xFF05);
     }
 }

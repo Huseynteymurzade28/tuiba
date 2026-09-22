@@ -4,8 +4,13 @@
 //! transfer itself needs the whole bus, so it is a free function the
 //! system calls when a channel is triggered.
 
+use crate::apu::reg::{FIFO_A, FIFO_B};
 use crate::memory::Memory;
+use crate::memory::base;
 use crate::memory::io::Interrupt;
+
+/// Words a sound FIFO refill moves, whatever the channel's count says.
+const FIFO_TRANSFER_WORDS: u32 = 4;
 
 /// When a channel starts its transfer (`DMAxCNT_H` bits 13:12).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -16,7 +21,8 @@ pub enum Timing {
     VBlank,
     /// At the start of each visible line's HBlank.
     HBlank,
-    /// Sound FIFO (channels 1–2) or video capture (channel 3); not emulated.
+    /// Sound FIFO refill (channels 1–2) or video capture (channel 3; not
+    /// emulated).
     Special,
 }
 
@@ -118,6 +124,18 @@ impl Dma {
         }
     }
 
+    /// Schedules the refill of sound FIFO `fifo` (0 = A, 1 = B): channels
+    /// 1 and 2 in special timing whose destination is that FIFO.
+    pub fn trigger_fifo(&mut self, fifo: usize) {
+        let target = base::IO + if fifo == 0 { FIFO_A } else { FIFO_B };
+        for n in 1..=2 {
+            let ch = &self.channels[n];
+            if ch.enabled() && ch.timing() == Timing::Special && ch.latched_dest == target {
+                self.pending |= 1 << n;
+            }
+        }
+    }
+
     /// Takes the bit mask of channels waiting to run (bit `n` = channel `n`).
     pub fn take_pending(&mut self) -> u8 {
         std::mem::take(&mut self.pending)
@@ -128,17 +146,26 @@ impl Dma {
 /// on completion, if the channel asks for one.
 pub fn run(dma: &mut Dma, n: usize, mem: &mut impl Memory) -> Option<Interrupt> {
     let ch = &mut dma.channels[n];
-    if !ch.enabled() || ch.timing() == Timing::Special {
-        // Sound FIFO / video capture: not emulated. Leave the channel armed
-        // so software sees it as running, but move nothing.
+    if !ch.enabled() {
+        return None;
+    }
+    let fifo = ch.timing() == Timing::Special;
+    if fifo && n == 3 {
+        // Video capture: not emulated. Leave the channel armed so software
+        // sees it as running, but move nothing.
         return None;
     }
 
-    let word = ch.control & Channel::WORD != 0;
+    // A FIFO refill is always four words to a fixed destination.
+    let word = fifo || ch.control & Channel::WORD != 0;
     let unit = if word { 4 } else { 2 };
-    let count = ch.unit_count(n);
+    let count = if fifo {
+        FIFO_TRANSFER_WORDS
+    } else {
+        ch.unit_count(n)
+    };
     let src_ctrl = (ch.control >> 7) & 0b11;
-    let dst_ctrl = (ch.control >> 5) & 0b11;
+    let dst_ctrl = if fifo { 2 } else { (ch.control >> 5) & 0b11 };
 
     let mut src = ch.latched_source & !(unit - 1);
     let mut dst = ch.latched_dest & !(unit - 1);
@@ -153,7 +180,7 @@ pub fn run(dma: &mut Dma, n: usize, mem: &mut impl Memory) -> Option<Interrupt> 
     }
     ch.latched_source = src;
 
-    if ch.control & Channel::REPEAT != 0 && ch.timing() != Timing::Immediate {
+    if fifo || ch.control & Channel::REPEAT != 0 && ch.timing() != Timing::Immediate {
         // Repeat: keep running on later triggers; dest reloads with mode 3.
         ch.latched_dest = if dst_ctrl == 3 { ch.dest } else { dst };
     } else {
@@ -245,6 +272,32 @@ mod tests {
         let _ = dma.take_pending();
         run(&mut dma, 0, &mut mem);
         assert_eq!(mem.read16(0x2000), 0xBBBB, "dest reloaded, source advanced");
+    }
+
+    #[test]
+    fn fifo_refill_moves_four_words_to_a_fixed_destination() {
+        let mut mem = Ram::new();
+        for i in 0..8u32 {
+            mem.write32(0x1000 + i * 4, 0x1111_1111 * (i + 1));
+        }
+        // Special timing, repeat, dest increment (ignored), halfwords
+        // (ignored), count 1 (ignored).
+        let fifo_a = base::IO + FIFO_A;
+        let mut dma = armed(1, 0x1000, fifo_a, 1, 0x8000 | 0x0200 | (3 << 12));
+        dma.trigger_fifo(1);
+        assert_eq!(dma.take_pending(), 0, "FIFO B is not this channel's target");
+        dma.trigger_fifo(0);
+        assert_eq!(dma.take_pending(), 0b0010);
+        run(&mut dma, 1, &mut mem);
+        // Ram is flat, so the fixed destination ends up holding the last
+        // word written.
+        assert_eq!(mem.read32(fifo_a), 0x4444_4444);
+        assert_eq!(mem.read32(fifo_a + 4), 0, "destination did not advance");
+        assert!(dma.channels[1].enabled(), "stays armed");
+        dma.trigger_fifo(0);
+        let _ = dma.take_pending();
+        run(&mut dma, 1, &mut mem);
+        assert_eq!(mem.read32(fifo_a), 0x8888_8888, "source advanced");
     }
 
     #[test]

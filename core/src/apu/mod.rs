@@ -1,4 +1,5 @@
-//! Sound: the four PSG channels, the mixer and the sample buffer.
+//! Sound: the four PSG channels, the two direct-sound FIFOs, the mixer
+//! and the sample buffer.
 //!
 //! The APU is stepped with the rest of the system and emits one stereo
 //! sample pair every [`CYCLES_PER_SAMPLE`] cycles, i.e. at
@@ -9,8 +10,10 @@
 //! the sampling instant is what is heard) and keeps the cost proportional
 //! to the sample rate.
 
+pub mod fifo;
 pub mod psg;
 
+use fifo::Fifo;
 use psg::{Noise, Square, Wave};
 
 /// Output sample rate in Hz. Chosen so that a sample is an integer number
@@ -90,6 +93,8 @@ pub struct Apu {
     square2: Square,
     wave: Wave,
     noise: Noise,
+    /// Direct-sound FIFOs A and B.
+    fifo: [Fifo; 2],
     /// Cycles accumulated towards the next output sample.
     cycles: u32,
     /// Samples produced since the last frame-sequencer step.
@@ -115,6 +120,7 @@ impl Apu {
             square2: Square::default(),
             wave: Wave::default(),
             noise: Noise::default(),
+            fifo: [Fifo::new(); 2],
             cycles: 0,
             sequencer_samples: 0,
             sequencer_step: 0,
@@ -166,7 +172,17 @@ impl Apu {
                 self.raw[Self::index(offset)] = value;
                 self.write_channel_register(offset, value);
             }
-            reg::SOUNDCNT_H | reg::SOUNDBIAS => self.raw[Self::index(offset)] = value,
+            reg::SOUNDCNT_H => {
+                // Bits 11 and 15 reset the FIFOs and read back as zero.
+                if value & (1 << 11) != 0 {
+                    self.fifo[0].reset();
+                }
+                if value & (1 << 15) != 0 {
+                    self.fifo[1].reset();
+                }
+                self.raw[Self::index(offset)] = value & !0x8800;
+            }
+            reg::SOUNDBIAS => self.raw[Self::index(offset)] = value,
             reg::SOUNDCNT_X => {
                 let was_enabled = self.master_enabled();
                 self.raw[Self::index(offset)] = value & 0x80;
@@ -177,13 +193,22 @@ impl Apu {
             reg::WAVE_RAM..reg::FIFO_A => self
                 .wave
                 .write_ram((offset - reg::WAVE_RAM) as usize, value),
+            reg::FIFO_A..=0x0A7 => self.fifo_for(offset).push(&value.to_le_bytes()),
             _ => {}
         }
+    }
+
+    fn fifo_for(&mut self, offset: u32) -> &mut Fifo {
+        &mut self.fifo[usize::from(offset >= reg::FIFO_B)]
     }
 
     /// Writes a byte register by merging it into the last written halfword
     /// (not the readable value, whose write-only fields read as zero).
     pub fn write8(&mut self, offset: u32, value: u8) {
+        if offset >= reg::FIFO_A {
+            self.fifo_for(offset).push(&[value]);
+            return;
+        }
         let aligned = offset & !1;
         let shift = (offset & 1) * 8;
         let current = match aligned {
@@ -242,6 +267,26 @@ impl Apu {
     /// Discards the buffered samples, typically after copying them out.
     pub fn clear_samples(&mut self) {
         self.samples.clear();
+    }
+
+    /// Timer `timer` (0 or 1) overflowed `count` times: every FIFO clocked
+    /// by it advances that many samples. Returns a bit mask (bit 0 = A,
+    /// bit 1 = B) of the FIFOs that now want a DMA refill.
+    pub fn timer_overflow(&mut self, timer: usize, count: u32) -> u8 {
+        let cnt_h = self.raw[Self::index(reg::SOUNDCNT_H)];
+        let mut refill = 0;
+        for (n, fifo) in self.fifo.iter_mut().enumerate() {
+            let selected = usize::from((cnt_h >> (10 + 4 * n)) & 1);
+            if selected != timer {
+                continue;
+            }
+            for _ in 0..count {
+                if fifo.pop() {
+                    refill |= 1 << n;
+                }
+            }
+        }
+        refill
     }
 
     fn sample(&mut self) {
@@ -303,7 +348,15 @@ impl Apu {
             1 => 2,
             _ => 4,
         };
-        let side = |enable_shift: u32, volume_shift: u32| {
+        // Direct sound: an 8-bit sample at 50 % or 100 %, where 100 %
+        // spans the full 10-bit range.
+        let direct = [0, 1].map(|n| {
+            let full = cnt_h & (1 << (2 + n)) != 0;
+            i32::from(self.fifo[n].sample()) * if full { 4 } else { 2 }
+        });
+        // `side` is called with the bit positions of a side's PSG enables
+        // and volume, and of the FIFO A/B enables for the same side.
+        let side = |enable_shift: u32, volume_shift: u32, direct_shift: u32| {
             let enables = cnt_l >> enable_shift;
             let volume = i32::from((cnt_l >> volume_shift) & 7) + 1;
             let sum: i32 = levels
@@ -315,10 +368,16 @@ impl Apu {
             // Four channels at full volume and 100 % ratio span the whole
             // 10-bit range: 60 * 8 * 4 = 1920 -> 512.
             let psg = sum * volume * ratio * OUTPUT_LIMIT / 1920;
-            let total = psg.clamp(-OUTPUT_LIMIT, OUTPUT_LIMIT - 1);
+            let dma: i32 = direct
+                .iter()
+                .enumerate()
+                .filter(|(n, _)| cnt_h & (1 << (direct_shift + 4 * *n as u32)) != 0)
+                .map(|(_, sample)| sample)
+                .sum();
+            let total = (psg + dma).clamp(-OUTPUT_LIMIT, OUTPUT_LIMIT - 1);
             (total << 6) as i16
         };
-        (side(12, 4), side(8, 0))
+        (side(12, 4, 9), side(8, 0, 8))
     }
 }
 
@@ -419,6 +478,31 @@ mod tests {
         assert_eq!(left[0], 128 << 6);
         // After the first eighth the 50 % duty drops low: -15 -> -128.
         assert_eq!(left[40], -128 << 6);
+    }
+
+    #[test]
+    fn fifo_samples_follow_their_timer_and_panning() {
+        let mut apu = powered();
+        // FIFO A: 100 %, timer 0, left only. FIFO B: 50 %, timer 1, right.
+        apu.write16(reg::SOUNDCNT_H, (1 << 2) | (1 << 9) | (1 << 14) | (1 << 12));
+        apu.write16(reg::FIFO_A, 0x0040); // bytes 0x40, 0x00
+        apu.write16(reg::FIFO_A + 2, 0x0000);
+        apu.write8(reg::FIFO_B, 0x80); // -128
+        assert_eq!(apu.read16(reg::SOUNDCNT_H) & 0x8800, 0, "reset bits");
+        assert_eq!(apu.timer_overflow(0, 1), 0b01, "A wants a refill");
+        assert_eq!(apu.timer_overflow(1, 1), 0b10);
+        assert_eq!(apu.fifo[0].sample(), 0x40);
+        assert_eq!(apu.fifo[1].sample(), -128);
+        assert_eq!(apu.mix(), ((0x40 * 4) << 6, (-128 * 2) << 6));
+        // Timer 0 does not clock FIFO B, and A moves on to its next byte.
+        apu.timer_overflow(0, 1);
+        assert_eq!(apu.fifo[1].sample(), -128);
+        assert_eq!(apu.mix(), (0, (-128 * 2) << 6));
+        // Reset bit empties A and silences it.
+        apu.write16(reg::SOUNDCNT_H, (1 << 11) | (1 << 9));
+        assert!(apu.fifo[0].is_empty());
+        apu.timer_overflow(0, 1);
+        assert_eq!(apu.mix(), (0, 0));
     }
 
     #[test]
