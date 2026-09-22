@@ -148,6 +148,16 @@ struct App {
     /// When Esc was last pressed: a second press within
     /// [`LEAVE_WINDOW`] leaves the game, so a stray one cannot.
     leave_armed: Option<Instant>,
+    /// Whether that Esc has been let go of since. One press must not
+    /// leave the game however many events the terminal makes of it —
+    /// some send a key's press and its release as the same bare `\x1b`,
+    /// and a held key repeats.
+    esc_released: bool,
+    /// Whether this terminal has actually delivered a key release. The
+    /// enhancement query is answered by terminals that then never send
+    /// one, and waiting forever for a release that is not coming would
+    /// leave no way out of a game.
+    seen_release: bool,
     /// The sound device, or why there is none.
     audio: Result<AudioOutput, String>,
     /// Sound switched off by the user; samples are dropped.
@@ -168,6 +178,12 @@ struct App {
 
 /// How long the first Esc keeps "press again to leave" open.
 const LEAVE_WINDOW: Duration = Duration::from_secs(2);
+
+/// Shortest gap between the two Esc presses, where the terminal does not
+/// report releases and a release is therefore not something we can wait
+/// for. Two events this close together came from one press of the key,
+/// not from two.
+const MIN_LEAVE_GAP: Duration = Duration::from_millis(80);
 
 /// How long "state saved" and friends stay in the status bar.
 const NOTICE_WINDOW: Duration = Duration::from_secs(2);
@@ -758,6 +774,8 @@ fn play(
         bindings: session.bindings.clone(),
         help: false,
         leave_armed: None,
+        esc_released: false,
+        seen_release: false,
         audio: if session.sound {
             AudioOutput::open().map_err(|e| e.to_string())
         } else {
@@ -788,6 +806,20 @@ fn play(
 
 /// One key in a game: the fixed keys, the panel while it is up, then the
 /// bindings. Returns how the game ended, when the key ends it.
+/// Whether an Esc press is the second of two, and so leaves the game.
+///
+/// `since_first` is how long ago the previous Esc arrived, if one did.
+/// A press counts as a second one when it is inside [`LEAVE_WINDOW`],
+/// far enough from the first not to be the same press reaching us twice,
+/// and — in a terminal that has shown it reports releases — after the
+/// first has actually been let go of.
+fn esc_leaves_game(since_first: Option<Duration>, esc_released: bool, seen_release: bool) -> bool {
+    let Some(since_first) = since_first else {
+        return false;
+    };
+    since_first < LEAVE_WINDOW && since_first >= MIN_LEAVE_GAP && (esc_released || !seen_release)
+}
+
 fn handle_key(app: &mut App, key: crossterm::event::KeyEvent) -> Option<GameExit> {
     let now = Instant::now();
     // Ctrl+Q is fixed, and reaches even the panel: no overlay should be
@@ -800,19 +832,34 @@ fn handle_key(app: &mut App, key: crossterm::event::KeyEvent) -> Option<GameExit
         app.handle_panel_key(key, now);
         return None;
     }
+    if key.kind == KeyEventKind::Release {
+        app.seen_release = true;
+        if key.code == KeyCode::Esc {
+            app.esc_released = true;
+            return None;
+        }
+    }
     if key.kind == KeyEventKind::Press {
         match key.code {
             KeyCode::Esc if app.help => {
                 app.toggle_help(now);
                 return None;
             }
-            // Twice within the window: one Esc is too easy to
-            // hit by accident to throw a game away on.
+            // Twice within the window: one Esc is too easy to hit by
+            // accident to throw a game away on. The second press only
+            // counts once the first has been let go of — or, where the
+            // terminal does not say so, once enough time has passed that
+            // it cannot be the same press arriving twice.
             KeyCode::Esc => {
-                if app.leave_armed.is_some_and(|t| now < t + LEAVE_WINDOW) {
+                if esc_leaves_game(
+                    app.leave_armed.map(|t| now.duration_since(t)),
+                    app.esc_released,
+                    app.seen_release,
+                ) {
                     return Some(GameExit::Back);
                 }
                 app.leave_armed = Some(now);
+                app.esc_released = false;
                 return None;
             }
             KeyCode::Char('?') => {
@@ -950,5 +997,64 @@ fn main() -> ExitCode {
             eprintln!("details in {}", crash_log_hint());
             ExitCode::FAILURE
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// One physical press can reach us as several events — a terminal
+    /// that sends a key's press and release as the same bare `\x1b`, or
+    /// a burst from a held key. None of that may throw a game away.
+    #[test]
+    fn one_esc_never_leaves_the_game() {
+        assert!(!esc_leaves_game(None, false, false));
+        // The same press arriving twice, milliseconds apart.
+        assert!(!esc_leaves_game(
+            Some(Duration::from_millis(5)),
+            false,
+            false
+        ));
+        assert!(!esc_leaves_game(
+            Some(Duration::from_millis(30)),
+            false,
+            false
+        ));
+        // Held down in a terminal that reports releases: no release yet,
+        // so however long it is held, it is still one press.
+        assert!(!esc_leaves_game(
+            Some(Duration::from_millis(900)),
+            false,
+            true
+        ));
+    }
+
+    #[test]
+    fn two_presses_leave_the_game() {
+        // Released in between, as a terminal with the keyboard protocol
+        // reports it.
+        assert!(esc_leaves_game(
+            Some(Duration::from_millis(150)),
+            true,
+            true
+        ));
+        // A terminal that never sends releases: distance in time is all
+        // there is to go on.
+        assert!(esc_leaves_game(
+            Some(Duration::from_millis(150)),
+            false,
+            false
+        ));
+    }
+
+    #[test]
+    fn the_second_press_has_to_be_soon_enough() {
+        assert!(!esc_leaves_game(Some(LEAVE_WINDOW), true, true));
+        assert!(!esc_leaves_game(
+            Some(LEAVE_WINDOW + Duration::from_secs(1)),
+            true,
+            true
+        ));
     }
 }

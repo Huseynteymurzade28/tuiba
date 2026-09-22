@@ -22,6 +22,12 @@ All notable changes to tuiba. The format follows
   does.
 
 ### Fixed
+- Leaving a game really does take two presses of `Esc`. A single press
+  that the terminal reports as more than one event — some send a key's
+  press and its release as the same bare `\x1b` — no longer counts as
+  two: the second press must come after the first has been let go of,
+  or, where releases are not reported, far enough apart in time.
+
 - Windows: the library, recents and key bindings are stored under
   `%APPDATA%\tuiba` instead of `%USERPROFILE%\.config\tuiba`.
   `XDG_CONFIG_HOME` still wins wherever it is set. (#36)
