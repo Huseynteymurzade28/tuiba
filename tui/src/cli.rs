@@ -18,6 +18,8 @@ folder, open the library screen (the folder is added to the library).
 Debug options (headless, no terminal UI; need a ROM path):
   --frames N            emulate N frames and exit
   --screenshot FILE     write the final frame as a PNG (implies --frames)
+  --wav FILE            write the sound produced during the run as a WAV
+                        file (implies --frames)
   --key BUTTON@FROM-TO  hold BUTTON from frame FROM to frame TO (exclusive);
                         BUTTON is one of a b select start right left up down r l;
                         may be given several times
@@ -46,6 +48,8 @@ pub struct Headless {
     pub frames: u32,
     /// Where to write the final frame, if anywhere.
     pub screenshot: Option<PathBuf>,
+    /// Where to write the audio, if anywhere.
+    pub wav: Option<PathBuf>,
     /// Scripted key holds.
     pub keys: Vec<KeyHold>,
 }
@@ -106,6 +110,7 @@ impl Args {
         let mut rom = None;
         let mut frames = None;
         let mut screenshot = None;
+        let mut wav = None;
         let mut keys = Vec::new();
         let mut graphics = true;
 
@@ -121,6 +126,7 @@ impl Args {
                     frames = Some(v.parse().map_err(|_| bad("--frames", &v))?);
                 }
                 "--screenshot" => screenshot = Some(PathBuf::from(value("--screenshot")?)),
+                "--wav" => wav = Some(PathBuf::from(value("--wav")?)),
                 "--no-graphics" => graphics = false,
                 "--key" => {
                     let v = value("--key")?;
@@ -134,7 +140,7 @@ impl Args {
             }
         }
 
-        let debug = frames.is_some() || screenshot.is_some() || !keys.is_empty();
+        let debug = frames.is_some() || screenshot.is_some() || wav.is_some() || !keys.is_empty();
         if debug && rom.is_none() {
             return Err(ArgError::MissingRom);
         }
@@ -142,6 +148,7 @@ impl Args {
             // A screenshot with no frame count means "the first frame".
             frames: frames.unwrap_or(1),
             screenshot,
+            wav,
             keys,
         });
         Ok(Self {
@@ -220,6 +227,8 @@ mod tests {
             "300",
             "--screenshot",
             "out.png",
+            "--wav",
+            "out.wav",
             "--key",
             "start@120-130",
             "--key",
@@ -229,6 +238,7 @@ mod tests {
         let headless = args.headless.unwrap();
         assert_eq!(headless.frames, 300);
         assert_eq!(headless.screenshot, Some(PathBuf::from("out.png")));
+        assert_eq!(headless.wav, Some(PathBuf::from("out.wav")));
         assert_eq!(
             headless.keys,
             vec![

@@ -3,9 +3,10 @@
 //! screenshot.
 
 use std::fs::File;
-use std::io::{self, BufWriter};
+use std::io::{self, BufWriter, Write};
 use std::time::Instant;
 
+use tuiba_core::apu::SAMPLE_RATE;
 use tuiba_core::memory::io::{KEYINPUT_ALL_RELEASED, reg};
 use tuiba_core::{Gba, SCREEN_HEIGHT, SCREEN_WIDTH};
 
@@ -14,12 +15,22 @@ use crate::png;
 
 /// Runs `gba` as configured and prints a one-line summary to stdout.
 pub fn run(gba: &mut Gba, config: &Headless) -> io::Result<()> {
+    let mut audio = Vec::new();
     let start = Instant::now();
     for frame in 0..config.frames {
         gba.set_keyinput(keyinput_at(&config.keys, frame));
         gba.run_frame();
+        if config.wav.is_some() {
+            audio.extend_from_slice(gba.audio());
+        }
+        gba.clear_audio();
     }
     let elapsed = start.elapsed();
+
+    if let Some(path) = &config.wav {
+        let file = BufWriter::new(File::create(path)?);
+        write_wav(file, &audio)?;
+    }
 
     if let Some(path) = &config.screenshot {
         let fb = gba.framebuffer();
@@ -49,6 +60,32 @@ pub fn run(gba: &mut Gba, config: &Headless) -> io::Result<()> {
     Ok(())
 }
 
+/// Writes interleaved stereo 16-bit samples as a canonical 44-byte-header
+/// PCM WAV file.
+fn write_wav(mut out: impl Write, samples: &[i16]) -> io::Result<()> {
+    const CHANNELS: u16 = 2;
+    const BITS: u16 = 16;
+    let data_len = u32::try_from(samples.len() * 2)
+        .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "audio too long for WAV"))?;
+    let block_align = CHANNELS * BITS / 8;
+    out.write_all(b"RIFF")?;
+    out.write_all(&(36 + data_len).to_le_bytes())?;
+    out.write_all(b"WAVEfmt ")?;
+    out.write_all(&16u32.to_le_bytes())?;
+    out.write_all(&1u16.to_le_bytes())?; // PCM
+    out.write_all(&CHANNELS.to_le_bytes())?;
+    out.write_all(&SAMPLE_RATE.to_le_bytes())?;
+    out.write_all(&(SAMPLE_RATE * u32::from(block_align)).to_le_bytes())?;
+    out.write_all(&block_align.to_le_bytes())?;
+    out.write_all(&BITS.to_le_bytes())?;
+    out.write_all(b"data")?;
+    out.write_all(&data_len.to_le_bytes())?;
+    for sample in samples {
+        out.write_all(&sample.to_le_bytes())?;
+    }
+    out.flush()
+}
+
 /// The active-low `KEYINPUT` value for `frame` under the scripted holds.
 fn keyinput_at(holds: &[KeyHold], frame: u32) -> u16 {
     holds
@@ -61,6 +98,19 @@ fn keyinput_at(holds: &[KeyHold], frame: u32) -> u16 {
 mod tests {
     use super::*;
     use crate::input::GbaKey;
+
+    #[test]
+    fn wav_header_describes_stereo_16_bit_pcm() {
+        let mut out = Vec::new();
+        write_wav(&mut out, &[1, -1, 2, -2]).unwrap();
+        assert_eq!(out.len(), 44 + 8);
+        assert_eq!(&out[..4], b"RIFF");
+        assert_eq!(u32::from_le_bytes(out[4..8].try_into().unwrap()), 36 + 8);
+        assert_eq!(u16::from_le_bytes(out[22..24].try_into().unwrap()), 2);
+        assert_eq!(u32::from_le_bytes(out[24..28].try_into().unwrap()), 32_768);
+        assert_eq!(u32::from_le_bytes(out[40..44].try_into().unwrap()), 8);
+        assert_eq!(&out[44..48], &[1, 0, 0xFF, 0xFF]);
+    }
 
     #[test]
     fn scripted_keys_are_active_low_within_range() {

@@ -154,6 +154,8 @@ impl App {
     fn emulate_frame(&mut self, now: Instant) {
         self.gba.set_keyinput(self.keypad.keyinput(now));
         self.gba.run_frame();
+        // No sound output yet: keep the sample buffer from growing.
+        self.gba.clear_audio();
         self.fps_frames += 1;
         let elapsed = now.duration_since(self.fps_window_start);
         if elapsed >= Duration::from_secs(1) {

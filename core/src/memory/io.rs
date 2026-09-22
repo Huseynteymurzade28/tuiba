@@ -6,6 +6,7 @@
 //! write-to-clear `IF`, live `KEYINPUT`). Hardware units (PPU, timers, DMA,
 //! interrupts) will take ownership of their registers as they are built.
 
+use crate::apu::Apu;
 use crate::memory::IO_SIZE;
 use crate::memory::dma::Dma;
 use crate::memory::timers::Timers;
@@ -57,11 +58,8 @@ pub mod reg {
     pub const BLDALPHA: u32 = 0x052;
     pub const BLDY: u32 = 0x054;
 
-    // Sound (not emulated; stored so games see their writes)
-    pub const SOUNDCNT_L: u32 = 0x080;
-    pub const SOUNDCNT_H: u32 = 0x082;
-    pub const SOUNDCNT_X: u32 = 0x084;
-    pub const SOUNDBIAS: u32 = 0x088;
+    // Sound: see `crate::apu::reg` for the full map.
+    pub use crate::apu::reg::{SOUNDBIAS, SOUNDCNT_H, SOUNDCNT_L, SOUNDCNT_X};
 
     // DMA
     pub const DMA0SAD: u32 = 0x0B0;
@@ -130,6 +128,8 @@ pub struct IoRegisters {
     pub timers: Timers,
     /// The DMA controller registers.
     pub dma: Dma,
+    /// The sound unit.
+    pub apu: Apu,
 }
 
 impl Default for IoRegisters {
@@ -148,6 +148,7 @@ impl IoRegisters {
             halt_requested: false,
             timers: Timers::new(),
             dma: Dma::new(),
+            apu: Apu::new(),
         }
     }
 
@@ -158,6 +159,9 @@ impl IoRegisters {
         let off = (offset & !1) as usize;
         if off >= IO_SIZE {
             return 0;
+        }
+        if crate::apu::REGISTER_RANGE.contains(&(off as u32)) {
+            return self.apu.read16(off as u32);
         }
         if DMA_RANGE.contains(&off) {
             let (n, sub) = ((off - 0xB0) / 12, (off - 0xB0) % 12);
@@ -201,6 +205,10 @@ impl IoRegisters {
         if off >= IO_SIZE {
             return;
         }
+        if crate::apu::REGISTER_RANGE.contains(&(off as u32)) {
+            self.apu.write16(off as u32, value);
+            return;
+        }
         if DMA_RANGE.contains(&off) {
             let (n, sub) = ((off - 0xB0) / 12, (off - 0xB0) % 12);
             let ch = &mut self.dma.channels[n];
@@ -240,6 +248,12 @@ impl IoRegisters {
         // HALTCNT: bit 7 clear = halt, set = stop (treated as halt).
         if offset == reg::HALTCNT {
             self.halt_requested = true;
+            return;
+        }
+        if crate::apu::REGISTER_RANGE.contains(&offset) {
+            // Sound registers have write-only fields that a read-merge
+            // would lose, and FIFO bytes are pushed rather than stored.
+            self.apu.write8(offset, value);
             return;
         }
         let aligned = offset & !1;

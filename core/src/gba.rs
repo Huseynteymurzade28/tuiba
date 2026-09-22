@@ -108,6 +108,20 @@ impl Gba {
         &self.ppu.framebuffer
     }
 
+    /// Audio produced since the last [`Gba::clear_audio`]: interleaved
+    /// stereo 16-bit samples at [`crate::apu::SAMPLE_RATE`] Hz.
+    #[must_use]
+    pub fn audio(&self) -> &[i16] {
+        self.bus.io.apu.samples()
+    }
+
+    /// Discards the buffered audio, once the frontend has consumed it.
+    /// A frontend without sound output should call this every frame so
+    /// the buffer does not grow without bound.
+    pub fn clear_audio(&mut self) {
+        self.bus.io.apu.clear_samples();
+    }
+
     /// Runs the system until the PPU finishes a frame (enters VBlank).
     pub fn run_frame(&mut self) {
         loop {
@@ -140,6 +154,7 @@ impl Gba {
         for n in (0..4).filter(|n| timer_irqs & (1 << n) != 0) {
             self.bus.io.request_interrupt(Timers::interrupt(n));
         }
+        self.bus.io.apu.step(cycles);
 
         let events = self.ppu.step(cycles, &mut self.bus.io, &self.bus.video);
         if events.hblank {

@@ -10,9 +10,11 @@
 //! - [`memory`] – GBA address-space layout, bus and cartridge.
 //! - [`cpu`]    – the ARM7TDMI core.
 //! - [`ppu`]    – LCD timing and scanline rendering into a framebuffer.
+//! - [`apu`]    – sound channels, mixer and sample output.
 //! - [`bios`]   – software emulation of BIOS system calls.
 //! - [`gba`]    – the assembled system and its run loop.
 
+pub mod apu;
 pub mod bios;
 pub mod cpu;
 pub mod error;
