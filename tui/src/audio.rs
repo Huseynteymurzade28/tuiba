@@ -89,6 +89,16 @@ impl AudioOutput {
             queue.drain(..excess);
         }
     }
+
+    /// Drops what is queued and primes silence again, for a jump in time
+    /// the queued samples do not belong to (loading a save state). The
+    /// silence is what [`AudioOutput::open`] starts with: without it the
+    /// device would run dry before the first frame after the jump.
+    pub fn flush(&self) {
+        let mut queue = self.queue.lock().unwrap_or_else(PoisonError::into_inner);
+        queue.clear();
+        queue.extend(std::iter::repeat_n([0, 0], PRIME));
+    }
 }
 
 /// Builds the output stream for sample type `T`, with the resampling

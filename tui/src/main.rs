@@ -34,7 +34,7 @@ use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Borders, Clear, Padding, Paragraph};
 use ratatui::{Frame, Terminal};
-use tuiba_core::{Cartridge, Gba};
+use tuiba_core::{Cartridge, Gba, Snapshot};
 
 use crate::audio::AudioOutput;
 use crate::bindings::{Action, Bindings};
@@ -149,10 +149,18 @@ struct App {
     audio: Result<AudioOutput, String>,
     /// Sound switched off by the user; samples are dropped.
     muted: bool,
+    /// The quick save state, and when it was taken. It lives as long as
+    /// the game does: leaving for the library drops it.
+    state: Option<Snapshot>,
+    /// What the last save/load did and when, for the status bar.
+    state_notice: Option<(String, Instant)>,
 }
 
 /// How long the first Esc keeps "press again to leave" open.
 const LEAVE_WINDOW: Duration = Duration::from_secs(2);
+
+/// How long "state saved" and friends stay in the status bar.
+const NOTICE_WINDOW: Duration = Duration::from_secs(2);
 
 /// Nominal GBA frame rate, for the fast-forward multiplier.
 const NOMINAL_FPS: f64 = 1_000_000.0 / 16_743.0;
@@ -197,6 +205,32 @@ impl App {
     fn toggle_help(&mut self, now: Instant) {
         self.help = !self.help;
         self.reset_fps(now);
+    }
+
+    /// Freezes the machine into the quick slot, replacing whatever was
+    /// there.
+    fn save_state(&mut self, now: Instant) {
+        self.state = Some(self.gba.snapshot());
+        self.state_notice = Some(("state saved".to_string(), now));
+    }
+
+    /// Puts the quick slot back, if there is one.
+    ///
+    /// The sound queue is flushed with it: it holds samples from the
+    /// moment being replaced, and playing them after the jump is a
+    /// click. Backup memory comes back with the state, so the next
+    /// autosave writes the `.sav` the state expects.
+    fn load_state(&mut self, now: Instant) {
+        let Some(snapshot) = &self.state else {
+            self.state_notice = Some(("no state saved yet".to_string(), now));
+            return;
+        };
+        self.gba.restore(snapshot);
+        if let Ok(audio) = &self.audio {
+            audio.flush();
+        }
+        self.reset_fps(now);
+        self.state_notice = Some(("state loaded".to_string(), now));
     }
 
     fn reset_fps(&mut self, now: Instant) {
@@ -300,6 +334,12 @@ impl App {
             Ok(_) => "",
             Err(_) => "  🔇 no audio",
         };
+        let notice = self
+            .state_notice
+            .as_ref()
+            .filter(|(_, at)| now < *at + NOTICE_WINDOW)
+            .map(|(text, _)| format!("  [{text}]"))
+            .unwrap_or_default();
         let mode = if self.help {
             "  ⏸ keys".to_string()
         } else if self.leave_armed.is_some_and(|t| now < t + LEAVE_WINDOW) {
@@ -318,7 +358,7 @@ impl App {
             ),
             Span::styled(
                 format!(
-                    "{:.0} fps{mode}  {renderer}{size_hint}{keys}{sound}{swi_hint}{held}{save}",
+                    "{:.0} fps{mode}  {renderer}{size_hint}{keys}{sound}{notice}{swi_hint}{held}{save}",
                     self.fps
                 ),
                 Style::default().fg(theme::DIM).bg(theme::SURFACE),
@@ -602,6 +642,8 @@ fn play(
             Err("muted".into())
         },
         muted: !session.sound,
+        state: None,
+        state_notice: None,
     };
     let result = std::panic::catch_unwind(AssertUnwindSafe(|| event_loop(terminal, &mut app)));
 
@@ -716,6 +758,12 @@ fn event_loop(
                     }
                     Some(Action::Step) if key.kind == KeyEventKind::Press && app.paused => {
                         app.step = true;
+                    }
+                    Some(Action::SaveState) if key.kind == KeyEventKind::Press => {
+                        app.save_state(now);
+                    }
+                    Some(Action::LoadState) if key.kind == KeyEventKind::Press => {
+                        app.load_state(now);
                     }
                     _ => {}
                 }

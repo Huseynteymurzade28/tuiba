@@ -6,6 +6,11 @@ All notable changes to tuiba. The format follows
 
 ## [Unreleased]
 
+### Added
+- Save states: `F5` freezes the whole machine and `F8` restores it, from
+  anywhere in a game. The state is kept in memory for as long as the game
+  is open. (#15)
+
 ### Fixed
 - Windows: the library, recents and key bindings are stored under
   `%APPDATA%\tuiba` instead of `%USERPROFILE%\.config\tuiba`.

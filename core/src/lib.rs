@@ -13,6 +13,7 @@
 //! - [`apu`]    – sound channels, mixer and sample output.
 //! - [`bios`]   – software emulation of BIOS system calls.
 //! - [`gba`]    – the assembled system and its run loop.
+//! - [`state`]  – save states: the whole machine, frozen and thawed.
 
 pub mod apu;
 pub mod bios;
@@ -21,9 +22,11 @@ pub mod error;
 pub mod gba;
 pub mod memory;
 pub mod ppu;
+pub mod state;
 
 pub use cpu::Cpu;
 pub use error::{GbaError, Result};
 pub use gba::Gba;
 pub use memory::{Bus, Cartridge, Memory};
 pub use ppu::{Framebuffer, Ppu, SCREEN_HEIGHT, SCREEN_WIDTH};
+pub use state::Snapshot;

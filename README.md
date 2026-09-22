@@ -127,6 +127,11 @@ tuiba --no-graphics    # force the half-block renderer
 tuiba --mute           # start silent; M toggles sound in a game
 ```
 
+`F5` freezes the machine and `F8` puts it back — the whole console, not
+just the game's own save, so it works in cartridges that never save and
+in the middle of a boss fight alike. The state lives as long as the game
+is open; leaving for the library drops it.
+
 Saves live next to the ROM as `<name>.sav`. The file is written within a
 second of the game saving and again when you leave, so a crash or a closed
 terminal costs at most a moment of progress. The save type (SRAM, flash,
@@ -147,6 +152,7 @@ please attach that to a bug report.
 | `a` — add a folder               | `P` — pause, `.` — advance one frame         |
 | `tab` — folder list, `x` removes | `Tab` or `F` (held) — fast-forward           |
 | `r` — rescan folders             | `M` — mute                                   |
+|                                  | `F5` — save state, `F8` — load it back       |
 |                                  | `?` — show the active bindings               |
 | `q` — quit (asks first)          | `Esc` `Esc` — back to the library            |
 |                                  | `Ctrl+Q` — quit                              |
@@ -162,10 +168,10 @@ Windows), one action per line:
 
 ```ini
 # button = key [key ...]      actions: up down left right a b l r
-a      = j                    #          start select pause step fast mute
-b      = k
+a      = j                    #          start select pause step fast
+b      = k                    #          mute save load
 select = space                # unlisted actions keep their defaults
-fast   = f5 tab               # an empty right-hand side unbinds
+fast   = f9 tab               # an empty right-hand side unbinds
 ```
 
 Keys are single characters or `up down left right enter space backspace

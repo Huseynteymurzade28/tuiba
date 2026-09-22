@@ -39,11 +39,15 @@ pub enum Action {
     FastForward,
     /// Toggle sound output.
     Mute,
+    /// Freeze the machine into the quick slot.
+    SaveState,
+    /// Put the quick slot back.
+    LoadState,
 }
 
 impl Action {
     /// Every action, in the order the help overlay and the file use.
-    pub const ALL: [Self; 14] = [
+    pub const ALL: [Self; 16] = [
         Self::Button(GbaKey::Up),
         Self::Button(GbaKey::Down),
         Self::Button(GbaKey::Left),
@@ -58,6 +62,8 @@ impl Action {
         Self::Step,
         Self::FastForward,
         Self::Mute,
+        Self::SaveState,
+        Self::LoadState,
     ];
 
     /// The name used in the keys file.
@@ -78,6 +84,8 @@ impl Action {
             Self::Step => "step",
             Self::FastForward => "fast",
             Self::Mute => "mute",
+            Self::SaveState => "save",
+            Self::LoadState => "load",
         }
     }
 
@@ -99,6 +107,8 @@ impl Action {
             Self::Step => "one frame (paused)",
             Self::FastForward => "fast-forward (hold)",
             Self::Mute => "mute sound",
+            Self::SaveState => "save state",
+            Self::LoadState => "load state",
         }
     }
 
@@ -157,6 +167,8 @@ impl Bindings {
         bind(&mut b, Action::Step, &[Char('.')]);
         bind(&mut b, Action::FastForward, &[KeyCode::Tab, Char('f')]);
         bind(&mut b, Action::Mute, &[Char('m')]);
+        bind(&mut b, Action::SaveState, &[KeyCode::F(5)]);
+        bind(&mut b, Action::LoadState, &[KeyCode::F(8)]);
         b
     }
 

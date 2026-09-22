@@ -1,6 +1,7 @@
 //! Cartridge ROM loading and header parsing.
 
 use std::path::Path;
+use std::sync::Arc;
 
 use crate::error::{GbaError, Result};
 use crate::memory::ROM_MAX_SIZE;
@@ -75,9 +76,13 @@ impl Header {
 }
 
 /// A loaded cartridge: ROM image plus parsed header.
+///
+/// The ROM is shared rather than copied: cloning a [`Cartridge`] — which
+/// a save state does, through [`Gba::snapshot`](crate::Gba::snapshot) —
+/// must not duplicate up to 32 MiB that nothing ever writes to.
 #[derive(Debug, Clone)]
 pub struct Cartridge {
-    rom: Box<[u8]>,
+    rom: Arc<[u8]>,
     header: Header,
     save_type: SaveType,
 }
@@ -106,7 +111,7 @@ impl Cartridge {
         let header = Header::parse(&rom);
         let save_type = SaveType::detect(&rom);
         Ok(Self {
-            rom: rom.into_boxed_slice(),
+            rom: rom.into(),
             header,
             save_type,
         })
