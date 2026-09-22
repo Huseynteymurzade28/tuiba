@@ -104,9 +104,10 @@ For the pixel renderer use Kitty, Ghostty, WezTerm or Konsole.
    levels deep are searched too. The folder is remembered
    in `~/.config/tuiba/library`, one path per line, so you can also edit
    that file by hand.
-3. Pick a cartridge with `↑`/`↓` and press `⏎` to play. `Esc` brings you
-   back to the library; `Ctrl+Q` quits from anywhere. The library opens
-   on the cartridge you played last (`~/.config/tuiba/recent`).
+3. Pick a cartridge with `↑`/`↓` and press `⏎` to play. `Esc` twice
+   brings you back to the library; `Ctrl+Q` quits from anywhere. The
+   library opens on the cartridge you played last
+   (`~/.config/tuiba/recent`).
 
 Shortcuts:
 
@@ -136,7 +137,7 @@ please attach that to a bug report.
 | `a` — add a folder               | `P` — pause, `.` — advance one frame         |
 | `tab` — folder list, `x` removes | `Tab` or `F` (held) — fast-forward           |
 | `r` — rescan folders             | `?` — show the active bindings               |
-| `q` — quit                       | `Esc` — back to the library                  |
+| `q` — quit (asks first)          | `Esc` `Esc` — back to the library            |
 |                                  | `Ctrl+Q` — quit                              |
 
 Terminals that support the Kitty keyboard protocol report key releases,

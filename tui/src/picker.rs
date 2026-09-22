@@ -39,6 +39,8 @@ enum Mode {
     AddFolder(String),
     /// Typing a filter; the list narrows as it grows.
     Filter,
+    /// "Quit?" prompt: `y` or Enter confirms, anything else cancels.
+    ConfirmQuit,
 }
 
 /// Orderings for the cartridge list, cycled with `s`.
@@ -267,19 +269,24 @@ impl Picker {
                 self.handle_add_folder(key);
                 return None;
             }
+            Mode::ConfirmQuit => {
+                self.mode = Mode::Browse;
+                return matches!(key.code, KeyCode::Char('y' | 'Y') | KeyCode::Enter)
+                    .then_some(Outcome::Quit);
+            }
             Mode::Browse => {}
         }
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
-        // A held key never quits: its repeats would otherwise carry the Esc
-        // that left a game straight through the library.
+        // A held key never asks to quit: its repeats would otherwise carry
+        // the Esc that left a game straight into the prompt.
         let pressed = key.kind == KeyEventKind::Press;
         match key.code {
-            // Esc first drops an active filter, then quits.
+            // Esc first drops an active filter, then asks to quit.
             KeyCode::Esc if !self.filter.is_empty() => {
                 self.filter.clear();
                 self.refresh_view();
             }
-            KeyCode::Esc | KeyCode::Char('q') if pressed => return Some(Outcome::Quit),
+            KeyCode::Esc | KeyCode::Char('q') if pressed => self.mode = Mode::ConfirmQuit,
             KeyCode::Char('/') => {
                 self.mode = Mode::Filter;
                 self.focus = Focus::Roms;
@@ -768,6 +775,10 @@ impl Picker {
 
     fn draw_footer(&self, frame: &mut Frame, area: Rect) {
         let line = match &self.mode {
+            Mode::ConfirmQuit => Line::from(vec![
+                Span::styled(" Quit tuiba? ", theme::key()),
+                Span::styled("   y yes  esc / n no", theme::hint()),
+            ]),
             Mode::AddFolder(input) => Line::from(vec![
                 Span::styled(" Add folder ", theme::key()),
                 Span::styled(
@@ -951,10 +962,12 @@ mod tests {
             p.handle(key(KeyCode::Enter)),
             Some(Outcome::Play(PathBuf::from("/r/Pliko.gba")))
         );
-        // Esc in browse mode clears the filter before it quits.
+        // Esc in browse mode clears the filter before it asks to quit.
         assert_eq!(p.handle(key(KeyCode::Esc)), None);
         assert_eq!(names(&p).len(), 3);
-        assert_eq!(p.handle(key(KeyCode::Esc)), Some(Outcome::Quit));
+        assert_eq!(p.handle(key(KeyCode::Esc)), None);
+        assert_eq!(p.mode, Mode::ConfirmQuit);
+        assert_eq!(p.handle(key(KeyCode::Char('y'))), Some(Outcome::Quit));
     }
 
     #[test]
@@ -1006,10 +1019,20 @@ mod tests {
             p.handle(key(KeyCode::Enter)),
             Some(Outcome::Play(PathBuf::from("/r/b.gba")))
         );
-        assert_eq!(p.handle(key(KeyCode::Char('q'))), Some(Outcome::Quit));
+        // q asks first; any key but y/Enter backs out.
+        assert_eq!(p.handle(key(KeyCode::Char('q'))), None);
+        assert_eq!(p.mode, Mode::ConfirmQuit);
+        assert_eq!(p.handle(key(KeyCode::Char('n'))), None);
+        assert_eq!(p.mode, Mode::Browse);
+        p.handle(key(KeyCode::Esc));
+        assert_eq!(p.handle(key(KeyCode::Esc)), None, "Esc cancels the prompt");
+        assert_eq!(p.mode, Mode::Browse);
+        p.handle(key(KeyCode::Char('q')));
+        assert_eq!(p.handle(key(KeyCode::Enter)), Some(Outcome::Quit));
         let mut repeat = key(KeyCode::Esc);
         repeat.kind = KeyEventKind::Repeat;
-        assert_eq!(p.handle(repeat), None, "a held key does not quit");
+        assert_eq!(p.handle(repeat), None, "a held key does not ask");
+        assert_eq!(p.mode, Mode::Browse);
     }
 
     #[test]

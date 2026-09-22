@@ -139,7 +139,13 @@ struct App {
     bindings: Bindings,
     /// The `?` overlay is up; emulation waits while it is.
     help: bool,
+    /// When Esc was last pressed: a second press within
+    /// [`LEAVE_WINDOW`] leaves the game, so a stray one cannot.
+    leave_armed: Option<Instant>,
 }
+
+/// How long the first Esc keeps "press again to leave" open.
+const LEAVE_WINDOW: Duration = Duration::from_secs(2);
 
 /// Nominal GBA frame rate, for the fast-forward multiplier.
 const NOMINAL_FPS: f64 = 1_000_000.0 / 16_743.0;
@@ -277,6 +283,8 @@ impl App {
             .unwrap_or_default();
         let mode = if self.help {
             "  ⏸ keys".to_string()
+        } else if self.leave_armed.is_some_and(|t| now < t + LEAVE_WINDOW) {
+            "  esc again to leave".to_string()
         } else if self.paused {
             "  ⏸ paused  (. = one frame)".to_string()
         } else if self.fast.is_held(now) {
@@ -298,7 +306,7 @@ impl App {
             ),
             Span::styled("   ? ", theme::key()),
             Span::styled("keys  ", theme::hint()),
-            Span::styled(" esc ", theme::key()),
+            Span::styled(" esc esc ", theme::key()),
             Span::styled("library  ", theme::hint()),
             Span::styled(" ctrl+q ", theme::key()),
             Span::styled("quit", theme::hint()),
@@ -331,7 +339,11 @@ impl App {
             })
             .collect();
         lines.push(Line::default());
-        for (label, key) in [("library", "esc"), ("quit", "ctrl+q"), ("this list", "?")] {
+        for (label, key) in [
+            ("library", "esc esc"),
+            ("quit", "ctrl+q"),
+            ("this list", "?"),
+        ] {
             lines.push(Line::from(vec![
                 Span::styled(format!("{label:>20}  "), theme::dim()),
                 Span::styled(key, theme::text()),
@@ -550,6 +562,7 @@ fn play(
         fast: Hold::new(release_events),
         bindings,
         help: false,
+        leave_armed: None,
     };
     let result = std::panic::catch_unwind(AssertUnwindSafe(|| event_loop(terminal, &mut app)));
 
@@ -627,7 +640,15 @@ fn event_loop(
                             app.toggle_help(now);
                             continue;
                         }
-                        KeyCode::Esc => return Ok(GameExit::Back),
+                        // Twice within the window: one Esc is too easy to
+                        // hit by accident to throw a game away on.
+                        KeyCode::Esc => {
+                            if app.leave_armed.is_some_and(|t| now < t + LEAVE_WINDOW) {
+                                return Ok(GameExit::Back);
+                            }
+                            app.leave_armed = Some(now);
+                            continue;
+                        }
                         KeyCode::Char('q') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                             return Ok(GameExit::Quit);
                         }
