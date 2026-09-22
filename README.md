@@ -109,8 +109,7 @@ Konsole.
    levels deep are searched too. The folder is remembered
    in `~/.config/tuiba/library`, one path per line, so you can also edit
    that file by hand.
-3. Pick a cartridge with `↑`/`↓` and press `⏎` to play. Once you have
-   played one, the cartridge pane shows the frame you left it on. `Esc` twice
+3. Pick a cartridge with `↑`/`↓` and press `⏎` to play. `Esc` twice
    brings you back to the library; `Ctrl+Q` quits from anywhere. The
    library opens on the cartridge you played last
    (`~/.config/tuiba/recent`).

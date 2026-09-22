@@ -10,7 +10,6 @@ mod input;
 mod library;
 mod picker;
 mod png;
-mod preview;
 mod savestate;
 mod screen;
 mod states;
@@ -264,9 +263,6 @@ impl App {
             self.held_state = Some(snapshot.clone());
             "state saved (no state directory; this session only)".to_string()
         };
-        // The library shows the frame a cartridge was last at; a state
-        // is exactly that moment.
-        preview::write(&self.rom, snapshot.framebuffer());
         if let Some(panel) = &mut self.panel {
             panel.replace_selected(Some(snapshot));
         }
@@ -803,12 +799,6 @@ fn play(
 
     // Persist the save however the loop ended.
     app.flush_save();
-    // …and the frame the player left on, for the library to show. Not
-    // after a crash: the last frame of a game that fell over is not a
-    // picture of anywhere worth returning to.
-    if result.is_ok() {
-        preview::write(&app.rom, app.gba.framebuffer());
-    }
     if let Some(err) = &app.save_error {
         crashlog::record(
             "save",

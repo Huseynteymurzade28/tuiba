@@ -2,7 +2,6 @@
 
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
-use std::time::SystemTime;
 
 use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use ratatui::Frame;
@@ -12,12 +11,10 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{
     Block, BorderType, Borders, Clear, List, ListItem, ListState, Padding, Paragraph, Wrap,
 };
-use tuiba_core::Framebuffer;
 use tuiba_core::memory::SaveType;
 
 use crate::library::{Library, Recent, Rom, compact_home, expand_home, human_size};
-use crate::screen::GbaScreen;
-use crate::{preview, states, theme, wordmark};
+use crate::{theme, wordmark};
 
 /// What the user decided.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -45,20 +42,6 @@ enum Mode {
     /// "Quit?" prompt: `y` or Enter confirms, anything else cancels.
     ConfirmQuit,
 }
-
-/// Height of the CARTRIDGE pane with no preview: the label strip and the
-/// fact rows.
-const DETAIL_HEIGHT: u16 = 10;
-/// Width the facts keep before a preview may have what is left.
-const FACTS_WIDTH: u16 = 24;
-/// Columns between the facts and the preview.
-const PREVIEW_GAP: u16 = 2;
-/// Rows the folder list keeps whatever the cartridge pane wants.
-const FOLDERS_MIN_HEIGHT: u16 = 6;
-/// Scales a preview may be drawn at, roomiest first: 1/8 is 30×10 cells,
-/// 1/12 is 20×7. Anything narrower than the smaller of those has no
-/// preview at all.
-const PREVIEW_SCALES: [u16; 2] = [8, 12];
 
 /// Orderings for the cartridge list, cycled with `s`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -110,9 +93,6 @@ pub struct Picker {
     filter: String,
     /// Transient feedback shown in the footer until the next key.
     notice: Option<(String, bool)>,
-    /// The selected cartridge's preview frame, kept until the selection
-    /// moves off it. Read from the cache, never emulated here.
-    preview: Option<(PathBuf, Framebuffer, SystemTime)>,
 }
 
 impl Picker {
@@ -135,7 +115,6 @@ impl Picker {
             sort: Sort::Title,
             filter: String::new(),
             notice: None,
-            preview: None,
         };
         picker.rescan();
         // Start on whatever was played last.
@@ -458,52 +437,11 @@ impl Picker {
         let [list_area, side] =
             Layout::horizontal([Constraint::Percentage(56), Constraint::Fill(1)]).areas(body);
         self.draw_roms(frame, list_area);
-
-        // The preview only earns its place where a whole frame fits
-        // beside the facts, and where the folder list still has room.
-        self.load_preview();
-        let preview_size = self
-            .selected_preview()
-            .and_then(|_| Self::preview_size(side));
-        let detail_height = preview_size.map_or(DETAIL_HEIGHT, |(_, rows)| {
-            // Label strip, the frame, its caption, and the borders.
-            3 + rows + 1 + 2
-        });
         let [detail, folders] =
-            Layout::vertical([Constraint::Length(detail_height), Constraint::Fill(1)]).areas(side);
-        self.draw_detail(frame, detail, preview_size);
+            Layout::vertical([Constraint::Length(10), Constraint::Fill(1)]).areas(side);
+        self.draw_detail(frame, detail);
         self.draw_folders(frame, folders);
         self.draw_footer(frame, footer);
-    }
-
-    /// Reads the selected cartridge's preview, unless it is already the
-    /// one in hand. A cartridge with no preview leaves `None`, and is
-    /// not read again until the selection comes back to it.
-    fn load_preview(&mut self) {
-        let Some(path) = self
-            .visible
-            .get(self.rom_index)
-            .and_then(|&i| self.roms.get(i))
-            .map(|rom| rom.path.clone())
-        else {
-            self.preview = None;
-            return;
-        };
-        if self.preview.as_ref().is_some_and(|(p, ..)| *p == path) {
-            return;
-        }
-        self.preview = preview::read(&path).map(|(frame, at)| (path, frame, at));
-    }
-
-    /// The preview of the cartridge under the cursor, if that is still
-    /// what `load_preview` last read.
-    fn selected_preview(&self) -> Option<(&Framebuffer, SystemTime)> {
-        let (path, frame, at) = self.preview.as_ref()?;
-        let selected = self
-            .visible
-            .get(self.rom_index)
-            .and_then(|&i| self.roms.get(i))?;
-        (selected.path == *path).then_some((frame, *at))
     }
 
     fn draw_header(&self, frame: &mut Frame, area: Rect) {
@@ -684,14 +622,28 @@ impl Picker {
         frame.render_widget(Paragraph::new(meta).style(meta_style), meta_row);
     }
 
-    /// The `label  value` rows under the cartridge label: what the file
-    /// is, what the header says, how it saves and when it was played.
-    fn cartridge_facts(
-        rom: &Rom,
-        save_type: Option<SaveType>,
-        played: Option<usize>,
-        width: u16,
-    ) -> Vec<Line<'static>> {
+    fn draw_detail(&mut self, frame: &mut Frame, area: Rect) {
+        let block = Self::pane("CARTRIDGE", false);
+        let inner = block.inner(area);
+        frame.render_widget(block, area);
+        let Some(rom) = self
+            .visible
+            .get(self.rom_index)
+            .and_then(|&i| self.roms.get_mut(i))
+        else {
+            frame.render_widget(
+                Paragraph::new("Select a cartridge to see its details.").style(theme::dim()),
+                inner,
+            );
+            return;
+        };
+        let save_type = rom.save_type();
+        let played = self.recent.rank(&rom.path);
+
+        let [label_area, rows_area] =
+            Layout::vertical([Constraint::Length(3), Constraint::Fill(1)]).areas(inner);
+        Self::draw_cartridge_label(frame, label_area, rom);
+
         let row = |label: &str, value: Span<'static>| {
             Line::from(vec![
                 Span::styled(format!("{label:<8}"), theme::dim()),
@@ -757,7 +709,7 @@ impl Picker {
                 None => Span::styled("never", theme::dim()),
             },
         ));
-        let path_width = usize::from(width).saturating_sub(8);
+        let path_width = usize::from(inner.width).saturating_sub(8);
         lines.push(row(
             "Path",
             Span::styled(
@@ -765,75 +717,7 @@ impl Picker {
                 theme::dim(),
             ),
         ));
-        lines
-    }
-
-    /// The biggest preview the side column can hold, in cells, or `None`
-    /// where even the smallest would crowd out the facts or the folders.
-    fn preview_size(side: Rect) -> Option<(u16, u16)> {
-        PREVIEW_SCALES.into_iter().find_map(|scale| {
-            let (cols, rows) = GbaScreen::thumbnail_size(scale);
-            let fits_across = side.width >= FACTS_WIDTH + PREVIEW_GAP + cols + 2;
-            let fits_down = side.height >= 3 + rows + 1 + 2 + FOLDERS_MIN_HEIGHT;
-            (fits_across && fits_down).then_some((cols, rows))
-        })
-    }
-
-    fn draw_detail(&mut self, frame: &mut Frame, area: Rect, preview_size: Option<(u16, u16)>) {
-        let mut preview_area = None;
-        let block = Self::pane("CARTRIDGE", false);
-        let inner = block.inner(area);
-        frame.render_widget(block, area);
-        let Some(rom) = self
-            .visible
-            .get(self.rom_index)
-            .and_then(|&i| self.roms.get_mut(i))
-        else {
-            frame.render_widget(
-                Paragraph::new("Select a cartridge to see its details.").style(theme::dim()),
-                inner,
-            );
-            return;
-        };
-        let save_type = rom.save_type();
-        let played = self.recent.rank(&rom.path);
-
-        let [label_area, rows_area] =
-            Layout::vertical([Constraint::Length(3), Constraint::Fill(1)]).areas(inner);
-        Self::draw_cartridge_label(frame, label_area, rom);
-        let rows_area = if let Some((cols, _)) = preview_size {
-            let [facts, _, shot] = Layout::horizontal([
-                Constraint::Fill(1),
-                Constraint::Length(PREVIEW_GAP),
-                Constraint::Length(cols),
-            ])
-            .areas(rows_area);
-            preview_area = Some(shot);
-            facts
-        } else {
-            rows_area
-        };
-
-        let lines = Self::cartridge_facts(rom, save_type, played, rows_area.width);
         frame.render_widget(Paragraph::new(lines), rows_area);
-        if let Some(area) = preview_area {
-            self.draw_preview(frame, area);
-        }
-    }
-
-    /// The frame this cartridge was last left on, with its age under it.
-    fn draw_preview(&self, frame: &mut Frame, area: Rect) {
-        let Some((shot, taken_at)) = self.selected_preview() else {
-            return;
-        };
-        let [image, caption] =
-            Layout::vertical([Constraint::Fill(1), Constraint::Length(1)]).areas(area);
-        frame.render_widget(GbaScreen::thumbnail(shot), image);
-        frame.render_widget(
-            Paragraph::new(Line::styled(states::ago(taken_at), theme::dim()))
-                .alignment(Alignment::Center),
-            caption,
-        );
     }
 
     fn draw_folders(&self, frame: &mut Frame, area: Rect) {
