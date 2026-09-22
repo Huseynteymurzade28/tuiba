@@ -114,6 +114,10 @@ Konsole.
    library opens on the cartridge you played last
    (`~/.config/tuiba/recent`).
 
+Both files live in tuiba's configuration directory: `~/.config/tuiba`,
+or `$XDG_CONFIG_HOME/tuiba` where that is set, or `%APPDATA%\tuiba` on
+Windows.
+
 Shortcuts:
 
 ```sh
@@ -152,8 +156,9 @@ so holding and releasing buttons works exactly. Elsewhere a key counts as
 held until it stops auto-repeating; the status bar shows `keys: timeout`
 in that case.
 
-To change the in-game keys, create `~/.config/tuiba/keys` (or
-`$XDG_CONFIG_HOME/tuiba/keys`), one action per line:
+To change the in-game keys, create a `keys` file in the configuration
+directory (`~/.config/tuiba/keys`, or `%APPDATA%\tuiba\keys` on
+Windows), one action per line:
 
 ```ini
 # button = key [key ...]      actions: up down left right a b l r

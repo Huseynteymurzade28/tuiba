@@ -1,10 +1,10 @@
 //! The ROM library: a list of folders remembered between runs, the
 //! cartridges found in them, and which ones were played recently.
 //!
-//! The folder list lives in `$XDG_CONFIG_HOME/tuiba/library` (or
-//! `~/.config/tuiba/library`), one path per line, so it is trivial to
-//! edit by hand. `recent` in the same directory holds the last played
-//! cartridges, newest first, in the same format.
+//! The folder list lives in `library` inside the configuration directory
+//! ([`config_dir`]), one path per line, so it is trivial to edit by hand.
+//! `recent` in the same directory holds the last played cartridges,
+//! newest first, in the same format.
 
 use std::fs;
 use std::io;

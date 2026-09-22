@@ -4,6 +4,13 @@ All notable changes to tuiba. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow
 [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Fixed
+- Windows: the library, recents and key bindings are stored under
+  `%APPDATA%\tuiba` instead of `%USERPROFILE%\.config\tuiba`.
+  `XDG_CONFIG_HOME` still wins wherever it is set. (#36)
+
 ## [0.3.0] – 2026-09-22
 
 ### Added

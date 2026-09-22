@@ -1,7 +1,8 @@
 //! Key bindings: which terminal key does what in a game.
 //!
-//! The defaults live in [`Bindings::defaults`]; `~/.config/tuiba/keys`
-//! (or `$XDG_CONFIG_HOME/tuiba/keys`) overrides them one action per line:
+//! The defaults live in [`Bindings::defaults`]; a `keys` file in the
+//! configuration directory ([`crate::library::config_dir`]) overrides them
+//! one action per line:
 //!
 //! ```text
 //! # button = key [key ...]
