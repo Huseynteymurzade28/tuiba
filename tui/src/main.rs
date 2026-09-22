@@ -1,5 +1,6 @@
 //! Terminal frontend for the `tuiba` Game Boy Advance emulator.
 
+mod audio;
 mod bindings;
 mod cli;
 mod crashlog;
@@ -35,6 +36,7 @@ use ratatui::widgets::{Block, BorderType, Borders, Clear, Padding, Paragraph};
 use ratatui::{Frame, Terminal};
 use tuiba_core::{Cartridge, Gba};
 
+use crate::audio::AudioOutput;
 use crate::bindings::{Action, Bindings};
 use crate::graphics::KittyGraphics;
 use crate::input::{GbaKey, Hold, Keypad};
@@ -109,6 +111,7 @@ impl Drop for TerminalGuard {
 const FRAME_PERIOD: Duration = Duration::from_micros(16_743);
 
 /// Frontend state.
+#[allow(clippy::struct_excessive_bools)] // independent toggles, not a state machine
 struct App {
     title: String,
     gba: Gba,
@@ -142,6 +145,10 @@ struct App {
     /// When Esc was last pressed: a second press within
     /// [`LEAVE_WINDOW`] leaves the game, so a stray one cannot.
     leave_armed: Option<Instant>,
+    /// The sound device, or why there is none.
+    audio: Result<AudioOutput, String>,
+    /// Sound switched off by the user; samples are dropped.
+    muted: bool,
 }
 
 /// How long the first Esc keeps "press again to leave" open.
@@ -160,7 +167,14 @@ impl App {
     fn emulate_frame(&mut self, now: Instant) {
         self.gba.set_keyinput(self.keypad.keyinput(now));
         self.gba.run_frame();
-        // No sound output yet: keep the sample buffer from growing.
+        // Fast-forward makes far more sound than real time can play;
+        // dropping it whole is less jarring than playing chopped-up bits.
+        if let Ok(audio) = &self.audio
+            && !self.muted
+            && !self.fast.is_held(now)
+        {
+            audio.push(self.gba.audio());
+        }
         self.gba.clear_audio();
         self.fps_frames += 1;
         let elapsed = now.duration_since(self.fps_window_start);
@@ -281,6 +295,11 @@ impl App {
             .as_ref()
             .map(|err| format!("  [save failed: {err}]"))
             .unwrap_or_default();
+        let sound = match &self.audio {
+            _ if self.muted => "  🔇 muted",
+            Ok(_) => "",
+            Err(_) => "  🔇 no audio",
+        };
         let mode = if self.help {
             "  ⏸ keys".to_string()
         } else if self.leave_armed.is_some_and(|t| now < t + LEAVE_WINDOW) {
@@ -299,7 +318,7 @@ impl App {
             ),
             Span::styled(
                 format!(
-                    "{:.0} fps{mode}  {renderer}{size_hint}{keys}{swi_hint}{held}{save}",
+                    "{:.0} fps{mode}  {renderer}{size_hint}{keys}{sound}{swi_hint}{held}{save}",
                     self.fps
                 ),
                 Style::default().fg(theme::DIM).bg(theme::SURFACE),
@@ -432,14 +451,31 @@ fn run() -> Result<(), AppError> {
         terminal,
         release_events,
     } = &mut guard;
+    let session = Session {
+        release_events: *release_events,
+        graphics: args.graphics,
+        sound: !args.mute,
+        bindings,
+    };
     if let Some(rom) = direct_rom {
-        return play(terminal, &rom, *release_events, args.graphics, bindings).map(|_| ());
+        return play(terminal, &rom, &session).map(|_| ());
     }
     let mut picker = Picker::new(library);
     if let Some(problem) = key_problems.first() {
         picker.notify_error(problem.clone());
     }
-    library_loop(terminal, picker, *release_events, args.graphics, &bindings)
+    library_loop(terminal, picker, &session)
+}
+
+/// Settings that hold for every game played in this run.
+struct Session {
+    /// The terminal reports key releases.
+    release_events: bool,
+    /// Use the terminal's graphics protocol when available.
+    graphics: bool,
+    /// Open the sound device.
+    sound: bool,
+    bindings: Bindings,
 }
 
 /// After a game hands control back, Esc and q are ignored until this
@@ -453,16 +489,15 @@ const QUIT_KEY_COOLDOWN: Duration = Duration::from_millis(750);
 fn library_loop(
     terminal: &mut ratatui::DefaultTerminal,
     mut picker: Picker,
-    release_events: bool,
-    graphics: bool,
-    bindings: &Bindings,
+    session: &Session,
 ) -> Result<(), AppError> {
     let mut quit_keys_muted_until = Instant::now();
     loop {
         terminal.draw(|frame| picker.draw(frame))?;
         let outcome = match event::read()? {
             Event::Key(key)
-                if !release_events && matches!(key.code, KeyCode::Esc | KeyCode::Char('q')) =>
+                if !session.release_events
+                    && matches!(key.code, KeyCode::Esc | KeyCode::Char('q')) =>
             {
                 let now = Instant::now();
                 if now < quit_keys_muted_until {
@@ -479,7 +514,7 @@ fn library_loop(
             Some(Outcome::Quit) => return Ok(()),
             Some(Outcome::Play(rom)) => {
                 picker.mark_played(&rom);
-                match play(terminal, &rom, release_events, graphics, bindings.clone()) {
+                match play(terminal, &rom, session) {
                     Ok(GameExit::Back) => {}
                     Ok(GameExit::Quit) => return Ok(()),
                     // A broken ROM, or a bug it trips over, should not
@@ -527,9 +562,7 @@ fn load_gba(rom: &Path) -> Result<Gba, AppError> {
 fn play(
     terminal: &mut ratatui::DefaultTerminal,
     rom: &Path,
-    release_events: bool,
-    graphics: bool,
-    bindings: Bindings,
+    session: &Session,
 ) -> Result<GameExit, AppError> {
     let gba = load_gba(rom)?;
     let header_title = gba.bus.cartridge.header().title.trim().to_string();
@@ -547,8 +580,8 @@ fn play(
     let mut app = App {
         title,
         gba,
-        keypad: Keypad::new(release_events),
-        graphics: (graphics && graphics::terminal_supports_kitty_graphics())
+        keypad: Keypad::new(session.release_events),
+        graphics: (session.graphics && graphics::terminal_supports_kitty_graphics())
             .then(KittyGraphics::new),
         screen_area: Rect::default(),
         fps_frames: 0,
@@ -559,10 +592,16 @@ fn play(
         save_error: None,
         paused: false,
         step: false,
-        fast: Hold::new(release_events),
-        bindings,
+        fast: Hold::new(session.release_events),
+        bindings: session.bindings.clone(),
         help: false,
         leave_armed: None,
+        audio: if session.sound {
+            AudioOutput::open().map_err(|e| e.to_string())
+        } else {
+            Err("muted".into())
+        },
+        muted: !session.sound,
     };
     let result = std::panic::catch_unwind(AssertUnwindSafe(|| event_loop(terminal, &mut app)));
 
@@ -669,6 +708,9 @@ fn event_loop(
                 match app.bindings.action(key.code) {
                     Some(Action::Button(button)) => app.keypad.handle(button, key.kind, now),
                     Some(Action::FastForward) => app.fast.update(key.kind, now),
+                    Some(Action::Mute) if key.kind == KeyEventKind::Press => {
+                        app.muted = !app.muted;
+                    }
                     Some(Action::Pause) if key.kind == KeyEventKind::Press => {
                         app.toggle_pause(now);
                     }

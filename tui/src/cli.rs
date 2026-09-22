@@ -24,9 +24,10 @@ Debug options (headless, no terminal UI; need a ROM path):
                         BUTTON is one of a b select start right left up down r l;
                         may be given several times
 
-Display options:
+Display and sound options:
   --no-graphics         always draw with half-block characters, even in
                         terminals that support the Kitty graphics protocol
+  --mute                start with sound off (M toggles it in a game)
   -h, --help            show this help";
 
 /// What the user asked us to do.
@@ -39,6 +40,8 @@ pub struct Args {
     pub headless: Option<Headless>,
     /// Use the terminal's graphics protocol when available.
     pub graphics: bool,
+    /// Start with sound off.
+    pub mute: bool,
 }
 
 /// Headless (non-interactive) run configuration.
@@ -113,6 +116,7 @@ impl Args {
         let mut wav = None;
         let mut keys = Vec::new();
         let mut graphics = true;
+        let mut mute = false;
 
         while let Some(arg) = args.next() {
             let mut value = |flag: &str| {
@@ -128,6 +132,7 @@ impl Args {
                 "--screenshot" => screenshot = Some(PathBuf::from(value("--screenshot")?)),
                 "--wav" => wav = Some(PathBuf::from(value("--wav")?)),
                 "--no-graphics" => graphics = false,
+                "--mute" => mute = true,
                 "--key" => {
                     let v = value("--key")?;
                     keys.push(parse_key_hold(&v).ok_or_else(|| bad("--key", &v))?);
@@ -155,6 +160,7 @@ impl Args {
             rom,
             headless,
             graphics,
+            mute,
         })
     }
 }
@@ -213,10 +219,12 @@ mod tests {
             Args {
                 rom: None,
                 headless: None,
-                graphics: true
+                graphics: true,
+                mute: false,
             }
         );
         assert!(!parse(&["--no-graphics"]).unwrap().graphics);
+        assert!(parse(&["--mute"]).unwrap().mute);
     }
 
     #[test]

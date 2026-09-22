@@ -41,14 +41,15 @@ the status bar shows the current scale and the size needed for 1:1.
 | -------- | ------------------------------------------------------------------------------------------------------------ |
 | CPU      | Full ARM7TDMI: every ARM and THUMB instruction, all modes, exceptions, interrupts                             |
 | Timing   | Wait states from `WAITCNT`, sequential/non-sequential accesses, cartridge prefetch, per-instruction internal cycles |
-| Memory   | Complete address map with mirrors, DMA (immediate, HBlank, VBlank), four timers with cascade                  |
+| Memory   | Complete address map with mirrors, DMA (immediate, HBlank, VBlank, sound FIFO), four timers with cascade      |
 | Video    | Modes 0–5, text and affine backgrounds, sprites (affine, double-size), windows, alpha blending, mosaic        |
+| Sound    | All four PSG channels and both direct-sound FIFOs, mixed at 32 kHz and played through the default audio device |
 | Saves    | SRAM, 64/128 KiB flash and serial EEPROM, auto-detected from the ROM; `.sav` written as you play              |
 | BIOS     | Runs without a BIOS image: `IntrWait`, `Div`, `Sqrt`, `ArcTan2`, `CpuSet`, LZ77/RL/`BitUnPack`, affine helpers are emulated in software |
 | Input    | Keyboard with exact key releases on terminals that support the Kitty keyboard protocol; bindings in a config file |
 | Frontend | Library with folders, filter, sort and last-played memory; pixel or half-block rendering; pause, frame step and fast-forward; headless debug mode |
 
-Not there yet: sound, serial link, real-time clock, cycle-exact PPU/DMA
+Not there yet: serial link, real-time clock, cycle-exact PPU/DMA
 interleaving. Accurate enough for the homebrew below; not a reference
 implementation.
 
@@ -136,7 +137,8 @@ please attach that to a bug report.
 | `s` — sort: title, file, last played, size | `Space` or `Backspace` — Select    |
 | `a` — add a folder               | `P` — pause, `.` — advance one frame         |
 | `tab` — folder list, `x` removes | `Tab` or `F` (held) — fast-forward           |
-| `r` — rescan folders             | `?` — show the active bindings               |
+| `r` — rescan folders             | `M` — mute                                   |
+|                                  | `?` — show the active bindings               |
 | `q` — quit (asks first)          | `Esc` `Esc` — back to the library            |
 |                                  | `Ctrl+Q` — quit                              |
 

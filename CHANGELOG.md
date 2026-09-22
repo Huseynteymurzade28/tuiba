@@ -4,6 +4,27 @@ All notable changes to tuiba. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow
 [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+- Sound: the four PSG channels (pulse with sweep and envelope, wave RAM,
+  noise) and both direct-sound FIFOs fed by timers 0/1 and DMA 1/2, mixed
+  at 32 768 Hz and played through the default audio device. `M` mutes,
+  `--mute` starts muted, and the headless mode's `--wav FILE` captures a
+  run's audio. (#9)
+
+### Changed
+- Leaving a game takes `Esc` twice (the first arms a two-second "esc again
+  to leave" hint), and `Esc`/`q` in the library ask "Quit tuiba?" before
+  quitting. `Ctrl+Q` still quits at once.
+
+### Fixed
+- The terminal no longer dies with SIGBUS (taking the emulator with it)
+  while a game runs or the window is resized: every frame sent through
+  the Kitty graphics file transport now goes to a fresh file instead of
+  truncating one the terminal may still be reading.
+- A held `Esc` on the way out of a game no longer quits the library too.
+
 ## [0.2.0] – 2026-09-22
 
 ### Added

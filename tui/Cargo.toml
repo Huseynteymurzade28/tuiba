@@ -21,6 +21,7 @@ tuiba-core.workspace = true
 thiserror.workspace = true
 ratatui.workspace = true
 crossterm.workspace = true
+cpal = "0.18"
 
 [lints]
 workspace = true

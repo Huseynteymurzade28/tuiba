@@ -36,11 +36,13 @@ pub enum Action {
     Step,
     /// Run uncapped while held.
     FastForward,
+    /// Toggle sound output.
+    Mute,
 }
 
 impl Action {
     /// Every action, in the order the help overlay and the file use.
-    pub const ALL: [Self; 13] = [
+    pub const ALL: [Self; 14] = [
         Self::Button(GbaKey::Up),
         Self::Button(GbaKey::Down),
         Self::Button(GbaKey::Left),
@@ -54,6 +56,7 @@ impl Action {
         Self::Pause,
         Self::Step,
         Self::FastForward,
+        Self::Mute,
     ];
 
     /// The name used in the keys file.
@@ -73,6 +76,7 @@ impl Action {
             Self::Pause => "pause",
             Self::Step => "step",
             Self::FastForward => "fast",
+            Self::Mute => "mute",
         }
     }
 
@@ -93,6 +97,7 @@ impl Action {
             Self::Pause => "pause",
             Self::Step => "one frame (paused)",
             Self::FastForward => "fast-forward (hold)",
+            Self::Mute => "mute sound",
         }
     }
 
@@ -118,8 +123,8 @@ impl Default for Bindings {
 impl Bindings {
     /// The built-in bindings: buttons on the keys of the same name,
     /// arrows for the D-pad, `Enter` = Start, `Space` / `Backspace` /
-    /// right Shift = Select, `Z`/`X` doubling as A/B, `P` pause, `.` step
-    /// and `Tab` / `F` fast-forward.
+    /// right Shift = Select, `Z`/`X` doubling as A/B, `P` pause, `.` step,
+    /// `Tab` / `F` fast-forward and `M` mute.
     #[must_use]
     pub fn defaults() -> Self {
         use KeyCode::Char;
@@ -150,6 +155,7 @@ impl Bindings {
         bind(&mut b, Action::Pause, &[Char('p')]);
         bind(&mut b, Action::Step, &[Char('.')]);
         bind(&mut b, Action::FastForward, &[KeyCode::Tab, Char('f')]);
+        bind(&mut b, Action::Mute, &[Char('m')]);
         b
     }
 
