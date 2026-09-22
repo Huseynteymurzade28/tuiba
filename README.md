@@ -20,7 +20,8 @@ WezTerm, Konsole) the 240×160 framebuffer is shown as real pixels, upscaled
 by the largest integer factor that fits. Everywhere else it is drawn with
 Unicode half-block characters and 24-bit colour, so a 240×80-cell terminal
 shows the full screen at 1:1. Smaller terminals get a downscaled picture;
-the status bar shows the current scale and the size needed for 1:1.
+the status bar shows the current scale and the size needed for 1:1. Sound
+plays through the default audio device (`M` mutes it).
 
 <p align="center">
   <img src="https://raw.githubusercontent.com/Huseynteymurzade28/tuiba/master/docs/demo.gif" alt="Adding a folder, filtering the library and starting a game" width="800">
@@ -59,7 +60,7 @@ Tested with freely distributed homebrew:
 
 | Title                        | Notes                                                                 |
 | ---------------------------- | --------------------------------------------------------------------- |
-| Anguna: Warriors of Virtue   | Plays; exposed a boot-timing race that is now handled like hardware   |
+| Anguna: Warriors of Virtue   | Plays, SRAM saves; exposed a boot-timing race that is now handled like hardware |
 | Aereven Advance (jam build)  | Plays                                                                 |
 | Heartwrench Advance          | Plays, SRAM saves                                                     |
 | Pliko                        | Plays                                                                 |
@@ -93,9 +94,12 @@ or endorsed by Nintendo.
 | Any platform with Rust        | `cargo install tuiba`                                          |
 | From source                   | `git clone https://github.com/Huseynteymurzade28/tuiba && cd tuiba && cargo install --path tui` |
 
-Stable Rust 1.88 or newer; no system dependencies. Any terminal with
-24-bit colour and a font that has the block characters (`▀ ▄ █`) works.
-For the pixel renderer use Kitty, Ghostty, WezTerm or Konsole.
+Stable Rust 1.88 or newer. On Linux, sound goes through ALSA, so building
+needs its headers (`alsa-lib` on Arch, `libasound2-dev` on Debian/Ubuntu,
+`alsa-lib-devel` on Fedora); macOS and Windows need nothing extra. Any
+terminal with 24-bit colour and a font that has the block characters
+(`▀ ▄ █`) works. For the pixel renderer use Kitty, Ghostty, WezTerm or
+Konsole.
 
 ## Getting started
 
@@ -116,6 +120,7 @@ Shortcuts:
 tuiba ~/Games/GBA      # add a folder and open the library in one go
 tuiba path/to/rom.gba  # play a cartridge directly, skipping the library
 tuiba --no-graphics    # force the half-block renderer
+tuiba --mute           # start silent; M toggles sound in a game
 ```
 
 Saves live next to the ROM as `<name>.sav`. The file is written within a
@@ -152,7 +157,7 @@ To change the in-game keys, create `~/.config/tuiba/keys` (or
 
 ```ini
 # button = key [key ...]      actions: up down left right a b l r
-a      = j                    #          start select pause step fast
+a      = j                    #          start select pause step fast mute
 b      = k
 select = space                # unlisted actions keep their defaults
 fast   = f5 tab               # an empty right-hand side unbinds
@@ -170,11 +175,12 @@ For debugging (and for the screenshots in this file) there is a mode
 that needs no terminal:
 
 ```sh
-tuiba rom.gba --frames 600 --key start@400-410 --screenshot out.png
+tuiba rom.gba --frames 600 --key start@400-410 --screenshot out.png --wav out.wav
 ```
 
 It runs the given number of frames with scripted input, prints CPU state
-and throughput, and can dump the final frame as a PNG.
+and throughput, and can dump the final frame as a PNG and the sound as a
+WAV file.
 
 ## Building
 
