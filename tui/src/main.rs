@@ -453,7 +453,7 @@ impl App {
             Span::styled("keys  ", theme::hint()),
             Span::styled(" f2 ", theme::key()),
             Span::styled("states  ", theme::hint()),
-            Span::styled(" esc esc ", theme::key()),
+            Span::styled(" esc ×2 ", theme::key()),
             Span::styled("library  ", theme::hint()),
             Span::styled(" ctrl+q ", theme::key()),
             Span::styled("quit", theme::hint()),
@@ -521,7 +521,7 @@ impl App {
             .collect();
         lines.push(Line::default());
         for (label, key) in [
-            ("library", "esc esc"),
+            ("library", "esc ×2"),
             ("quit", "ctrl+q"),
             ("this list", "?"),
         ] {

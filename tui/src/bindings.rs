@@ -111,8 +111,8 @@ impl Action {
             Self::Step => "one frame (paused)",
             Self::FastForward => "fast-forward (hold)",
             Self::Mute => "mute sound",
-            Self::SaveState => "save state (current slot)",
-            Self::LoadState => "load state (current slot)",
+            Self::SaveState => "save state",
+            Self::LoadState => "load state",
             Self::States => "save-state panel",
         }
     }

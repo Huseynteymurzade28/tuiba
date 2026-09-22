@@ -174,7 +174,7 @@ report.
 |                                  | `F5` — save state, `F8` — load it back       |
 |                                  | `F2` — the four save-state slots             |
 |                                  | `?` — show the active bindings               |
-| `q` — quit (asks first)          | `Esc` `Esc` — back to the library            |
+| `q` — quit (asks first)          | `Esc` twice — back to the library            |
 |                                  | `Ctrl+Q` — quit                              |
 
 Terminals that support the Kitty keyboard protocol report key releases,
