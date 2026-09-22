@@ -14,13 +14,29 @@ use tuiba_core::memory::Header;
 use tuiba_core::memory::SaveType;
 use tuiba_core::memory::cartridge::HEADER_END;
 
-/// `$XDG_CONFIG_HOME/tuiba`, or `~/.config/tuiba`.
+/// The platform's configuration root, before the application name is appended.
+///
+/// `$XDG_CONFIG_HOME` wins everywhere when it is set. On Windows, where that
+/// variable is not a convention, the documented root is `%APPDATA%`
+/// (`FOLDERID_RoamingAppData`) — a program that writes to `%USERPROFILE%\.config`
+/// there is off the path that backup tools, roaming profiles and the user's own
+/// file manager look at. Everywhere else the fallback stays `~/.config`.
+#[must_use]
+fn platform_config_home() -> Option<PathBuf> {
+    if let Some(xdg) = std::env::var_os("XDG_CONFIG_HOME") {
+        return Some(PathBuf::from(xdg));
+    }
+    #[cfg(windows)]
+    if let Some(appdata) = std::env::var_os("APPDATA") {
+        return Some(PathBuf::from(appdata));
+    }
+    std::env::home_dir().map(|h| h.join(".config"))
+}
+
+/// `%APPDATA%\tuiba` on Windows, `$XDG_CONFIG_HOME/tuiba`, or `~/.config/tuiba`.
 #[must_use]
 pub fn config_dir() -> Option<PathBuf> {
-    let base = std::env::var_os("XDG_CONFIG_HOME")
-        .map(PathBuf::from)
-        .or_else(|| std::env::home_dir().map(|h| h.join(".config")))?;
-    Some(base.join("tuiba"))
+    Some(platform_config_home()?.join("tuiba"))
 }
 
 /// Where the folder list is stored.
@@ -345,6 +361,24 @@ pub fn human_size(size: u64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Fails before the `%APPDATA%` fix, passes after it. Only asserts the shape when
+    /// the ambient environment supplies `APPDATA` and does not override it with
+    /// `XDG_CONFIG_HOME`, so it stays honest on any runner.
+    #[test]
+    #[cfg(windows)]
+    fn config_dir_follows_windows_conventions() {
+        let dir = config_dir().expect("a config dir on Windows");
+        assert!(dir.ends_with("tuiba"));
+        if std::env::var_os("XDG_CONFIG_HOME").is_none()
+            && let Some(appdata) = std::env::var_os("APPDATA")
+        {
+            assert!(
+                dir.starts_with(PathBuf::from(appdata)),
+                "config dir must live under %APPDATA% on Windows, got {dir:?}"
+            );
+        }
+    }
 
     #[test]
     fn parses_folder_list_ignoring_comments_and_blanks() {
