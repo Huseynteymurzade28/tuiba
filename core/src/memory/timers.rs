@@ -7,7 +7,7 @@
 use crate::memory::io::Interrupt;
 
 /// State of one timer.
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Copy, Default, serde::Serialize, serde::Deserialize)]
 struct Timer {
     /// Value written to `TMxCNT_L`, loaded on enable and on overflow.
     reload: u16,
@@ -60,7 +60,7 @@ impl Timer {
 }
 
 /// All four timers.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 pub struct Timers {
     timers: [Timer; 4],
 }

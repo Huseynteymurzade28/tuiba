@@ -31,7 +31,7 @@ const fn expand5(c: u16) -> u32 {
 /// The rendered frame, one [`Rgba`] per pixel in row-major order.
 ///
 /// The frontend borrows this between frames; it is never copied.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct Framebuffer {
     pixels: Box<[Rgba]>,
 }

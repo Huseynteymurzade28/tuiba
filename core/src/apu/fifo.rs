@@ -8,7 +8,7 @@ pub const CAPACITY: usize = 32;
 const REFILL_THRESHOLD: usize = 16;
 
 /// One direct-sound FIFO.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
 pub struct Fifo {
     buffer: [u8; CAPACITY],
     read: usize,

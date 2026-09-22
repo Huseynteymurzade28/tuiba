@@ -10,7 +10,7 @@ const MAX_FREQUENCY: u16 = 2047;
 
 /// Length counter shared by all channels: counts down at 256 Hz and, when
 /// enabled, silences the channel on reaching zero.
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Copy, Default, serde::Serialize, serde::Deserialize)]
 struct Length {
     counter: u16,
     enabled: bool,
@@ -42,7 +42,7 @@ impl Length {
 
 /// Volume envelope: moves the 4-bit volume one step up or down every
 /// `period` ticks of the 64 Hz clock.
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Copy, Default, serde::Serialize, serde::Deserialize)]
 struct Envelope {
     initial: u8,
     increase: bool,
@@ -88,7 +88,7 @@ impl Envelope {
 }
 
 /// Frequency sweep, channel 1 only.
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Copy, Default, serde::Serialize, serde::Deserialize)]
 struct Sweep {
     shift: u8,
     decrease: bool,
@@ -133,7 +133,7 @@ const DUTY: [[u8; 8]; 4] = [
 
 /// A pulse-wave channel (channels 1 and 2). Channel 2 simply never has
 /// its sweep programmed.
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Copy, Default, serde::Serialize, serde::Deserialize)]
 pub struct Square {
     enabled: bool,
     duty: u8,
@@ -257,7 +257,7 @@ impl Square {
 /// The programmable wave channel (channel 3): 32 or 64 four-bit samples
 /// from two 16-byte banks of wave RAM.
 #[allow(clippy::struct_excessive_bools)] // mirrors the register bits
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Copy, Default, serde::Serialize, serde::Deserialize)]
 pub struct Wave {
     enabled: bool,
     /// `SOUND3CNT_L` bit 7: the channel's DAC.
@@ -390,7 +390,7 @@ impl Wave {
 
 /// The noise channel (channel 4): a linear-feedback shift register clocked
 /// at a programmable rate.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
 pub struct Noise {
     enabled: bool,
     lfsr: u16,

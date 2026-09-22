@@ -18,6 +18,8 @@ path = "src/lib.rs"
 
 [dependencies]
 thiserror.workspace = true
+serde.workspace = true
+postcard.workspace = true
 
 [lints]
 workspace = true

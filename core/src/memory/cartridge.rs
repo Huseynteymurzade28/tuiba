@@ -7,13 +7,28 @@ use crate::error::{GbaError, Result};
 use crate::memory::ROM_MAX_SIZE;
 use crate::memory::backup::SaveType;
 
+/// FNV-1a over a ROM image: enough to tell two cartridges apart, and
+/// cheap enough to take once while loading one.
+fn fingerprint(rom: &[u8]) -> u64 {
+    const OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
+    const PRIME: u64 = 0x0000_0100_0000_01b3;
+    rom.iter().fold(OFFSET, |hash, &byte| {
+        (hash ^ u64::from(byte)).wrapping_mul(PRIME)
+    })
+}
+
+/// The empty ROM a deserialized cartridge starts with.
+fn no_rom() -> Arc<[u8]> {
+    Arc::from(&[][..])
+}
+
 /// Offset of the cartridge header within the ROM.
 pub const HEADER_OFFSET: usize = 0xA0;
 /// Minimum ROM size: the header must be present in full.
 pub const HEADER_END: usize = 0xC0;
 
 /// Parsed cartridge header (bytes `0xA0..0xC0` of the ROM).
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Header {
     /// Game title, up to 12 ASCII characters, trailing NULs stripped.
     pub title: String,
@@ -80,8 +95,14 @@ impl Header {
 /// The ROM is shared rather than copied: cloning a [`Cartridge`] — which
 /// a save state does, through [`Gba::snapshot`](crate::Gba::snapshot) —
 /// must not duplicate up to 32 MiB that nothing ever writes to.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct Cartridge {
+    /// FNV-1a over the ROM image, taken once at load.
+    fingerprint: u64,
+    /// Not part of a save state: the ROM is the game the state belongs
+    /// to, and reattached from the running cartridge when one is loaded
+    /// (see [`Snapshot::from_bytes`](crate::Snapshot::from_bytes)).
+    #[serde(skip, default = "no_rom")]
     rom: Arc<[u8]>,
     header: Header,
     save_type: SaveType,
@@ -110,7 +131,9 @@ impl Cartridge {
         }
         let header = Header::parse(&rom);
         let save_type = SaveType::detect(&rom);
+        let fingerprint = fingerprint(&rom);
         Ok(Self {
+            fingerprint,
             rom: rom.into(),
             header,
             save_type,
@@ -137,6 +160,24 @@ impl Cartridge {
     #[must_use]
     pub fn save_type(&self) -> SaveType {
         self.save_type
+    }
+
+    /// Identifies the ROM image, for telling whether a save state was
+    /// taken from this cartridge.
+    #[must_use]
+    pub fn fingerprint(&self) -> u64 {
+        self.fingerprint
+    }
+
+    /// The ROM, shared rather than copied.
+    pub(crate) fn shared_rom(&self) -> Arc<[u8]> {
+        Arc::clone(&self.rom)
+    }
+
+    /// Puts a ROM back into a cartridge that was deserialized without
+    /// one. The caller has checked that it is the right ROM.
+    pub(crate) fn attach_rom(&mut self, rom: Arc<[u8]>) {
+        self.rom = rom;
     }
 
     /// Raw ROM contents.

@@ -41,7 +41,7 @@ fn set32(mem: &mut [u8], index: usize, value: u32) {
 }
 
 /// The GBA memory bus and every memory-mapped device hanging off it.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct Bus {
     bios: Box<[u8]>,
     ewram: Box<[u8]>,

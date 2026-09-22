@@ -72,7 +72,7 @@ impl Exception {
 }
 
 /// The processor state.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct Cpu {
     /// Register file.
     pub regs: Registers,

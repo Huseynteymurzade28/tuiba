@@ -10,6 +10,7 @@ mod input;
 mod library;
 mod picker;
 mod png;
+mod savestate;
 mod screen;
 mod theme;
 mod wordmark;
@@ -149,9 +150,12 @@ struct App {
     audio: Result<AudioOutput, String>,
     /// Sound switched off by the user; samples are dropped.
     muted: bool,
-    /// The quick save state, and when it was taken. It lives as long as
-    /// the game does: leaving for the library drops it.
+    /// The quick save state, kept in memory so reloading it costs
+    /// nothing. The copy on disk is what survives leaving the game.
     state: Option<Snapshot>,
+    /// Where this cartridge's quick slot is written, when there is a
+    /// state directory to write it to.
+    state_path: Option<PathBuf>,
     /// What the last save/load did and when, for the status bar.
     state_notice: Option<(String, Instant)>,
 }
@@ -208,19 +212,47 @@ impl App {
     }
 
     /// Freezes the machine into the quick slot, replacing whatever was
-    /// there.
+    /// there, and writes it out so it survives the session.
+    ///
+    /// A state that cannot reach the disk is still in memory and still
+    /// loadable now; the status bar says so rather than pretending the
+    /// save was clean.
     fn save_state(&mut self, now: Instant) {
-        self.state = Some(self.gba.snapshot());
-        self.state_notice = Some(("state saved".to_string(), now));
+        let snapshot = self.gba.snapshot();
+        let notice = match &self.state_path {
+            Some(path) => match savestate::write(path, &snapshot) {
+                Ok(()) => "state saved".to_string(),
+                Err(err) => {
+                    crashlog::record(
+                        "state",
+                        &format!("could not write {}: {err}", path.display()),
+                    );
+                    format!("state saved, but not to disk: {err}")
+                }
+            },
+            None => "state saved (no state directory; this session only)".to_string(),
+        };
+        self.state = Some(snapshot);
+        self.state_notice = Some((notice, now));
     }
 
-    /// Puts the quick slot back, if there is one.
+    /// Puts the quick slot back: the one in memory, or failing that the
+    /// one on disk from an earlier session.
     ///
     /// The sound queue is flushed with it: it holds samples from the
     /// moment being replaced, and playing them after the jump is a
     /// click. Backup memory comes back with the state, so the next
     /// autosave writes the `.sav` the state expects.
     fn load_state(&mut self, now: Instant) {
+        if self.state.is_none() {
+            match self.read_state_from_disk() {
+                Ok(snapshot) => self.state = snapshot,
+                Err(err) => {
+                    self.state_notice = Some((err, now));
+                    return;
+                }
+            }
+        }
         let Some(snapshot) = &self.state else {
             self.state_notice = Some(("no state saved yet".to_string(), now));
             return;
@@ -231,6 +263,14 @@ impl App {
         }
         self.reset_fps(now);
         self.state_notice = Some(("state loaded".to_string(), now));
+    }
+
+    /// The state file for this cartridge, if there is one to read.
+    fn read_state_from_disk(&self) -> Result<Option<Snapshot>, String> {
+        let Some(path) = &self.state_path else {
+            return Ok(None);
+        };
+        savestate::read(path, &self.gba.bus.cartridge)
     }
 
     fn reset_fps(&mut self, now: Instant) {
@@ -617,6 +657,7 @@ fn play(
     // Backup memory as loaded: a `.sav` is only ever written once the game
     // changes it, so cartridges that never save do not grow one.
     let saved = gba.save_data().to_vec();
+    let state_path = savestate::slot_path(rom, &gba.bus.cartridge);
     let mut app = App {
         title,
         gba,
@@ -643,6 +684,7 @@ fn play(
         },
         muted: !session.sound,
         state: None,
+        state_path,
         state_notice: None,
     };
     let result = std::panic::catch_unwind(AssertUnwindSafe(|| event_loop(terminal, &mut app)));

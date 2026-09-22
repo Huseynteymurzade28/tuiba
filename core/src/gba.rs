@@ -20,14 +20,14 @@ const DMA_START_CYCLES: u32 = 2;
 const BOOT_LINE: u16 = 0x7E;
 
 /// State of a pending `IntrWait`/`VBlankIntrWait` call.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 struct IntrWait {
     mask: u16,
     resume_pc: u32,
 }
 
 /// A Game Boy Advance.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct Gba {
     /// The ARM7TDMI.
     pub cpu: Cpu,

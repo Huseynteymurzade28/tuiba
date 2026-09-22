@@ -13,7 +13,7 @@ use crate::memory::io::Interrupt;
 const FIFO_TRANSFER_WORDS: u32 = 4;
 
 /// When a channel starts its transfer (`DMAxCNT_H` bits 13:12).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum Timing {
     /// As soon as it is enabled.
     Immediate,
@@ -27,7 +27,7 @@ pub enum Timing {
 }
 
 /// One DMA channel.
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Copy, Default, serde::Serialize, serde::Deserialize)]
 pub struct Channel {
     /// `DMAxSAD` as written.
     pub source: u32,
@@ -85,7 +85,7 @@ impl Channel {
 }
 
 /// The four channels plus the "ready to run" bookkeeping.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 pub struct Dma {
     /// Channels 0–3.
     pub channels: [Channel; 4],

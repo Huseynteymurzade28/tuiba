@@ -53,8 +53,18 @@ pub struct Events {
     pub hblank: bool,
 }
 
+/// Scanline scratch as [`Ppu::new`] leaves it; see [`Ppu::bg_lines`].
+fn blank_bg_lines() -> [[u16; SCREEN_WIDTH]; 4] {
+    [[TRANSPARENT; SCREEN_WIDTH]; 4]
+}
+
+/// A zeroed composition buffer; see [`Ppu::composed`].
+fn blank_line() -> [u16; SCREEN_WIDTH] {
+    [0; SCREEN_WIDTH]
+}
+
 /// The PPU state.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct Ppu {
     /// The last completed frame plus whatever lines of the current frame
     /// have been rendered so far.
@@ -66,10 +76,17 @@ pub struct Ppu {
     /// Whether HBlank has been entered on the current line.
     in_hblank: bool,
     /// Per-background scanline scratch buffers, 15-bit colours.
+    ///
+    /// Scratch, and so left out of a save state: every scanline fills
+    /// the buffers of the backgrounds it composes before reading them,
+    /// so what a restored PPU inherits here is never looked at.
+    #[serde(skip, default = "blank_bg_lines")]
     bg_lines: [[u16; SCREEN_WIDTH]; 4],
-    /// OBJ layer scratch.
+    /// OBJ layer scratch, rebuilt per scanline like [`Ppu::bg_lines`].
+    #[serde(skip)]
     obj_line: obj::ObjLine,
-    /// Composed 15-bit scanline before conversion to RGBA.
+    /// Composed 15-bit scanline before conversion to RGBA. Scratch.
+    #[serde(skip, default = "blank_line")]
     composed: [u16; SCREEN_WIDTH],
 }
 

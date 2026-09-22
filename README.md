@@ -129,8 +129,11 @@ tuiba --mute           # start silent; M toggles sound in a game
 
 `F5` freezes the machine and `F8` puts it back — the whole console, not
 just the game's own save, so it works in cartridges that never save and
-in the middle of a boss fight alike. The state lives as long as the game
-is open; leaving for the library drops it.
+in the middle of a boss fight alike. The state is written to
+`~/.local/state/tuiba/states/` (or `$XDG_STATE_HOME`, or
+`%LOCALAPPDATA%\tuiba\states` on Windows) under the cartridge's
+fingerprint, so it survives closing tuiba and can only ever be loaded
+back into the game it came from.
 
 Saves live next to the ROM as `<name>.sav`. The file is written within a
 second of the game saving and again when you leave, so a crash or a closed
@@ -138,8 +141,8 @@ terminal costs at most a moment of progress. The save type (SRAM, flash,
 EEPROM) is detected from the ROM.
 
 If tuiba ever crashes, the message and a backtrace are appended to
-`~/.local/state/tuiba/crash.log` (or `$XDG_STATE_HOME/tuiba/crash.log`);
-please attach that to a bug report.
+`crash.log` in the same state directory; please attach that to a bug
+report.
 
 ### Keys
 

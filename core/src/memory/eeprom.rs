@@ -22,7 +22,7 @@ const SMALL_SIZE: usize = 0x200;
 const REPLY_BITS: u8 = 4 + 64;
 
 /// Where the request parser is.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 enum State {
     /// Collecting the 2-bit command.
     Command { bits: u8, count: u8 },
@@ -43,7 +43,7 @@ impl State {
 }
 
 /// An EEPROM chip of either size.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct Eeprom {
     /// Always `MAX_SIZE` long; only the first `size()` bytes are used.
     data: Box<[u8]>,

@@ -6,7 +6,7 @@
 use crate::memory::{OAM_SIZE, PALETTE_SIZE, VRAM_SIZE};
 
 /// The three video memories, each in its own mirror domain.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct VideoMemory {
     /// Palette RAM, 1 KiB, mirrored every 1 KiB.
     pub palette: Box<[u8]>,

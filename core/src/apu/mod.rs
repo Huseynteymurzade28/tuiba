@@ -85,7 +85,7 @@ const READ_MASKS: [u16; REGISTER_COUNT] = [
 const OUTPUT_LIMIT: i32 = 0x200;
 
 /// The sound unit.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct Apu {
     /// Registers as last written, for read-back and byte-wise merging.
     raw: [u16; REGISTER_COUNT],

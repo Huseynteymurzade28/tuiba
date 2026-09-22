@@ -71,7 +71,7 @@ impl Mode {
 const BANKS: usize = 6;
 
 /// The Current Program Status Register.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub struct Cpsr(pub u32);
 
 impl Cpsr {
@@ -201,7 +201,7 @@ impl Cpsr {
 }
 
 /// The complete visible register state.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct Registers {
     /// r0–r15 as seen in the current mode.
     gpr: [u32; 16],

@@ -9,7 +9,7 @@
 
 /// Cycle cost of accessing one region, by width and sequentiality.
 /// Byte accesses cost the same as halfword accesses.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Access {
     /// Non-sequential 8/16-bit.
     pub n16: u8,
@@ -57,7 +57,7 @@ impl Access {
 }
 
 /// Access costs for every 16 MiB page of the address space.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct WaitStates {
     pages: [Access; 16],
     /// `WAITCNT` bit 14: the cartridge prefetch buffer is enabled.

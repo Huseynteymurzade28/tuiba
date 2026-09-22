@@ -4,7 +4,7 @@
 use crate::memory::eeprom::Eeprom;
 
 /// The kind of backup chip a cartridge carries.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum SaveType {
     /// No signature found; behaves as 32 KiB SRAM so stray writes stick.
     Unknown,
@@ -38,7 +38,7 @@ impl SaveType {
 }
 
 /// Flash command-sequence state.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 enum FlashState {
     /// Waiting for `0xAA` at `0x5555`.
     Idle,
@@ -57,7 +57,7 @@ enum FlashState {
 }
 
 /// A flash chip with the common Sanyo/Macronix command set.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct Flash {
     data: Box<[u8]>,
     bank: usize,
@@ -169,7 +169,7 @@ impl Flash {
 ///
 /// SRAM and flash answer byte accesses at `0x0E00_0000`; EEPROM instead
 /// answers halfword accesses at `0x0D00_0000` (see [`Bus`](crate::Bus)).
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub enum Backup {
     /// Plain byte-addressed RAM.
     Sram(Box<[u8]>),

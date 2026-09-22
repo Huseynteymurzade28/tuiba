@@ -117,7 +117,7 @@ impl Interrupt {
 }
 
 /// The I/O register block.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct IoRegisters {
     raw: Box<[u8]>,
     /// Current `KEYINPUT` state, written by the frontend. `0` = pressed.

@@ -39,6 +39,31 @@ pub enum GbaError {
     #[error("invalid ROM header: {0}")]
     InvalidHeader(String),
 
+    /// The bytes handed to [`Snapshot::from_bytes`](crate::Snapshot::from_bytes)
+    /// are not a save state at all.
+    #[error("not a tuiba save state")]
+    StateFormat,
+
+    /// The save state was written by a tuiba whose state layout differs
+    /// from this one's.
+    #[error("save state has format version {found}, this build reads {expected}")]
+    StateVersion {
+        /// Version stamped into the file.
+        found: u16,
+        /// Version this build writes and reads.
+        expected: u16,
+    },
+
+    /// The save state was taken from a different cartridge than the one
+    /// running. Restoring it would put one game's memory behind another
+    /// game's code.
+    #[error("save state belongs to a different cartridge")]
+    StateCartridge,
+
+    /// The save state is the right shape but its contents did not decode.
+    #[error("save state is corrupt: {0}")]
+    StateCorrupt(String),
+
     /// A memory access hit an address with no mapped device.
     #[error("unmapped memory access at {address:#010x}")]
     UnmappedAddress {

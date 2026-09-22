@@ -39,6 +39,33 @@ pub fn config_dir() -> Option<PathBuf> {
     Some(platform_config_home()?.join("tuiba"))
 }
 
+/// The platform's root for state a program keeps but the user does not
+/// edit: logs and save states.
+///
+/// Same shape as [`platform_config_home`], one directory over.
+/// `$XDG_STATE_HOME` wins when it is set; on Windows the convention is
+/// `%LOCALAPPDATA%` (`FOLDERID_LocalAppData`), which — unlike
+/// `%APPDATA%` — is the one that does not follow a roaming profile
+/// across machines, and state is per-machine.
+#[must_use]
+fn platform_state_home() -> Option<PathBuf> {
+    if let Some(xdg) = std::env::var_os("XDG_STATE_HOME") {
+        return Some(PathBuf::from(xdg));
+    }
+    #[cfg(windows)]
+    if let Some(local) = std::env::var_os("LOCALAPPDATA") {
+        return Some(PathBuf::from(local));
+    }
+    std::env::home_dir().map(|h| h.join(".local").join("state"))
+}
+
+/// `%LOCALAPPDATA%\tuiba` on Windows, `$XDG_STATE_HOME/tuiba`, or
+/// `~/.local/state/tuiba`.
+#[must_use]
+pub fn state_dir() -> Option<PathBuf> {
+    Some(platform_state_home()?.join("tuiba"))
+}
+
 /// Where the folder list is stored.
 #[must_use]
 pub fn library_file() -> Option<PathBuf> {

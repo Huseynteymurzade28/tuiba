@@ -2,10 +2,10 @@
 //!
 //! A panic or a fatal I/O error in a full-screen TUI is easy to miss: the
 //! terminal may close, or the message scrolls away under the restored
-//! screen. Everything fatal is therefore also appended to
-//! `$XDG_STATE_HOME/tuiba/crash.log` (or `~/.local/state/tuiba/crash.log`),
-//! and the panic hook remembers the message so the caller can show it
-//! after the terminal has been restored.
+//! screen. Everything fatal is therefore also appended to `crash.log` in
+//! the state directory ([`crate::library::state_dir`]), and the panic
+//! hook remembers the message so the caller can show it after the
+//! terminal has been restored.
 
 use std::fs;
 use std::io::Write;
@@ -19,12 +19,7 @@ static LAST_PANIC: Mutex<Option<String>> = Mutex::new(None);
 /// Where the log lives, when the environment says where state may go.
 #[must_use]
 pub fn path() -> Option<PathBuf> {
-    let base = std::env::var_os("XDG_STATE_HOME")
-        .map(PathBuf::from)
-        .or_else(|| {
-            std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".local").join("state"))
-        })?;
-    Some(base.join("tuiba").join("crash.log"))
+    crate::library::state_dir().map(|dir| dir.join("crash.log"))
 }
 
 /// Appends one entry to the log. Best effort: a failure to log must not
