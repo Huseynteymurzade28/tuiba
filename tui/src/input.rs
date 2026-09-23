@@ -10,6 +10,9 @@
 //!   real `Release` events and track state exactly.
 //! - Without it, a key is considered held for [`HOLD_TIMEOUT`] after the
 //!   most recent press/repeat event, which auto-repeat keeps refreshing.
+//!
+//! Gamepads have no such problem: their buttons are read as a state each
+//! frame ([`Keypad::set_pad`]) and simply added to the keyboard's.
 
 use std::time::{Duration, Instant};
 
@@ -102,6 +105,8 @@ impl Hold {
 #[derive(Debug)]
 pub struct Keypad {
     holds: [Hold; 10],
+    /// Buttons held on a gamepad, as `KEYINPUT` bits (active-high).
+    pad: u16,
     /// Whether the terminal delivers `Release` events (Kitty protocol).
     release_events: bool,
 }
@@ -115,6 +120,7 @@ impl Keypad {
     pub const fn new(release_events: bool) -> Self {
         Self {
             holds: [Hold::new(release_events); 10],
+            pad: 0,
             release_events,
         }
     }
@@ -130,10 +136,15 @@ impl Keypad {
         self.holds[button as usize].update(kind, now);
     }
 
-    /// Whether `button` is held at `now`.
+    /// Sets the buttons held on gamepads, replacing the previous set.
+    pub fn set_pad(&mut self, buttons: impl IntoIterator<Item = GbaKey>) {
+        self.pad = buttons.into_iter().fold(0, |bits, b| bits | b.mask());
+    }
+
+    /// Whether `button` is held at `now`, on the keyboard or a pad.
     #[must_use]
     pub fn is_pressed(&self, button: GbaKey, now: Instant) -> bool {
-        self.holds[button as usize].is_held(now)
+        self.pad & button.mask() != 0 || self.holds[button as usize].is_held(now)
     }
 
     /// The `KEYINPUT` register value at `now` (active-low).
@@ -190,6 +201,22 @@ mod tests {
             GbaKey::Start,
             t0 + HOLD_TIMEOUT + Duration::from_millis(100)
         ));
+    }
+
+    #[test]
+    fn pad_and_keyboard_add_up() {
+        let t0 = Instant::now();
+        let mut pad = Keypad::new(true);
+        pad.handle(GbaKey::A, KeyEventKind::Press, t0);
+        pad.set_pad([GbaKey::A, GbaKey::Left]);
+        assert_eq!(
+            pad.keyinput(t0),
+            0x03FF & !(GbaKey::A.mask() | GbaKey::Left.mask())
+        );
+        // Letting go on the pad leaves the key held on the keyboard.
+        pad.set_pad([]);
+        assert!(pad.is_pressed(GbaKey::A, t0));
+        assert!(!pad.is_pressed(GbaKey::Left, t0));
     }
 
     #[test]

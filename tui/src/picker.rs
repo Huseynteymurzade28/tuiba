@@ -13,6 +13,7 @@ use ratatui::widgets::{
 };
 use tuiba_core::memory::SaveType;
 
+use crate::gamepad::{PadButton, PadStyle};
 use crate::library::{Library, Recent, Rom, compact_home, expand_home, human_size};
 use crate::{theme, wordmark};
 
@@ -93,9 +94,22 @@ pub struct Picker {
     filter: String,
     /// Transient feedback shown in the footer until the next key.
     notice: Option<(String, bool)>,
+    /// The connected pad's labels, for the footer hints.
+    pad: Option<PadStyle>,
 }
 
 impl Picker {
+    /// The pad the footer is naming buttons for.
+    #[must_use]
+    pub const fn pad(&self) -> Option<PadStyle> {
+        self.pad
+    }
+
+    /// Names `pad`'s buttons in the footer, or keys only with `None`.
+    pub const fn set_pad(&mut self, pad: Option<PadStyle>) {
+        self.pad = pad;
+    }
+
     /// Scans `library` and shows it.
     #[must_use]
     pub fn new(library: Library) -> Self {
@@ -115,6 +129,7 @@ impl Picker {
             sort: Sort::Title,
             filter: String::new(),
             notice: None,
+            pad: None,
         };
         picker.rescan();
         // Start on whatever was played last.
@@ -806,6 +821,27 @@ impl Picker {
                     ))
                 } else {
                     let mut spans = Vec::new();
+                    // With a pad connected, its buttons lead the way;
+                    // the keyboard hints follow for everything else.
+                    let pad_hints = match (self.pad, self.focus) {
+                        (Some(style), Focus::Roms) => vec![
+                            ("↑↓".to_string(), "select"),
+                            (style.label(style.confirm()).to_string(), "play"),
+                            (
+                                format!(
+                                    "{}/{}",
+                                    style.label(PadButton::L1),
+                                    style.label(PadButton::R1)
+                                ),
+                                "page",
+                            ),
+                        ],
+                        _ => Vec::new(),
+                    };
+                    for (key, label) in &pad_hints {
+                        spans.push(Span::styled(format!(" {key} "), theme::key()));
+                        spans.push(Span::styled(format!("{label}  "), theme::hint()));
+                    }
                     let hints: &[(&str, &str)] = match self.focus {
                         Focus::Roms => &[
                             ("↑↓", "select"),
@@ -826,6 +862,9 @@ impl Picker {
                             ("q", "quit"),
                         ],
                     };
+                    let hints = hints
+                        .iter()
+                        .filter(|(key, _)| pad_hints.is_empty() || !matches!(*key, "↑↓" | "⏎"));
                     for (key, label) in hints {
                         spans.push(Span::styled(format!(" {key} "), theme::key()));
                         spans.push(Span::styled(format!("{label}  "), theme::hint()));

@@ -37,9 +37,9 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           key: ${{ matrix.target }}
-      - name: Install ALSA headers (cpal)
+      - name: Install ALSA and udev headers (cpal, gilrs)
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y libasound2-dev
+        run: sudo apt-get update && sudo apt-get install -y libasound2-dev libudev-dev
       - run: cargo build --release -p tuiba --target ${{ matrix.target }}
       - name: Package
         run: |

@@ -20,10 +20,12 @@ jobs:
         with:
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
-      - name: Install ALSA headers (cpal)
-        run: sudo apt-get update && sudo apt-get install -y libasound2-dev
+      - name: Install ALSA and udev headers (cpal, gilrs)
+        run: sudo apt-get update && sudo apt-get install -y libasound2-dev libudev-dev
       - run: cargo fmt --all -- --check
       - run: cargo clippy --workspace --all-targets -- -D warnings
+      - name: Clippy without the gamepad feature
+        run: cargo clippy -p tuiba --no-default-features --all-targets -- -D warnings
       - run: cargo test --workspace
       - name: Headless smoke run
         # A minimal cartridge: entry branch straight into an infinite
@@ -48,8 +50,8 @@ jobs:
           # Keep in step with `rust-version` in Cargo.toml.
           toolchain: "1.88"
       - uses: Swatinem/rust-cache@v2
-      - name: Install ALSA headers (cpal)
-        run: sudo apt-get update && sudo apt-get install -y libasound2-dev
+      - name: Install ALSA and udev headers (cpal, gilrs)
+        run: sudo apt-get update && sudo apt-get install -y libasound2-dev libudev-dev
       - run: cargo test --workspace
 
   build:

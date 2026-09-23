@@ -18,6 +18,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Borders, Clear, Padding, Paragraph};
 use tuiba_core::{Cartridge, Snapshot};
 
+use crate::gamepad::{PadButton, PadStyle};
 use crate::savestate::{self, SLOTS};
 use crate::screen::GbaScreen;
 use crate::theme;
@@ -138,6 +139,24 @@ impl StatesPanel {
         None
     }
 
+    /// The key a pad button stands for in the panel: the D-pad moves,
+    /// the pad's confirm button loads and its back button closes, west
+    /// saves and north deletes.
+    #[must_use]
+    pub fn pad_key(button: PadButton, style: PadStyle) -> Option<KeyCode> {
+        Some(match button {
+            PadButton::Up => KeyCode::Up,
+            PadButton::Down => KeyCode::Down,
+            PadButton::Left => KeyCode::Left,
+            PadButton::Right => KeyCode::Right,
+            PadButton::West => KeyCode::Char('s'),
+            PadButton::North => KeyCode::Char('x'),
+            b if b == style.confirm() => KeyCode::Enter,
+            b if b == style.back() => KeyCode::Esc,
+            _ => return None,
+        })
+    }
+
     /// Moves the cursor by `delta` slots, staying inside the grid.
     fn step(&mut self, delta: isize) {
         let target = self.selected as isize + delta;
@@ -152,7 +171,8 @@ impl StatesPanel {
     /// [`TILE_HEIGHT`]; below the size where a thumbnail says anything
     /// the panel falls back to a plain list, which still works in a
     /// window too small to play in.
-    pub fn draw(&self, frame: &mut Frame, area: Rect) {
+    /// With `pad`, the footer names that pad's buttons instead of keys.
+    pub fn draw(&self, frame: &mut Frame, area: Rect, pad: Option<PadStyle>) {
         let width = (TILE_WIDTH * 2 + TILE_GAP + 4)
             .max(FOOTER_WIDTH)
             .min(area.width);
@@ -193,7 +213,7 @@ impl StatesPanel {
             self.draw_grid(frame, grid, tile_width, tile_height);
         }
         frame.render_widget(
-            Paragraph::new(self.footer_hints()).alignment(Alignment::Center),
+            Paragraph::new(self.footer_hints(pad)).alignment(Alignment::Center),
             footer,
         );
     }
@@ -235,20 +255,27 @@ impl StatesPanel {
     }
 
     /// The keys that do something for the selected slot.
-    fn footer_hints(&self) -> Line<'static> {
+    fn footer_hints(&self, pad: Option<PadStyle>) -> Line<'static> {
+        // Each hint as (key, pad button, what it does).
+        let style = pad.unwrap_or(PadStyle::Generic);
+        let (confirm, back) = (style.confirm(), style.back());
         let hints = if self.slots[self.selected].is_empty() {
-            [("s", "save here"), ("esc", "close")].as_slice()
+            vec![("s", PadButton::West, "save here"), ("esc", back, "close")]
         } else {
-            [
-                ("⏎", "load"),
-                ("s", "overwrite"),
-                ("x", "delete"),
-                ("esc", "close"),
+            vec![
+                ("⏎", confirm, "load"),
+                ("s", PadButton::West, "overwrite"),
+                ("x", PadButton::North, "delete"),
+                ("esc", back, "close"),
             ]
-            .as_slice()
         };
         let mut spans = Vec::new();
-        for (key, label) in hints {
+        for (key, button, label) in hints {
+            let key = if pad.is_some() {
+                style.label(button)
+            } else {
+                key
+            };
             spans.push(Span::styled(format!(" {key} "), theme::key()));
             spans.push(Span::styled(format!("{label}  "), theme::hint()));
         }
@@ -398,6 +425,15 @@ mod tests {
         assert_eq!(p.handle(press(KeyCode::Char('s'))), Some(Action::Save));
         assert_eq!(p.handle(press(KeyCode::Char('x'))), Some(Action::Delete));
         assert_eq!(p.handle(press(KeyCode::Esc)), Some(Action::Close));
+        // A pad's buttons arrive as the same keys.
+        let xbox = |b| press(StatesPanel::pad_key(b, PadStyle::Xbox).unwrap());
+        assert_eq!(p.handle(xbox(PadButton::South)), Some(Action::Load));
+        assert_eq!(p.handle(xbox(PadButton::West)), Some(Action::Save));
+        assert_eq!(p.handle(xbox(PadButton::North)), Some(Action::Delete));
+        assert_eq!(p.handle(xbox(PadButton::East)), Some(Action::Close));
+        let nintendo = |b| press(StatesPanel::pad_key(b, PadStyle::Nintendo).unwrap());
+        assert_eq!(p.handle(nintendo(PadButton::East)), Some(Action::Load));
+        assert_eq!(p.handle(nintendo(PadButton::South)), Some(Action::Close));
     }
 
     /// A game must not see the keyboard while the panel is up.

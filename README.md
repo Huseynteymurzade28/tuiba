@@ -47,7 +47,7 @@ plays through the default audio device (`M` mutes it).
 | Sound    | All four PSG channels and both direct-sound FIFOs, mixed at 32 kHz and played through the default audio device |
 | Saves    | SRAM, 64/128 KiB flash and serial EEPROM, auto-detected from the ROM; `.sav` written as you play              |
 | BIOS     | Runs without a BIOS image: `IntrWait`, `Div`, `Sqrt`, `ArcTan2`, `CpuSet`, LZ77/RL/`BitUnPack`, affine helpers are emulated in software |
-| Input    | Keyboard with exact key releases on terminals that support the Kitty keyboard protocol; bindings in a config file |
+| Input    | Keyboard with exact key releases on terminals that support the Kitty keyboard protocol; gamepads, hot-pluggable; bindings in a config file |
 | Frontend | Library with folders, filter, sort and last-played memory; pixel or half-block rendering; pause, frame step and fast-forward; headless debug mode |
 
 Not there yet: serial link, real-time clock, cycle-exact PPU/DMA
@@ -94,9 +94,12 @@ or endorsed by Nintendo.
 | Any platform with Rust        | `cargo install tuiba`                                          |
 | From source                   | `git clone https://github.com/Huseynteymurzade28/tuiba && cd tuiba && cargo install --path tui` |
 
-Stable Rust 1.88 or newer. On Linux, sound goes through ALSA, so building
-needs its headers (`alsa-lib` on Arch, `libasound2-dev` on Debian/Ubuntu,
-`alsa-lib-devel` on Fedora); macOS and Windows need nothing extra. Any
+Stable Rust 1.88 or newer. On Linux, sound goes through ALSA and
+gamepads are found through udev, so building needs their headers
+(`alsa-lib` and `systemd-libs` on Arch, `libasound2-dev libudev-dev` on
+Debian/Ubuntu, `alsa-lib-devel systemd-devel` on Fedora); macOS and
+Windows need nothing extra. A keyboard-only build skips udev:
+`cargo install tuiba --no-default-features`. Any
 terminal with 24-bit colour and a font that has the block characters
 (`▀ ▄ █`) works. For the pixel renderer use Kitty, Ghostty, WezTerm or
 Konsole.
@@ -182,6 +185,29 @@ so holding and releasing buttons works exactly. Elsewhere a key counts as
 held until it stops auto-repeating; the status bar shows `keys: timeout`
 in that case.
 
+A gamepad works as soon as it is plugged in, even mid-game, and while
+one is connected the hints name its buttons as printed on it (Xbox,
+PlayStation and Nintendo labels are recognised). In a game the buttons
+sit where a GBA has them: A is the right face button, B the bottom one,
+L and R the shoulders, and the D-pad or the left stick steer — by
+position, so on an Xbox pad the GBA's A is the button labelled B. Menus
+follow the pad's own habit instead: on Xbox and PlayStation pads the
+bottom button confirms and the right one backs out.
+
+| On a pad (Xbox labels)     | Does                                      |
+| -------------------------- | ----------------------------------------- |
+| `RT` (held)                | fast-forward                              |
+| `Y`                        | pause                                     |
+| `LT`                       | save-state panel: `A` load, `X` save, `Y` delete, `B` close |
+| `Xbox` twice               | back to the library                       |
+| `RS` (click)               | show the bindings                         |
+| library: `A` / `Menu`      | play; `LB`/`RB` page through the list     |
+
+Quick save and load stay off the pad by default, so one stray press
+cannot throw progress away; bind them in the `keys` file if you want
+them. Pads are read from the OS rather than the terminal, so they work in
+any terminal on the same machine — not over SSH.
+
 To change the in-game keys, create a `keys` file in the configuration
 directory (`~/.config/tuiba/keys`, or `%APPDATA%\tuiba\keys` on
 Windows), one action per line:
@@ -189,14 +215,17 @@ Windows), one action per line:
 ```ini
 # button = key [key ...]      actions: up down left right a b l r
 a      = j                    #          start select pause step fast
-b      = k                    #          mute save load states
+b      = k pad:west           #          mute save load states leave help
 select = space                # unlisted actions keep their defaults
 fast   = f9 tab               # an empty right-hand side unbinds
 ```
 
 Keys are single characters or `up down left right enter space backspace
 tab insert delete home end pageup pagedown f1`–`f12 lshift rshift`.
-Letters match either case. `Esc`, `Ctrl+Q` and `?` cannot be rebound;
+Pad buttons are `pad:` and one of `south east west north l1 r1 l2 r2
+select start mode lstick rstick up down left right`. A line only replaces
+the kinds it names: `a = j` keeps A's pad button, `a = pad:west` keeps
+its keys. Letters match either case. `Esc`, `Ctrl+Q` and `?` cannot be rebound;
 `?` in a game lists what is active, and any problem in the file is
 reported in the library footer.
 

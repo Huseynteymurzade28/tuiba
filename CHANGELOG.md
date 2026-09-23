@@ -4,6 +4,24 @@ All notable changes to tuiba. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow
 [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+- Gamepads. Any pad the OS knows plays alongside the keyboard, and one
+  plugged in mid-game just starts working (🎮 in the status bar). In a
+  game the layout goes by position — A right, B bottom, L/R on the
+  shoulders, D-pad or left stick to steer — with R2 fast-forward, L2 the
+  save-state panel, north pause, the guide button twice back to the
+  library and the right stick click for the bindings. The library and
+  the save-state panel work from the pad too, confirming and backing out
+  the way the pad's brand does. While a pad is connected every hint names
+  its buttons as printed on it (Xbox, PlayStation, Nintendo). The `keys`
+  file binds pad buttons (`a = z pad:east`) and two new actions, `leave`
+  and `help`; a line only replaces the kinds of input it names, so
+  existing keyboard layouts keep the pad defaults. Behind the default
+  `gamepad` feature; on Linux it needs udev.
+  `cargo run -p tuiba --example padlog` shows what a pad sends. (#37)
+
 ## [0.4.0] – 2026-09-22
 
 ### Added

@@ -4,6 +4,7 @@ mod audio;
 mod bindings;
 mod cli;
 mod crashlog;
+mod gamepad;
 mod graphics;
 mod headless;
 mod input;
@@ -23,7 +24,7 @@ use std::process::ExitCode;
 use std::time::{Duration, Instant};
 
 use crossterm::event::{
-    self, Event, KeyCode, KeyEventKind, KeyModifiers, KeyboardEnhancementFlags,
+    self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, KeyboardEnhancementFlags,
     PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
 };
 use crossterm::execute;
@@ -39,7 +40,8 @@ use ratatui::{Frame, Terminal};
 use tuiba_core::{Cartridge, Gba, Snapshot};
 
 use crate::audio::AudioOutput;
-use crate::bindings::{Action, Bindings};
+use crate::bindings::{Action, Bindings, Input};
+use crate::gamepad::{Gamepads, PadButton, PadNotice, PadSet, PadStyle};
 use crate::graphics::KittyGraphics;
 use crate::input::{GbaKey, Hold, Keypad};
 use crate::library::Library;
@@ -147,6 +149,18 @@ struct App {
     step: bool,
     /// Fast-forward key held: run uncapped.
     fast: Hold,
+    /// Pad buttons held as of the last poll; a press is a button that
+    /// was not in here.
+    pads: PadSet,
+    /// Pad buttons that were already down when the game started — the A
+    /// that chose it in the library — ignored until they are let go of.
+    pads_ignored: PadSet,
+    /// The connected pad's labels, `None` without a pad; hints name its
+    /// buttons while there is one.
+    pad_style: Option<PadStyle>,
+    /// When a bound `leave` (the pad's guide button) was last pressed:
+    /// like Esc, it takes a second press to leave.
+    bound_leave: Option<Instant>,
     /// Key → action table, from the defaults and the user's keys file.
     bindings: Bindings,
     /// The `?` overlay is up; emulation waits while it is.
@@ -178,7 +192,8 @@ struct App {
     held_state: Option<Snapshot>,
     /// The save-state panel, while it is up. Emulation waits for it.
     panel: Option<StatesPanel>,
-    /// What the last save/load did and when, for the status bar.
+    /// What the last save/load did (or which pad came or went) and
+    /// when, for the status bar.
     state_notice: Option<(String, Instant)>,
 }
 
@@ -212,7 +227,7 @@ impl App {
         // dropping it whole is less jarring than playing chopped-up bits.
         if let Ok(audio) = &self.audio
             && !self.muted
-            && !self.fast.is_held(now)
+            && !self.fast_held(now)
         {
             audio.push(self.gba.audio());
         }
@@ -224,6 +239,110 @@ impl App {
             self.fps_frames = 0;
             self.fps_window_start = now;
         }
+    }
+
+    /// Whether fast-forward is held, on the keyboard or a pad.
+    fn fast_held(&self, now: Instant) -> bool {
+        self.fast.is_held(now)
+            || self
+                .pads
+                .iter()
+                .any(|b| self.bindings.pad_action(b) == Some(Action::FastForward))
+    }
+
+    /// Reads the pads: held buttons go to the keypad, fresh presses of
+    /// anything else do what the same key would. While the save-state
+    /// panel or the help overlay is up, presses go to that instead.
+    fn poll_pads(&mut self, gamepads: &mut Gamepads, now: Instant) -> Option<GameExit> {
+        for notice in gamepads.poll() {
+            let text = match notice {
+                PadNotice::Connected(name) => format!("{name} connected"),
+                PadNotice::Disconnected(name) => format!("{name} disconnected"),
+            };
+            self.state_notice = Some((text, now));
+        }
+        self.pad_style = gamepads.style();
+        let held = gamepads.held();
+        self.pads_ignored = self.pads_ignored.and(held);
+        let held = held.since(self.pads_ignored);
+        let pressed = held.since(self.pads);
+        self.pads = held;
+        let mut exit = None;
+        for button in pressed.iter() {
+            let action = self.bindings.pad_action(button);
+            // A press that works a menu is not for the game: when the
+            // menu closes under a button still held, the game must not
+            // find its A or B already down.
+            if self.panel.is_some() || self.help {
+                self.pads_ignored.insert(button);
+            }
+            if self.panel.is_some() {
+                // The button that opened the panel closes it again.
+                let key = if action == Some(Action::States) {
+                    Some(KeyCode::Esc)
+                } else {
+                    StatesPanel::pad_key(button, self.pad_style.unwrap_or(PadStyle::Generic))
+                };
+                if let Some(key) = key {
+                    self.handle_panel_key(KeyEvent::new(key, KeyModifiers::NONE), now);
+                }
+            } else if self.help
+                && (button == PadButton::Start
+                    || Some(button) == self.pad_style.map(PadStyle::back))
+                && action != Some(Action::Help)
+            {
+                self.toggle_help(now);
+            } else if let Some(action) = action {
+                exit = self.trigger(action, now);
+                if exit.is_some() {
+                    break;
+                }
+            }
+        }
+        let buttons = self
+            .pads
+            .since(self.pads_ignored)
+            .iter()
+            .filter_map(|b| match self.bindings.pad_action(b) {
+                Some(Action::Button(button)) => Some(button),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        self.keypad.set_pad(buttons);
+        exit
+    }
+
+    /// Does what a one-shot action does on press. Buttons and
+    /// fast-forward are held rather than pressed, so they are not here.
+    fn trigger(&mut self, action: Action, now: Instant) -> Option<GameExit> {
+        match action {
+            Action::Mute => self.muted = !self.muted,
+            Action::Pause => self.toggle_pause(now),
+            Action::Step if self.paused => self.step = true,
+            Action::SaveState => self.save_state(now),
+            Action::LoadState => self.load_state(now),
+            Action::States => self.open_panel(now),
+            Action::Help => self.toggle_help(now),
+            Action::Leave => {
+                if self
+                    .bound_leave
+                    .is_some_and(|t| now.duration_since(t) < LEAVE_WINDOW)
+                {
+                    return Some(GameExit::Back);
+                }
+                self.bound_leave = Some(now);
+            }
+            Action::Button(_) | Action::FastForward | Action::Step => {}
+        }
+        None
+    }
+
+    /// How a hint should name what does `action`: the pad's button while
+    /// one is connected and bound, otherwise `key`.
+    fn hint_for(&self, action: Action, key: &'static str) -> &'static str {
+        self.pad_style
+            .zip(self.bindings.pad_for(action))
+            .map_or(key, |(style, button)| style.label(button))
     }
 
     /// Toggles pause. The rate counter restarts so it does not show a
@@ -436,6 +555,11 @@ impl App {
             .as_ref()
             .map(|err| format!("  [save failed: {err}]"))
             .unwrap_or_default();
+        let pad = if self.pad_style.is_some() {
+            "  🎮"
+        } else {
+            ""
+        };
         let sound = match &self.audio {
             _ if self.muted => "  🔇 muted",
             Ok(_) => "",
@@ -453,9 +577,11 @@ impl App {
             format!("  ⏸ states  (slot {})", self.slot + 1)
         } else if self.leave_armed.is_some_and(|t| now < t + LEAVE_WINDOW) {
             "  esc again to leave".to_string()
+        } else if self.bound_leave.is_some_and(|t| now < t + LEAVE_WINDOW) {
+            format!("  {} again to leave", self.hint_for(Action::Leave, "leave"))
         } else if self.paused {
             "  ⏸ paused  (. = one frame)".to_string()
-        } else if self.fast.is_held(now) {
+        } else if self.fast_held(now) {
             format!("  ▶▶ ×{:.1}", self.fps / NOMINAL_FPS)
         } else {
             String::new()
@@ -467,16 +593,26 @@ impl App {
             ),
             Span::styled(
                 format!(
-                    "{:.0} fps{mode}  {renderer}{size_hint}{keys}{sound}{notice}{swi_hint}{held}{save}",
+                    "{:.0} fps{mode}  {renderer}{size_hint}{keys}{pad}{sound}{notice}{swi_hint}{held}{save}",
                     self.fps
                 ),
                 Style::default().fg(theme::DIM).bg(theme::SURFACE),
             ),
-            Span::styled("   ? ", theme::key()),
+            Span::raw("  "),
+            Span::styled(
+                format!(" {} ", self.hint_for(Action::Help, "?")),
+                theme::key(),
+            ),
             Span::styled("keys  ", theme::hint()),
-            Span::styled(" f2 ", theme::key()),
+            Span::styled(
+                format!(" {} ", self.hint_for(Action::States, "f2")),
+                theme::key(),
+            ),
             Span::styled("states  ", theme::hint()),
-            Span::styled(" esc ×2 ", theme::key()),
+            Span::styled(
+                format!(" {} ×2 ", self.hint_for(Action::Leave, "esc")),
+                theme::key(),
+            ),
             Span::styled("library  ", theme::hint()),
             Span::styled(" ctrl+q ", theme::key()),
             Span::styled("quit", theme::hint()),
@@ -520,7 +656,7 @@ impl App {
             self.draw_help(frame, screen_area);
         }
         if let Some(panel) = &self.panel {
-            panel.draw(frame, screen_area);
+            panel.draw(frame, screen_area, self.pad_style);
         }
     }
 
@@ -530,29 +666,47 @@ impl App {
         let mut lines: Vec<Line> = Action::ALL
             .iter()
             .map(|&action| {
-                let keys = self.bindings.keys_for(action);
-                let keys = if keys.is_empty() {
-                    Span::styled("(unbound)", theme::dim())
-                } else {
-                    Span::styled(keys.join("  "), theme::text())
-                };
-                Line::from(vec![
-                    Span::styled(format!("{:>20}  ", action.label()), theme::dim()),
-                    keys,
-                ])
+                let mut spans = vec![Span::styled(
+                    format!("{:>20}  ", action.label()),
+                    theme::dim(),
+                )];
+                // A build that cannot read pads keeps quiet about them.
+                let inputs = self
+                    .bindings
+                    .inputs_for(action)
+                    .filter(|i| Gamepads::SUPPORTED || matches!(i, Input::Key(_)));
+                if let Some(key) = action.fixed_key() {
+                    spans.push(Span::styled(key, theme::text()));
+                }
+                for input in inputs {
+                    if spans.len() > 1 {
+                        spans.push(Span::raw("  "));
+                    }
+                    // A connected pad's buttons as printed on it; without
+                    // one, the names the keys file takes.
+                    spans.push(match (input, self.pad_style) {
+                        (Input::Pad(button), Some(style)) => {
+                            Span::styled(format!(" {} ", style.label(button)), theme::key())
+                        }
+                        (Input::Pad(_), None) => {
+                            Span::styled(bindings::input_name(input), theme::accent())
+                        }
+                        (Input::Key(_), _) => {
+                            Span::styled(bindings::input_name(input), theme::text())
+                        }
+                    });
+                }
+                if spans.len() == 1 {
+                    spans.push(Span::styled("(unbound)", theme::dim()));
+                }
+                Line::from(spans)
             })
             .collect();
         lines.push(Line::default());
-        for (label, key) in [
-            ("library", "esc ×2"),
-            ("quit", "ctrl+q"),
-            ("this list", "?"),
-        ] {
-            lines.push(Line::from(vec![
-                Span::styled(format!("{label:>20}  "), theme::dim()),
-                Span::styled(key, theme::text()),
-            ]));
-        }
+        lines.push(Line::from(vec![
+            Span::styled(format!("{:>20}  ", "quit"), theme::dim()),
+            Span::styled("ctrl+q", theme::text()),
+        ]));
         lines.push(Line::default());
         let file = Bindings::file().map_or_else(
             || "keys file needs a config directory".to_string(),
@@ -631,6 +785,7 @@ fn run() -> Result<(), AppError> {
         }
     }
 
+    let mut gamepads = Gamepads::open();
     let mut guard = TerminalGuard::enter()?;
     let TerminalGuard {
         terminal,
@@ -643,13 +798,13 @@ fn run() -> Result<(), AppError> {
         bindings,
     };
     if let Some(rom) = direct_rom {
-        return play(terminal, &rom, &session).map(|_| ());
+        return play(terminal, &rom, &session, &mut gamepads).map(|_| ());
     }
     let mut picker = Picker::new(library);
     if let Some(problem) = key_problems.first() {
         picker.notify_error(problem.clone());
     }
-    library_loop(terminal, picker, &session)
+    library_loop(terminal, picker, &session, &mut gamepads)
 }
 
 /// Settings that hold for every game played in this run.
@@ -675,31 +830,62 @@ fn library_loop(
     terminal: &mut ratatui::DefaultTerminal,
     mut picker: Picker,
     session: &Session,
+    gamepads: &mut Gamepads,
 ) -> Result<(), AppError> {
     let mut quit_keys_muted_until = Instant::now();
+    let mut pads = gamepads.held();
+    let mut dirty = true;
     loop {
-        terminal.draw(|frame| picker.draw(frame))?;
-        let outcome = match event::read()? {
-            Event::Key(key)
-                if !session.release_events
-                    && matches!(key.code, KeyCode::Esc | KeyCode::Char('q')) =>
-            {
-                let now = Instant::now();
-                if now < quit_keys_muted_until {
-                    quit_keys_muted_until = now + QUIT_KEY_COOLDOWN;
-                    continue;
+        if dirty {
+            terminal.draw(|frame| picker.draw(frame))?;
+            dirty = false;
+        }
+        // Pads cannot wake `event::read`, so the terminal is waited on in
+        // short slices with the pads read in between.
+        let mut keys = Vec::new();
+        if event::poll(LIBRARY_PAD_POLL)? {
+            dirty = true;
+            match event::read()? {
+                Event::Key(key)
+                    if !session.release_events
+                        && matches!(key.code, KeyCode::Esc | KeyCode::Char('q')) =>
+                {
+                    let now = Instant::now();
+                    if now < quit_keys_muted_until {
+                        quit_keys_muted_until = now + QUIT_KEY_COOLDOWN;
+                    } else {
+                        keys.push(key);
+                    }
                 }
-                picker.handle(key)
+                Event::Key(key) => keys.push(key),
+                _ => {}
             }
-            Event::Key(key) => picker.handle(key),
-            _ => None,
+        }
+        gamepads.poll();
+        let style = gamepads.style();
+        if picker.pad() != style {
+            picker.set_pad(style);
+            dirty = true;
+        }
+        let held = gamepads.held();
+        keys.extend(
+            held.since(pads)
+                .iter()
+                .filter_map(|b| library_pad_key(b, style.unwrap_or(PadStyle::Generic)))
+                .map(|code| KeyEvent::new(code, KeyModifiers::NONE)),
+        );
+        pads = held;
+        let Some(outcome) = keys.into_iter().find_map(|key| {
+            dirty = true;
+            picker.handle(key)
+        }) else {
+            continue;
         };
         match outcome {
-            None => {}
-            Some(Outcome::Quit) => return Ok(()),
-            Some(Outcome::Play(rom)) => {
+            Outcome::Quit => return Ok(()),
+            Outcome::Play(rom) => {
                 picker.mark_played(&rom);
-                match play(terminal, &rom, session) {
+                match play(terminal, &rom, session, gamepads) {
                     Ok(GameExit::Back) => {}
                     Ok(GameExit::Quit) => return Ok(()),
                     // A broken ROM, or a bug it trips over, should not
@@ -711,6 +897,8 @@ fn library_loop(
                     Err(err) => return Err(err),
                 }
                 quit_keys_muted_until = Instant::now() + QUIT_KEY_COOLDOWN;
+                pads = gamepads.held();
+                dirty = true;
                 // No explicit clear: the next draw diffs against the game's
                 // last frame and repaints every cell that differs. (Ratatui's
                 // `clear` also queries the cursor position, which some
@@ -719,6 +907,25 @@ fn library_loop(
             }
         }
     }
+}
+
+/// How long the library waits for the terminal before reading the pads.
+const LIBRARY_PAD_POLL: Duration = Duration::from_millis(16);
+
+/// What a pad button does in the library, as the key that does the same:
+/// the D-pad (or stick) moves, the shoulders page, the pad's confirm
+/// button or Start plays. Nothing on a pad leaves or quits; that stays
+/// on the keyboard.
+fn library_pad_key(button: PadButton, style: PadStyle) -> Option<KeyCode> {
+    Some(match button {
+        PadButton::Up => KeyCode::Up,
+        PadButton::Down => KeyCode::Down,
+        PadButton::L1 => KeyCode::PageUp,
+        PadButton::R1 => KeyCode::PageDown,
+        PadButton::Start => KeyCode::Enter,
+        b if b == style.confirm() => KeyCode::Enter,
+        _ => return None,
+    })
 }
 
 /// Where to point the user for details of a crash.
@@ -748,6 +955,7 @@ fn play(
     terminal: &mut ratatui::DefaultTerminal,
     rom: &Path,
     session: &Session,
+    gamepads: &mut Gamepads,
 ) -> Result<GameExit, AppError> {
     let gba = load_gba(rom)?;
     let header_title = gba.bus.cartridge.header().title.trim().to_string();
@@ -778,6 +986,10 @@ fn play(
         paused: false,
         step: false,
         fast: Hold::new(session.release_events),
+        pads: PadSet::EMPTY,
+        pads_ignored: PadSet::EMPTY,
+        pad_style: None,
+        bound_leave: None,
         bindings: session.bindings.clone(),
         help: false,
         leave_armed: None,
@@ -795,7 +1007,14 @@ fn play(
         panel: None,
         state_notice: None,
     };
-    let result = std::panic::catch_unwind(AssertUnwindSafe(|| event_loop(terminal, &mut app)));
+    let result = std::panic::catch_unwind(AssertUnwindSafe(|| {
+        // Whatever the pads did in the library is old news, and a button
+        // still held from there is not a fresh press.
+        gamepads.poll();
+        app.pads = gamepads.held();
+        app.pads_ignored = app.pads;
+        event_loop(terminal, &mut app, gamepads)
+    }));
 
     // Persist the save however the loop ended.
     app.flush_save();
@@ -898,24 +1117,7 @@ fn handle_key(app: &mut App, key: crossterm::event::KeyEvent) -> Option<GameExit
     match app.bindings.action(key.code) {
         Some(Action::Button(button)) => app.keypad.handle(button, key.kind, now),
         Some(Action::FastForward) => app.fast.update(key.kind, now),
-        Some(Action::Mute) if key.kind == KeyEventKind::Press => {
-            app.muted = !app.muted;
-        }
-        Some(Action::Pause) if key.kind == KeyEventKind::Press => {
-            app.toggle_pause(now);
-        }
-        Some(Action::Step) if key.kind == KeyEventKind::Press && app.paused => {
-            app.step = true;
-        }
-        Some(Action::SaveState) if key.kind == KeyEventKind::Press => {
-            app.save_state(now);
-        }
-        Some(Action::LoadState) if key.kind == KeyEventKind::Press => {
-            app.load_state(now);
-        }
-        Some(Action::States) if key.kind == KeyEventKind::Press => {
-            app.open_panel(now);
-        }
+        Some(action) if key.kind == KeyEventKind::Press => return app.trigger(action, now),
         _ => {}
     }
     None
@@ -932,11 +1134,15 @@ fn handle_key(app: &mut App, key: crossterm::event::KeyEvent) -> Option<GameExit
 fn event_loop(
     terminal: &mut ratatui::DefaultTerminal,
     app: &mut App,
+    gamepads: &mut Gamepads,
 ) -> Result<GameExit, AppError> {
     let mut next_frame = Instant::now();
     let mut next_autosave = next_frame + AUTOSAVE_INTERVAL;
     loop {
         let now = Instant::now();
+        if let Some(exit) = app.poll_pads(gamepads, now) {
+            return Ok(exit);
+        }
         if app.help || app.panel.is_some() {
             // An overlay covers the screen; nothing to see, so nothing to run.
         } else if app.paused {
@@ -944,7 +1150,7 @@ fn event_loop(
                 app.emulate_frame(now);
                 app.step = false;
             }
-        } else if app.fast.is_held(now) {
+        } else if app.fast_held(now) {
             let deadline = now + FRAME_PERIOD;
             loop {
                 let now = Instant::now();

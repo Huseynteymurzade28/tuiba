@@ -16,12 +16,23 @@ categories.workspace = true
 name = "tuiba"
 path = "src/main.rs"
 
+[[example]]
+name = "padlog"
+required-features = ["gamepad"]
+
 [dependencies]
 tuiba-core.workspace = true
 thiserror.workspace = true
 ratatui.workspace = true
 crossterm.workspace = true
 cpal = "0.18"
+gilrs = { version = "0.11", optional = true }
 
 [lints]
 workspace = true
+
+[features]
+default = ["gamepad"]
+# Game controllers through gilrs (evdev/libudev on Linux, Windows Gaming
+# Input / XInput, IOKit on macOS). Without it only the keyboard plays.
+gamepad = ["dep:gilrs"]
