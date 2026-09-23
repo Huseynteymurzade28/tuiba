@@ -4,7 +4,7 @@ All notable changes to tuiba. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow
 [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [0.5.0] – 2026-09-23
 
 ### Added
 - Gamepads. Any pad the OS knows plays alongside the keyboard, and one
@@ -114,6 +114,7 @@ First release: ARM7TDMI, memory map with DMA and timers, PPU modes 0–5
 with sprites, windows and blending, HLE BIOS, SRAM/flash/EEPROM saves,
 Kitty graphics and half-block renderers, library screen, headless mode.
 
+[0.5.0]: https://github.com/Huseynteymurzade28/tuiba/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/Huseynteymurzade28/tuiba/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/Huseynteymurzade28/tuiba/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/Huseynteymurzade28/tuiba/compare/v0.1.1...v0.2.0
