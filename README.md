@@ -24,7 +24,7 @@ the status bar shows the current scale and the size needed for 1:1. Sound
 plays through the default audio device (`M` mutes it).
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/Huseynteymurzade28/tuiba/master/docs/demo.gif" alt="Adding a folder, filtering the library and starting a game" width="800">
+  <img src="https://raw.githubusercontent.com/Huseynteymurzade28/tuiba/master/docs/demo.gif" alt="Filtering the library, playing two homebrew games, fast-forward, save states and the key list" width="800">
   <br>
   <sub>Add a folder, sort, filter, play. The game part shows the pixel renderer's output, as it looks in Kitty, Ghostty or WezTerm.</sub>
 </p>
