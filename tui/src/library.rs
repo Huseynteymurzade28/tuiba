@@ -324,14 +324,7 @@ impl Rom {
     #[must_use]
     pub fn name(&self) -> String {
         match &self.header {
-            Some(h)
-                if !matches!(
-                    h.title.trim(),
-                    "" | "ROM TITLE" | "GAME TITLE" | "GBA" | "AGB"
-                ) =>
-            {
-                h.title.clone()
-            }
+            Some(h) if !is_placeholder_title(&h.title) => h.title.clone(),
             _ => self.file_name(),
         }
     }
@@ -383,6 +376,16 @@ pub fn human_size(size: u64) -> String {
     } else {
         format!("{} KiB", size.div_ceil(1024))
     }
+}
+
+/// Whether a header title says nothing: blank, or the placeholder a
+/// homebrew toolchain left in (`ROM TITLE` and friends).
+#[must_use]
+pub fn is_placeholder_title(title: &str) -> bool {
+    matches!(
+        title.trim(),
+        "" | "ROM TITLE" | "GAME TITLE" | "GBA" | "AGB"
+    )
 }
 
 #[cfg(test)]

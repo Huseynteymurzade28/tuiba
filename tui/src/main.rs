@@ -959,8 +959,9 @@ fn play(
 ) -> Result<GameExit, AppError> {
     let gba = load_gba(rom)?;
     let header_title = gba.bus.cartridge.header().title.trim().to_string();
-    let title = if header_title.is_empty() {
-        // Untitled homebrew: fall back to the file name.
+    let title = if library::is_placeholder_title(&header_title) {
+        // Untitled homebrew: fall back to the file name, as the library
+        // does.
         rom.file_stem()
             .map(|s| s.to_string_lossy().into_owned())
             .unwrap_or_default()
