@@ -15,9 +15,10 @@
 
 ---
 
-In terminals that speak the Kitty graphics protocol (Kitty, Ghostty,
-WezTerm, Konsole) the 240×160 framebuffer is shown as real pixels, upscaled
-by the largest integer factor that fits. Everywhere else it is drawn with
+In terminals that can show images the 240×160 framebuffer is shown as real
+pixels, upscaled by the largest integer factor that fits: through the Kitty
+graphics protocol (Kitty, Ghostty, WezTerm, Konsole), Sixel (foot, Windows
+Terminal, mintty, mlterm) or iTerm2's inline images. Everywhere else it is drawn with
 Unicode half-block characters and 24-bit colour, so a 240×80-cell terminal
 shows the full screen at 1:1. Smaller terminals get a downscaled picture;
 the status bar shows the current scale and the size needed for 1:1. Sound
@@ -48,7 +49,7 @@ plays through the default audio device (`M` mutes it).
 | Saves    | SRAM, 64/128 KiB flash and serial EEPROM, auto-detected from the ROM; `.sav` written as you play              |
 | BIOS     | Runs without a BIOS image: `IntrWait`, `Div`, `Sqrt`, `ArcTan2`, `CpuSet`, LZ77/RL/`BitUnPack`, affine helpers are emulated in software |
 | Input    | Keyboard with exact key releases on terminals that support the Kitty keyboard protocol; gamepads, hot-pluggable; bindings in a config file |
-| Frontend | Library with folders, filter, sort and last-played memory; pixel or half-block rendering; pause, frame step and fast-forward; headless debug mode |
+| Frontend | Library with folders, filter, sort and last-played memory; pixels over the Kitty, Sixel or iTerm2 protocol, or half-blocks; pause, frame step and fast-forward; headless debug mode |
 
 Not there yet: serial link, real-time clock, cycle-exact PPU/DMA
 interleaving. Accurate enough for the homebrew below; not a reference
@@ -101,8 +102,14 @@ Debian/Ubuntu, `alsa-lib-devel systemd-devel` on Fedora); macOS and
 Windows need nothing extra. A keyboard-only build skips udev:
 `cargo install tuiba --no-default-features`. Any
 terminal with 24-bit colour and a font that has the block characters
-(`▀ ▄ █`) works. For the pixel renderer use Kitty, Ghostty, WezTerm or
-Konsole.
+(`▀ ▄ █`) works. For the pixel renderer use Kitty, Ghostty, WezTerm,
+Konsole, foot, Windows Terminal, iTerm2, mintty or mlterm. tuiba picks the
+protocol from environment variables such as `TERM` and `TERM_PROGRAM`; when it
+guesses wrong, name one with `--renderer` (`kitty`, `sixel`, `iterm2` or
+`blocks`). Other terminals with Sixel support (xterm started with
+`-ti vt340`, Contour, VS Code with images enabled) work with
+`--renderer sixel`. Inside tmux or screen the escapes would need wrapping, so
+tuiba falls back to half-blocks there.
 
 ## Getting started
 
@@ -126,6 +133,7 @@ Shortcuts:
 ```sh
 tuiba ~/Games/GBA      # add a folder and open the library in one go
 tuiba path/to/rom.gba  # play a cartridge directly, skipping the library
+tuiba --renderer sixel # pick the image protocol yourself
 tuiba --no-graphics    # force the half-block renderer
 tuiba --mute           # start silent; M toggles sound in a game
 ```

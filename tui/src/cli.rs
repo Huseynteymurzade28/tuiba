@@ -6,6 +6,7 @@
 use std::fmt;
 use std::path::PathBuf;
 
+use crate::graphics::Renderer;
 use crate::input::GbaKey;
 
 /// Usage text printed on `--help` or a bad invocation.
@@ -25,8 +26,10 @@ Debug options (headless, no terminal UI; need a ROM path):
                         may be given several times
 
 Display and sound options:
-  --no-graphics         always draw with half-block characters, even in
-                        terminals that support the Kitty graphics protocol
+  --renderer NAME       how to draw the game screen: auto (default: an image
+                        protocol if the terminal seems to speak one), kitty,
+                        sixel, iterm2, or blocks (half-block characters)
+  --no-graphics         same as --renderer blocks
   --mute                start with sound off (M toggles it in a game)
   -h, --help            show this help";
 
@@ -38,8 +41,8 @@ pub struct Args {
     pub rom: Option<PathBuf>,
     /// Headless run parameters, when any debug flag was given.
     pub headless: Option<Headless>,
-    /// Use the terminal's graphics protocol when available.
-    pub graphics: bool,
+    /// How to draw the game screen.
+    pub renderer: Renderer,
     /// Start with sound off.
     pub mute: bool,
 }
@@ -115,7 +118,7 @@ impl Args {
         let mut screenshot = None;
         let mut wav = None;
         let mut keys = Vec::new();
-        let mut graphics = true;
+        let mut renderer = Renderer::Auto;
         let mut mute = false;
 
         while let Some(arg) = args.next() {
@@ -131,7 +134,11 @@ impl Args {
                 }
                 "--screenshot" => screenshot = Some(PathBuf::from(value("--screenshot")?)),
                 "--wav" => wav = Some(PathBuf::from(value("--wav")?)),
-                "--no-graphics" => graphics = false,
+                "--no-graphics" => renderer = Renderer::HalfBlocks,
+                "--renderer" => {
+                    let v = value("--renderer")?;
+                    renderer = v.parse().map_err(|()| bad("--renderer", &v))?;
+                }
                 "--mute" => mute = true,
                 "--key" => {
                     let v = value("--key")?;
@@ -159,7 +166,7 @@ impl Args {
         Ok(Self {
             rom,
             headless,
-            graphics,
+            renderer,
             mute,
         })
     }
@@ -204,6 +211,7 @@ fn parse_key(name: &str) -> Option<GbaKey> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::graphics::Protocol;
 
     fn parse(args: &[&str]) -> Result<Args, ArgError> {
         Args::parse(args.iter().copied())
@@ -219,11 +227,19 @@ mod tests {
             Args {
                 rom: None,
                 headless: None,
-                graphics: true,
+                renderer: Renderer::Auto,
                 mute: false,
             }
         );
-        assert!(!parse(&["--no-graphics"]).unwrap().graphics);
+        assert_eq!(
+            parse(&["--no-graphics"]).unwrap().renderer,
+            Renderer::HalfBlocks
+        );
+        assert_eq!(
+            parse(&["--renderer", "sixel"]).unwrap().renderer,
+            Renderer::Pixels(Protocol::Sixel)
+        );
+        assert!(parse(&["--renderer", "png"]).is_err());
         assert!(parse(&["--mute"]).unwrap().mute);
     }
 

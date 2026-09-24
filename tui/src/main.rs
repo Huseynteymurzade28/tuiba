@@ -42,7 +42,7 @@ use tuiba_core::{Cartridge, Gba, Snapshot};
 use crate::audio::AudioOutput;
 use crate::bindings::{Action, Bindings, Input};
 use crate::gamepad::{Gamepads, PadButton, PadNotice, PadSet, PadStyle};
-use crate::graphics::KittyGraphics;
+use crate::graphics::{Graphics, Renderer};
 use crate::input::{GbaKey, Hold, Keypad};
 use crate::library::Library;
 use crate::picker::{Outcome, Picker};
@@ -128,7 +128,7 @@ struct App {
     gba: Gba,
     keypad: Keypad,
     /// Pixel output, when the terminal supports it; otherwise half-blocks.
-    graphics: Option<KittyGraphics>,
+    graphics: Option<Graphics>,
     /// Where the last draw put the screen, for the graphics overlay.
     screen_area: Rect,
     /// Frames emulated in the current measurement window.
@@ -526,11 +526,10 @@ impl App {
     /// The status bar: what the emulator is doing, and the three keys
     /// that are never rebindable.
     fn status_line(&self, size_hint: &str) -> Line<'_> {
-        let renderer = if self.graphics.is_some() {
-            "pixels"
-        } else {
-            "half-blocks"
-        };
+        let renderer = self
+            .graphics
+            .as_ref()
+            .map_or("half-blocks", |g| g.protocol().name());
         let now = Instant::now();
         let swi_hint = self
             .gba
@@ -793,7 +792,7 @@ fn run() -> Result<(), AppError> {
     } = &mut guard;
     let session = Session {
         release_events: *release_events,
-        graphics: args.graphics,
+        renderer: args.renderer,
         sound: !args.mute,
         bindings,
     };
@@ -811,8 +810,8 @@ fn run() -> Result<(), AppError> {
 struct Session {
     /// The terminal reports key releases.
     release_events: bool,
-    /// Use the terminal's graphics protocol when available.
-    graphics: bool,
+    /// How to draw the game screen.
+    renderer: Renderer,
     /// Open the sound device.
     sound: bool,
     bindings: Bindings,
@@ -975,8 +974,7 @@ fn play(
         title,
         gba,
         keypad: Keypad::new(session.release_events),
-        graphics: (session.graphics && graphics::terminal_supports_kitty_graphics())
-            .then(KittyGraphics::new),
+        graphics: session.renderer.protocol().map(Graphics::new),
         screen_area: Rect::default(),
         fps_frames: 0,
         fps_window_start: Instant::now(),
@@ -1167,14 +1165,16 @@ fn event_loop(
             app.flush_save();
             next_autosave = now + AUTOSAVE_INTERVAL;
         }
+        let overlay = app.help || app.panel.is_some();
+        if overlay && let Some(graphics) = &mut app.graphics {
+            // The image would sit on top of the overlay (or, painted into
+            // the cells, stay around it). Before the draw, so the overlay
+            // lands on blank cells.
+            graphics.hide()?;
+        }
         terminal.draw(|frame| app.draw(frame))?;
-        if let Some(graphics) = &mut app.graphics {
-            if app.help || app.panel.is_some() {
-                // The pixel image would sit on top of the overlay.
-                graphics.clear()?;
-            } else {
-                graphics.present(app.gba.framebuffer(), app.screen_area)?;
-            }
+        if !overlay && let Some(graphics) = &mut app.graphics {
+            graphics.present(app.gba.framebuffer(), app.screen_area)?;
         }
 
         while event::poll(Duration::ZERO)? {
