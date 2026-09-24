@@ -4,6 +4,27 @@ All notable changes to tuiba. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow
 [Semantic Versioning](https://semver.org/).
 
+## [0.6.0] – 2026-09-25
+
+### Added
+- Pixels beyond Kitty. The screen can now go out as Sixel (foot, Windows
+  Terminal, mintty, mlterm, Konsole, xterm as a VT340) or as iTerm2 inline
+  images, so more terminals get real pixels instead of half-blocks. The
+  protocol is picked from the environment; `--renderer` names one
+  yourself (`auto`, `kitty`, `sixel`, `iterm2` or `blocks`), and
+  `--no-graphics` stays as a shorthand for `blocks`. The status bar shows
+  which one is in use. (#21)
+
+### Changed
+- A frame identical to the one on screen is not sent again, so a paused
+  or still game costs the terminal nothing.
+- Headless `--screenshot` PNGs are compressed now: a few dozen KiB
+  instead of 115 KiB.
+
+### Fixed
+- The game screen's title falls back to the file name for placeholder
+  header titles (`ROM TITLE` and friends), as the library already did.
+
 ## [0.5.0] – 2026-09-23
 
 ### Added
@@ -114,6 +135,7 @@ First release: ARM7TDMI, memory map with DMA and timers, PPU modes 0–5
 with sprites, windows and blending, HLE BIOS, SRAM/flash/EEPROM saves,
 Kitty graphics and half-block renderers, library screen, headless mode.
 
+[0.6.0]: https://github.com/Huseynteymurzade28/tuiba/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/Huseynteymurzade28/tuiba/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/Huseynteymurzade28/tuiba/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/Huseynteymurzade28/tuiba/compare/v0.2.0...v0.3.0
