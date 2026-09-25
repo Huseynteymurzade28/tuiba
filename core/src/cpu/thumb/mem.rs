@@ -35,7 +35,7 @@ impl Cpu {
         let rd = rd(op);
         match (op >> 10) & 0b11 {
             0b00 => {
-                mem.write32(address & !3, self.regs.get(rd));
+                mem.write32(address, self.regs.get(rd));
                 0
             }
             0b01 => {
@@ -59,7 +59,7 @@ impl Cpu {
         let rd = rd(op);
         match (op >> 10) & 0b11 {
             0b00 => {
-                mem.write16(address & !1, self.regs.get(rd) as u16);
+                mem.write16(address, self.regs.get(rd) as u16);
                 0
             }
             0b01 => {
@@ -87,7 +87,7 @@ impl Cpu {
         let rd = rd(op);
         match (load, byte) {
             (false, false) => {
-                mem.write32(address & !3, self.regs.get(rd));
+                mem.write32(address, self.regs.get(rd));
                 0
             }
             (false, true) => {
@@ -116,7 +116,7 @@ impl Cpu {
             self.regs.set(rd, load::halfword(mem, address));
             1
         } else {
-            mem.write16(address & !1, self.regs.get(rd) as u16);
+            mem.write16(address, self.regs.get(rd) as u16);
             0
         }
     }
@@ -129,7 +129,7 @@ impl Cpu {
             self.regs.set(rd, load::word(mem, address));
             1
         } else {
-            mem.write32(address & !3, self.regs.get(rd));
+            mem.write32(address, self.regs.get(rd));
             0
         }
     }

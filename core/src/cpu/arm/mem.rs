@@ -80,7 +80,7 @@ impl Cpu {
             if byte {
                 mem.write8(address, value as u8);
             } else {
-                mem.write32(address & !3, value);
+                mem.write32(address, value);
             }
             0
         }
@@ -102,7 +102,7 @@ impl Cpu {
 
         match ((op >> 5) & 0b11, load) {
             (0b01, false) => {
-                mem.write16(address & !1, value as u16);
+                mem.write16(address, value as u16);
                 0
             }
             (0b01, true) => self.finish_load(rd, load::halfword(mem, address)),
@@ -237,7 +237,7 @@ impl Cpu {
             old
         } else {
             let old = load::word(mem, address);
-            mem.write32(address & !3, source);
+            mem.write32(address, source);
             old
         };
         self.regs.set(rd, old);

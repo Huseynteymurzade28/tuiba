@@ -214,8 +214,8 @@ impl Memory for Bus {
     }
 
     /// Reads a halfword from an even address.
-    fn read16(&self, address: u32) -> u16 {
-        debug_assert_eq!(address & 1, 0, "unaligned halfword read");
+    fn read16(&self, exact: u32) -> u16 {
+        let address = exact & !1;
         self.account(address, 2);
         let off = page_offset(address);
         match MemoryRegion::from_address(address) {
@@ -233,15 +233,16 @@ impl Memory for Bus {
             Some(MemoryRegion::Oam) => get16(&self.video.oam, VideoMemory::oam_index(off)),
             Some(MemoryRegion::Rom) if self.is_eeprom_address(address) => self.eeprom_read(),
             Some(MemoryRegion::Rom) => self.cartridge.read16(address & 0x01FF_FFFF),
-            // SRAM is on an 8-bit bus: the byte is repeated across the halfword.
-            Some(MemoryRegion::Sram) => u16::from(self.backup.read(off)) * 0x0101,
+            // SRAM is on an 8-bit bus: the addressed byte is repeated
+            // across the halfword.
+            Some(MemoryRegion::Sram) => u16::from(self.backup.read(page_offset(exact))) * 0x0101,
             None => 0,
         }
     }
 
     /// Reads a word from a word-aligned address.
-    fn read32(&self, address: u32) -> u32 {
-        debug_assert_eq!(address & 3, 0, "unaligned word read");
+    fn read32(&self, exact: u32) -> u32 {
+        let address = exact & !3;
         self.account(address, 4);
         let off = page_offset(address);
         match MemoryRegion::from_address(address) {
@@ -261,7 +262,9 @@ impl Memory for Bus {
                 u32::from(self.eeprom_read()) | u32::from(self.eeprom_read()) << 16
             }
             Some(MemoryRegion::Rom) => self.cartridge.read32(address & 0x01FF_FFFF),
-            Some(MemoryRegion::Sram) => u32::from(self.backup.read(off)) * 0x0101_0101,
+            Some(MemoryRegion::Sram) => {
+                u32::from(self.backup.read(page_offset(exact))) * 0x0101_0101
+            }
             None => 0,
         }
     }
@@ -302,8 +305,8 @@ impl Memory for Bus {
     }
 
     /// Writes a halfword to an even address.
-    fn write16(&mut self, address: u32, value: u16) {
-        debug_assert_eq!(address & 1, 0, "unaligned halfword write");
+    fn write16(&mut self, exact: u32, value: u16) {
+        let address = exact & !1;
         self.account(address, 2);
         let off = page_offset(address);
         match MemoryRegion::from_address(address) {
@@ -330,16 +333,20 @@ impl Memory for Bus {
             Some(MemoryRegion::Oam) => {
                 set16(&mut self.video.oam, VideoMemory::oam_index(off), value);
             }
-            // 8-bit bus: only the low byte reaches the chip.
-            Some(MemoryRegion::Sram) => self.backup.write(off, value as u8),
+            // 8-bit bus: one byte reaches the chip, the one the store
+            // would have put at the exact address.
+            Some(MemoryRegion::Sram) => {
+                let byte = value.rotate_right((exact & 1) * 8) as u8;
+                self.backup.write(page_offset(exact), byte);
+            }
             Some(MemoryRegion::Rom) if self.is_eeprom_address(address) => self.eeprom_write(value),
             Some(MemoryRegion::Bios | MemoryRegion::Rom) | None => {}
         }
     }
 
     /// Writes a word to a word-aligned address.
-    fn write32(&mut self, address: u32, value: u32) {
-        debug_assert_eq!(address & 3, 0, "unaligned word write");
+    fn write32(&mut self, exact: u32, value: u32) {
+        let address = exact & !3;
         self.account(address, 4);
         let off = page_offset(address);
         match MemoryRegion::from_address(address) {
@@ -366,7 +373,10 @@ impl Memory for Bus {
             Some(MemoryRegion::Oam) => {
                 set32(&mut self.video.oam, VideoMemory::oam_index(off), value);
             }
-            Some(MemoryRegion::Sram) => self.backup.write(off, value as u8),
+            Some(MemoryRegion::Sram) => {
+                let byte = value.rotate_right((exact & 3) * 8) as u8;
+                self.backup.write(page_offset(exact), byte);
+            }
             Some(MemoryRegion::Rom) if self.is_eeprom_address(address) => {
                 self.eeprom_write(value as u16);
                 self.eeprom_write((value >> 16) as u16);
@@ -605,6 +615,13 @@ mod tests {
         assert_eq!(bus.read8(base::SRAM), 0x78);
         assert_eq!(bus.read16(base::SRAM), 0x7878);
         assert_eq!(bus.read32(base::SRAM), 0x7878_7878);
+        // Wider stores put the byte meant for the exact address there.
+        bus.write16(base::SRAM + 1, 0xAABB);
+        assert_eq!(bus.read8(base::SRAM + 1), 0xAA);
+        bus.write32(base::SRAM + 2, 0xAABB_CCDD);
+        assert_eq!(bus.read8(base::SRAM + 2), 0xBB);
+        assert_eq!(bus.read8(base::SRAM + 3), 0xFF, "one byte, not four");
+        assert_eq!(bus.read32(base::SRAM + 2), 0xBBBB_BBBB);
     }
 
     #[test]
