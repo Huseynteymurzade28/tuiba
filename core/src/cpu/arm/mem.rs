@@ -145,7 +145,9 @@ impl Cpu {
         let count = if empty { 16 } else { list.count_ones() };
         let span = count * 4;
 
-        let base = self.base(rn) & !3;
+        // The transfers ignore the low address bits, but the base keeps
+        // them: writeback moves an unaligned base by the span and no more.
+        let base = self.base(rn);
         let final_base = if up {
             base.wrapping_add(span)
         } else {
@@ -170,7 +172,7 @@ impl Cpu {
                 continue;
             }
             if load {
-                let value = mem.read32(address);
+                let value = mem.read32(address & !3);
                 if reg == PC {
                     self.set_pc(value);
                 } else if user_bank {
@@ -190,7 +192,7 @@ impl Cpu {
                 } else {
                     self.regs.get(reg)
                 };
-                mem.write32(address, value);
+                mem.write32(address & !3, value);
             }
             address = address.wrapping_add(4);
             first = false;
@@ -370,6 +372,23 @@ mod tests {
             (10, 11, 12)
         );
         assert_eq!(cpu.next_pc(), 0x300);
+    }
+
+    #[test]
+    fn an_unaligned_base_transfers_aligned_but_keeps_its_low_bits() {
+        let mut mem = Ram::new();
+        // stmdb r2!, {r0,r1} ; ldmia r3, {r4,r5}
+        mem.load_arm(0x100, &[0xE922_0003, 0xE893_0030]);
+        let mut cpu = arm_at(&mut mem, 0x100);
+        cpu.regs.set(0, 32);
+        cpu.regs.set(1, 64);
+        cpu.regs.set(2, 0x1003);
+        cpu.regs.set(3, 0x0FFB);
+        cpu.step(&mut mem);
+        assert_eq!(cpu.regs.get(2), 0x0FFB, "base moved by 8, low bits kept");
+        assert_eq!((mem.read32(0xFF8), mem.read32(0xFFC)), (32, 64));
+        cpu.step(&mut mem);
+        assert_eq!((cpu.regs.get(4), cpu.regs.get(5)), (32, 64));
     }
 
     #[test]
