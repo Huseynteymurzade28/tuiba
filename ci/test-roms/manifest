@@ -1,0 +1,29 @@
+# Test ROMs run headlessly in CI by ci/test-roms/run.sh.
+#
+# source <name> <licence> <url prefix, pinned to a commit>
+# rom    <source> <path> <sha256> <frames> <expected frame hash>  [# note]
+#
+# The frame hash is the `frame=` value `tuiba ROM --frames N` prints: a
+# hash of the final frame. For suites that report on screen, it is the
+# hash of their "passed" screen; for demos, of a frame checked by eye.
+
+source jsmolka MIT https://raw.githubusercontent.com/jsmolka/gba-tests/a7113b67e63f83a9b321696ddd7042ccfad6c881
+
+# Suites: every one shows the same "All tests passed" screen.
+rom jsmolka arm/arm.gba           77ee88662552bdc885c1080c0172ff119d54db791bd73b21808cf1ff1fe5b40e 120 df196d48edea3565
+rom jsmolka thumb/thumb.gba       b5cb2291df4ab314b31c598acd9bff2ccfa0b38efff29daadfe97422ce369b67 120 df196d48edea3565
+rom jsmolka memory/memory.gba     21024fb6aae6343f5f0466dd54e3149de1fbeb23f78e7d85a015c983684d2f87 120 df196d48edea3565
+rom jsmolka nes/nes.gba           d990df112763087d0415b3785c1b4d31c0237794a704d0446fc5f5e474a44f98 120 df196d48edea3565
+rom jsmolka unsafe/unsafe.gba     bb727d59fa81915a5f5c609f4befb64872d3a3d830bc6ae0149e26410e648f85 120 df196d48edea3565
+rom jsmolka save/none.gba         edb34ba6590d070c8a50cf0f3566b1e3cc679377b978224ff1b872d27f2b1630 120 df196d48edea3565
+rom jsmolka save/sram.gba         a37ad99c31e3f805eb05a00e498b65bd78e6f43a0a139cd695bea1f88229af2c 120 df196d48edea3565
+rom jsmolka save/flash64.gba      7e2aa32e943aedde88bd750eadcdbf55152d3a1ec61385011b7f15cd85b07c02 120 df196d48edea3565
+rom jsmolka save/flash128.gba     9ac50e51d3ce4209dbdf85e472e70c067d5827e9af1bb3e707f6bd9059d5f0c6 120 df196d48edea3565
+
+# Demos: no verdict of their own; the hash pins a frame that matched
+# the source when checked.
+rom jsmolka ppu/hello.gba         38aed48b67bc0f701e8aa222b0c3334bd306bd29888707bb7224d81f5576c264 120 54900fa88c8f5f9e  # "Hello world!"
+rom jsmolka ppu/shades.gba        127ce348f17e4d5fd8a0821a7af757eda6109c66c9f7b8f7d1e0fa31831b407d 120 75f454fac55ebf25  # 16 px bands, black to blue
+rom jsmolka ppu/stripes.gba       80d6cc05b5f289b9a2392621fc245270f08e9f0d77fd33982120cef240f5a504 120 2910028e77cebd25  # 8 px stripes, two blues
+
+# Not yet: bios/bios.gba fails test 1, BIOS read protection (#13).
