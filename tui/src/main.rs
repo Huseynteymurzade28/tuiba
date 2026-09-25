@@ -47,6 +47,7 @@ use tuiba_core::{Cartridge, Gba, Snapshot};
 
 use crate::audio::AudioOutput;
 use crate::bindings::{Action, Bindings, Input};
+use crate::cli::FastSpeed;
 use crate::gamepad::{Gamepads, PadButton, PadNotice, PadSet, PadStyle};
 use crate::graphics::{Graphics, Renderer};
 use crate::input::{GbaKey, Hold, Keypad};
@@ -210,6 +211,8 @@ struct App {
     volume: u8,
     /// Performance figures, while they are shown in the status bar.
     stats: Option<Stats>,
+    /// How fast fast-forward may run.
+    fast_speed: FastSpeed,
     /// The cartridge being played, for naming its state files.
     rom: PathBuf,
     /// Which slot `F5` and `F8` act on, counting from zero. The panel
@@ -388,6 +391,10 @@ impl App {
             Action::LoadState => self.load_state(now),
             Action::States => self.open_panel(now),
             Action::Screenshot => self.screenshot(now),
+            Action::FastSpeed => {
+                self.fast_speed = self.fast_speed.next();
+                self.state_notice = Some((format!("fast-forward {}", self.fast_speed), now));
+            }
             Action::Stats => {
                 self.stats = match self.stats {
                     Some(_) => None,
@@ -905,6 +912,7 @@ fn run() -> Result<(), AppError> {
         sound: !args.mute,
         volume: Cell::new(args.volume),
         stats: Cell::new(args.stats),
+        fast_speed: Cell::new(args.fast_speed),
         bindings,
     };
     if let Some(rom) = direct_rom {
@@ -929,6 +937,8 @@ struct Session {
     volume: Cell<u8>,
     /// Performance figures shown, as last set in a game.
     stats: Cell<bool>,
+    /// Fast-forward limit, as last set in a game.
+    fast_speed: Cell<FastSpeed>,
     bindings: Bindings,
 }
 
@@ -1141,6 +1151,7 @@ fn play(
         muted: !session.sound,
         volume: session.volume.get(),
         stats: session.stats.get().then(|| Stats::new(Instant::now())),
+        fast_speed: session.fast_speed.get(),
         rom: rom.to_path_buf(),
         slot: 0,
         held_state: None,
@@ -1163,6 +1174,7 @@ fn play(
     app.flush_save();
     session.volume.set(app.volume);
     session.stats.set(app.stats.is_some());
+    session.fast_speed.set(app.fast_speed);
     if let Some(err) = &app.save_error {
         crashlog::record(
             "save",
@@ -1306,8 +1318,11 @@ fn event_loop(
                 app.step = false;
             }
         } else if app.fast_held(now) {
+            // As many frames as fit in the period, or as the limit
+            // allows; with a limit the loop's usual sleep paces the rest.
             let deadline = now + FRAME_PERIOD;
-            loop {
+            let cap = app.fast_speed.cap().unwrap_or(u32::MAX);
+            for _ in 0..cap {
                 let now = Instant::now();
                 app.emulate_frame(now);
                 if now >= deadline {
