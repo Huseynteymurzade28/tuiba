@@ -49,7 +49,7 @@ plays through the default audio device (`M` mutes it).
 | Saves    | SRAM, 64/128 KiB flash and serial EEPROM, auto-detected from the ROM; `.sav` written as you play              |
 | BIOS     | Runs without a BIOS image: `IntrWait`, `Div`, `Sqrt`, `ArcTan2`, `CpuSet`, LZ77/RL/`BitUnPack`, affine helpers are emulated in software |
 | Input    | Keyboard with exact key releases on terminals that support the Kitty keyboard protocol; gamepads, hot-pluggable; bindings in a config file |
-| Frontend | Library with folders, filter, sort and last-played memory; pixels over the Kitty, Sixel or iTerm2 protocol, or half-blocks; pause, frame step and fast-forward; headless debug mode |
+| Frontend | IPS/UPS/BPS patches applied on load; library with folders, filter, sort and last-played memory; pixels over the Kitty, Sixel or iTerm2 protocol, or half-blocks; pause, frame step and fast-forward; headless debug mode |
 
 Not there yet: serial link, real-time clock, cycle-exact PPU/DMA
 interleaving. Accurate enough for the homebrew below; not a reference
@@ -161,6 +161,14 @@ States are written to `~/.local/state/tuiba/states/` (or
 `$XDG_STATE_HOME`, or `%LOCALAPPDATA%\tuiba\states` on Windows) under
 the cartridge's fingerprint, so they survive closing tuiba and can only
 ever be loaded back into the game they came from.
+
+To play a translation or a ROM hack, put its patch next to the ROM
+with the same name — `game.gba` and `game.bps` — and tuiba applies it
+in memory when the game starts; the ROM file itself is never changed.
+BPS, UPS and IPS patches work. BPS and UPS carry checksums, so a patch
+made for another revision of the game is refused with a message instead
+of starting a broken game. Save states follow the patched ROM, so they
+never mix with the unpatched game's.
 
 Saves live next to the ROM as `<name>.sav`. The file is written within a
 second of the game saving and again when you leave, so a crash or a closed
