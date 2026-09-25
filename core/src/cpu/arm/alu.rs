@@ -120,6 +120,17 @@ impl Cpu {
             return cycles;
         }
 
+        if rd == PC && set_flags {
+            // `TEQP pc, …` and friends, left over from ARMv2's mode
+            // changes: a test with Rd = r15 writes no flags of its own
+            // but still copies SPSR into CPSR, as `MOVS pc` does. Code
+            // uses it to leave a privileged mode without branching.
+            if let Some(spsr) = self.regs.spsr() {
+                self.regs.set_cpsr(spsr);
+            }
+            return cycles;
+        }
+
         if set_flags {
             self.regs.cpsr.set_nz(result);
             match arith {
@@ -368,6 +379,19 @@ mod tests {
         assert_eq!(cpu.regs.mode(), Mode::User);
         assert!(cpu.regs.cpsr.c());
         assert_eq!(cpu.next_pc(), 0x300);
+    }
+
+    #[test]
+    fn a_test_into_pc_restores_spsr() {
+        let mut mem = Ram::new();
+        mem.load_arm(0x100, &[0xE15F_F000]); // cmp pc, r0 with Rd = pc
+        let mut cpu = arm_at(&mut mem, 0x100);
+        cpu.regs.switch_mode(Mode::Fiq);
+        cpu.regs.set_spsr(Cpsr(0x4000_001F)); // Z set, System mode
+        cpu.step(&mut mem);
+        assert_eq!(cpu.regs.mode(), Mode::System);
+        assert!(cpu.regs.cpsr.z());
+        assert_eq!(cpu.next_pc(), 0x104, "no branch");
     }
 
     #[test]
