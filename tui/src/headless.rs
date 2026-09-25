@@ -11,7 +11,7 @@ use tuiba_core::memory::io::{KEYINPUT_ALL_RELEASED, reg};
 use tuiba_core::{Gba, SCREEN_HEIGHT, SCREEN_WIDTH};
 
 use crate::cli::{Headless, KeyHold};
-use crate::png;
+use crate::{png, screenshot};
 
 /// Runs `gba` as configured and prints a one-line summary to stdout.
 pub fn run(gba: &mut Gba, config: &Headless) -> io::Result<()> {
@@ -33,12 +33,7 @@ pub fn run(gba: &mut Gba, config: &Headless) -> io::Result<()> {
     }
 
     if let Some(path) = &config.screenshot {
-        let fb = gba.framebuffer();
-        let rgb: Vec<u8> = fb
-            .pixels()
-            .iter()
-            .flat_map(|&p| [(p >> 24) as u8, (p >> 16) as u8, (p >> 8) as u8])
-            .collect();
+        let rgb = screenshot::rgb(gba.framebuffer());
         let file = BufWriter::new(File::create(path)?);
         png::write_rgb(file, SCREEN_WIDTH as u32, SCREEN_HEIGHT as u32, &rgb)?;
     }

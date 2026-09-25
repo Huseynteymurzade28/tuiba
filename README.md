@@ -167,6 +167,10 @@ second of the game saving and again when you leave, so a crash or a closed
 terminal costs at most a moment of progress. The save type (SRAM, flash,
 EEPROM) is detected from the ROM.
 
+`F12` saves the frame on screen as a 240×160 PNG in `tuiba` inside your
+pictures folder (`XDG_PICTURES_DIR`, else `~/Pictures`), numbered after
+the ROM: `anguna-001.png`, `anguna-002.png`, …
+
 If tuiba ever crashes, the message and a backtrace are appended to
 `crash.log` in the same state directory; please attach that to a bug
 report.
@@ -184,6 +188,7 @@ report.
 | `r` — rescan folders             | `M` — mute                                   |
 |                                  | `F5` — save state, `F8` — load it back       |
 |                                  | `F2` — the four save-state slots             |
+|                                  | `F12` — screenshot                           |
 |                                  | `?` — show the active bindings               |
 | `q` — quit (asks first)          | `Esc` twice — back to the library            |
 |                                  | `Ctrl+Q` — quit                              |
@@ -223,7 +228,7 @@ Windows), one action per line:
 ```ini
 # button = key [key ...]      actions: up down left right a b l r
 a      = j                    #          start select pause step fast
-b      = k pad:west           #          mute save load states leave help
+b      = k pad:west           #          mute save load states screenshot leave help
 select = space                # unlisted actions keep their defaults
 fast   = f9 tab               # an empty right-hand side unbinds
 ```

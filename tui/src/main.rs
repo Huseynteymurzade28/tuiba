@@ -13,6 +13,7 @@ mod picker;
 mod png;
 mod savestate;
 mod screen;
+mod screenshot;
 mod states;
 mod theme;
 mod wordmark;
@@ -322,6 +323,7 @@ impl App {
             Action::SaveState => self.save_state(now),
             Action::LoadState => self.load_state(now),
             Action::States => self.open_panel(now),
+            Action::Screenshot => self.screenshot(now),
             Action::Help => self.toggle_help(now),
             Action::Leave => {
                 if self
@@ -343,6 +345,21 @@ impl App {
         self.pad_style
             .zip(self.bindings.pad_for(action))
             .map_or(key, |(style, button)| style.label(button))
+    }
+
+    /// Saves the frame on screen and says where it went.
+    fn screenshot(&mut self, now: Instant) {
+        let saved = screenshot::dir()
+            .ok_or_else(|| "no pictures directory".to_string())
+            .and_then(|dir| {
+                screenshot::save(&dir, &self.rom, self.gba.framebuffer())
+                    .map_err(|err| err.to_string())
+            });
+        let notice = match saved {
+            Ok(path) => format!("saved {}", library::compact_home(&path)),
+            Err(err) => format!("screenshot failed: {err}"),
+        };
+        self.state_notice = Some((notice, now));
     }
 
     /// Toggles pause. The rate counter restarts so it does not show a
