@@ -39,21 +39,22 @@ pub use wait::WaitStates;
 
 /// Byte-addressable memory as seen by the CPU and DMA.
 ///
-/// Halfword and word accessors receive addresses already aligned to their
-/// width; the ARM7TDMI applies its own alignment/rotation rules before the
-/// access reaches the bus.
+/// Halfword and word accessors may receive unaligned addresses and ignore
+/// the low bits, as the 16- and 32-bit buses do — except where the bus is
+/// 8 bits wide (SRAM), which sees the exact address. The ARM7TDMI applies
+/// its own rotation rules to what a load returns.
 pub trait Memory {
     /// Reads a byte.
     fn read8(&self, address: u32) -> u8;
-    /// Reads a halfword from an even address.
+    /// Reads a halfword from the halfword containing `address`.
     fn read16(&self, address: u32) -> u16;
-    /// Reads a word from a word-aligned address.
+    /// Reads a word from the word containing `address`.
     fn read32(&self, address: u32) -> u32;
     /// Writes a byte.
     fn write8(&mut self, address: u32, value: u8);
-    /// Writes a halfword to an even address.
+    /// Writes a halfword to the halfword containing `address`.
     fn write16(&mut self, address: u32, value: u16);
-    /// Writes a word to a word-aligned address.
+    /// Writes a word to the word containing `address`.
     fn write32(&mut self, address: u32, value: u32);
 
     /// Returns the cycles spent on accesses since the previous call and

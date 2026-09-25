@@ -371,10 +371,12 @@ pub(crate) mod test_util {
             self.byte(a)
         }
         fn read16(&self, a: u32) -> u16 {
+            let a = a & !1;
             self.accesses.set(self.accesses.get() + 1);
             u16::from_le_bytes([self.byte(a), self.byte(a + 1)])
         }
         fn read32(&self, a: u32) -> u32 {
+            let a = a & !3;
             self.accesses.set(self.accesses.get() + 1);
             u32::from_le_bytes([
                 self.byte(a),
@@ -388,12 +390,14 @@ pub(crate) mod test_util {
             self.set_byte(a, v);
         }
         fn write16(&mut self, a: u32, v: u16) {
+            let a = a & !1;
             self.accesses.set(self.accesses.get() + 1);
             for (i, b) in v.to_le_bytes().into_iter().enumerate() {
                 self.set_byte(a + i as u32, b);
             }
         }
         fn write32(&mut self, a: u32, v: u32) {
+            let a = a & !3;
             self.accesses.set(self.accesses.get() + 1);
             for (i, b) in v.to_le_bytes().into_iter().enumerate() {
                 self.set_byte(a + i as u32, b);

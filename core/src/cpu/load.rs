@@ -11,13 +11,13 @@ use crate::memory::Memory;
 /// `LDR`: word load with rotation for misaligned addresses.
 #[inline]
 pub fn word(mem: &impl Memory, address: u32) -> u32 {
-    mem.read32(address & !3).rotate_right((address & 3) * 8)
+    mem.read32(address).rotate_right((address & 3) * 8)
 }
 
 /// `LDRH`: halfword load, zero-extended, rotated when misaligned.
 #[inline]
 pub fn halfword(mem: &impl Memory, address: u32) -> u32 {
-    u32::from(mem.read16(address & !1)).rotate_right((address & 1) * 8)
+    u32::from(mem.read16(address)).rotate_right((address & 1) * 8)
 }
 
 /// `LDRSH`: sign-extended halfword; misaligned addresses load a signed byte.
