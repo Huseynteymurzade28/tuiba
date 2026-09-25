@@ -24,6 +24,8 @@ use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{FromSample, SizedSample};
 use tuiba_core::apu::SAMPLE_RATE;
 
+use crate::stats::AudioStats;
+
 /// A left/right pair at the emulator's rate.
 type Frame = [i16; 2];
 
@@ -54,6 +56,8 @@ struct Shared {
     queue: VecDeque<Frame>,
     /// The queue ran dry and has not been refilled to [`PRIME`] since.
     starved: bool,
+    /// Times the queue has run dry, for `--stats`.
+    dry_spells: u32,
 }
 
 impl Shared {
@@ -61,6 +65,7 @@ impl Shared {
         Self {
             queue: VecDeque::from(vec![[0, 0]; PRIME]),
             starved: false,
+            dry_spells: 0,
         }
     }
 
@@ -79,6 +84,9 @@ impl Shared {
             } else {
                 resampler.next(&mut self.queue)
             };
+            if frame.is_none() && !self.starved {
+                self.dry_spells += 1;
+            }
             self.starved = frame.is_none();
             emit(frame.unwrap_or([0, 0]));
         }
@@ -164,7 +172,21 @@ impl AudioOutput {
     /// silence is what [`AudioOutput::open`] starts with: without it the
     /// device would run dry before the first frame after the jump.
     pub fn flush(&self) {
-        *self.shared.lock().unwrap_or_else(PoisonError::into_inner) = Shared::primed();
+        let mut shared = self.shared.lock().unwrap_or_else(PoisonError::into_inner);
+        *shared = Shared {
+            dry_spells: shared.dry_spells,
+            ..Shared::primed()
+        };
+    }
+
+    /// How much sound is queued and how often the queue ran dry.
+    pub fn stats(&self) -> AudioStats {
+        let shared = self.shared.lock().unwrap_or_else(PoisonError::into_inner);
+        let frames = u32::try_from(shared.queue.len()).unwrap_or(u32::MAX);
+        AudioStats {
+            queued_ms: frames.saturating_mul(1000) / SAMPLE_RATE,
+            dry_spells: shared.dry_spells,
+        }
     }
 }
 

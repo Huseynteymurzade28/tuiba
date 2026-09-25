@@ -17,6 +17,7 @@ mod savestate;
 mod screen;
 mod screenshot;
 mod states;
+mod stats;
 mod theme;
 mod wordmark;
 
@@ -54,6 +55,7 @@ use crate::picker::{Outcome, Picker};
 use crate::rewind::Rewind;
 use crate::screen::GbaScreen;
 use crate::states::StatesPanel;
+use crate::stats::Stats;
 
 /// Errors specific to the terminal frontend.
 #[derive(Debug, thiserror::Error)]
@@ -206,6 +208,8 @@ struct App {
     muted: bool,
     /// Sound volume in percent; carried from game to game by the session.
     volume: u8,
+    /// Performance figures, while they are shown in the status bar.
+    stats: Option<Stats>,
     /// The cartridge being played, for naming its state files.
     rom: PathBuf,
     /// Which slot `F5` and `F8` act on, counting from zero. The panel
@@ -384,6 +388,12 @@ impl App {
             Action::LoadState => self.load_state(now),
             Action::States => self.open_panel(now),
             Action::Screenshot => self.screenshot(now),
+            Action::Stats => {
+                self.stats = match self.stats {
+                    Some(_) => None,
+                    None => Some(Stats::new(now)),
+                };
+            }
             Action::Help => self.toggle_help(now),
             Action::Leave => {
                 if self
@@ -674,7 +684,7 @@ impl App {
         } else {
             String::new()
         };
-        Line::from(vec![
+        let mut spans = vec![
             Span::styled(
                 format!(" {}  ", self.title),
                 theme::text().bg(theme::SURFACE),
@@ -687,6 +697,15 @@ impl App {
                 Style::default().fg(theme::DIM).bg(theme::SURFACE),
             ),
             Span::raw("  "),
+        ];
+        // The figures take the place of the key hints: they are for a
+        // player who already knows the keys and is chasing a problem.
+        if let Some(stats) = &self.stats {
+            let audio = self.audio.as_ref().ok().map(AudioOutput::stats);
+            spans.push(Span::styled(stats.line(self.fps, audio), theme::text()));
+            return Line::from(spans);
+        }
+        spans.extend([
             Span::styled(
                 format!(" {} ", self.hint_for(Action::Help, "?")),
                 theme::key(),
@@ -704,7 +723,8 @@ impl App {
             Span::styled("library  ", theme::hint()),
             Span::styled(" ctrl+q ", theme::key()),
             Span::styled("quit", theme::hint()),
-        ])
+        ]);
+        Line::from(spans)
     }
 
     fn draw(&mut self, frame: &mut Frame) {
@@ -884,6 +904,7 @@ fn run() -> Result<(), AppError> {
         renderer: args.renderer,
         sound: !args.mute,
         volume: Cell::new(args.volume),
+        stats: Cell::new(args.stats),
         bindings,
     };
     if let Some(rom) = direct_rom {
@@ -906,6 +927,8 @@ struct Session {
     sound: bool,
     /// Sound volume in percent, as last set in a game.
     volume: Cell<u8>,
+    /// Performance figures shown, as last set in a game.
+    stats: Cell<bool>,
     bindings: Bindings,
 }
 
@@ -1117,6 +1140,7 @@ fn play(
         audio: AudioOutput::open().map_err(|e| e.to_string()),
         muted: !session.sound,
         volume: session.volume.get(),
+        stats: session.stats.get().then(|| Stats::new(Instant::now())),
         rom: rom.to_path_buf(),
         slot: 0,
         held_state: None,
@@ -1138,6 +1162,7 @@ fn play(
     // Persist the save however the loop ended.
     app.flush_save();
     session.volume.set(app.volume);
+    session.stats.set(app.stats.is_some());
     if let Some(err) = &app.save_error {
         crashlog::record(
             "save",
@@ -1308,6 +1333,7 @@ fn event_loop(
             next_autosave = now + AUTOSAVE_INTERVAL;
         }
         let overlay = app.help || app.panel.is_some();
+        let draw_start = Instant::now();
         if overlay && let Some(graphics) = &mut app.graphics {
             // The image would sit on top of the overlay (or, painted into
             // the cells, stay around it). Before the draw, so the overlay
@@ -1317,6 +1343,10 @@ fn event_loop(
         terminal.draw(|frame| app.draw(frame))?;
         if !overlay && let Some(graphics) = &mut app.graphics {
             graphics.present(app.gba.framebuffer(), app.screen_area)?;
+        }
+        if let Some(stats) = &mut app.stats {
+            let now = Instant::now();
+            stats.draw(now - draw_start, now);
         }
 
         while event::poll(Duration::ZERO)? {

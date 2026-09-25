@@ -57,6 +57,8 @@ pub enum Action {
     States,
     /// Save the frame on screen as a PNG.
     Screenshot,
+    /// Show performance figures in the status bar.
+    Stats,
     /// Back to the library, pressed twice like `Esc`.
     Leave,
     /// Show the bindings, like `?`.
@@ -65,7 +67,7 @@ pub enum Action {
 
 impl Action {
     /// Every action, in the order the help overlay and the file use.
-    pub const ALL: [Self; 23] = [
+    pub const ALL: [Self; 24] = [
         Self::Button(GbaKey::Up),
         Self::Button(GbaKey::Down),
         Self::Button(GbaKey::Left),
@@ -87,6 +89,7 @@ impl Action {
         Self::LoadState,
         Self::States,
         Self::Screenshot,
+        Self::Stats,
         Self::Leave,
         Self::Help,
     ];
@@ -116,6 +119,7 @@ impl Action {
             Self::LoadState => "load",
             Self::States => "states",
             Self::Screenshot => "screenshot",
+            Self::Stats => "stats",
             Self::Leave => "leave",
             Self::Help => "help",
         }
@@ -146,6 +150,7 @@ impl Action {
             Self::LoadState => "load state",
             Self::States => "save-state panel",
             Self::Screenshot => "screenshot",
+            Self::Stats => "performance figures",
             Self::Leave => "library (twice)",
             Self::Help => "this list",
         }
@@ -203,7 +208,8 @@ impl Bindings {
     /// The built-in bindings: buttons on the keys of the same name,
     /// arrows for the D-pad, `Enter` = Start, `Space` / `Backspace` /
     /// right Shift = Select, `Z`/`X` doubling as A/B, `P` pause, `.` step,
-    /// `Tab` / `F` fast-forward, `W` rewind, `M` mute, `-` / `=` / `+` volume and `F12` screenshot. On a pad, the buttons sit
+    /// `Tab` / `F` fast-forward, `W` rewind, `M` mute, `-` / `=` / `+` volume, `F3` performance figures and `F12`
+    /// screenshot. On a pad, the buttons sit
     /// where a GBA has them — A east, B south, the shoulders on L1/R1 —
     /// R2 fast-forwards, L2 opens the save-state panel, north pauses,
     /// the guide button (twice) leaves and the right stick shows the
@@ -247,6 +253,7 @@ impl Bindings {
         bind(&mut b, Action::LoadState, &[KeyCode::F(8)]);
         bind(&mut b, Action::States, &[KeyCode::F(2)]);
         bind(&mut b, Action::Screenshot, &[KeyCode::F(12)]);
+        bind(&mut b, Action::Stats, &[KeyCode::F(3)]);
         for (action, button) in [
             (Action::Button(GbaKey::Up), PadButton::Up),
             (Action::Button(GbaKey::Down), PadButton::Down),
