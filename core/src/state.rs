@@ -28,6 +28,12 @@ const MAGIC: [u8; 8] = *b"TUIBAST\0";
 const FORMAT_VERSION: u16 = 1;
 
 /// Magic, version and cartridge fingerprint, ahead of the payload.
+///
+/// The payload is the machine, then trailing sections for state added
+/// since version 1 — so far only the GPIO port. A version-1 file simply
+/// ends before them and reads back with those parts as they power up;
+/// a machine gaining a section does not strand every state already on
+/// disk the way a new field in the machine itself would.
 const HEADER_LEN: usize = MAGIC.len() + 2 + 8;
 
 /// A frozen machine, taken by [`Gba::snapshot`].
@@ -70,7 +76,8 @@ impl Snapshot {
         bytes.extend_from_slice(&MAGIC);
         bytes.extend_from_slice(&FORMAT_VERSION.to_le_bytes());
         bytes.extend_from_slice(&self.gba.bus.cartridge.fingerprint().to_le_bytes());
-        postcard::to_extend(&self.gba, bytes).expect("a machine is always encodable")
+        let bytes = postcard::to_extend(&self.gba, bytes).expect("a machine is always encodable");
+        postcard::to_extend(&self.gba.bus.gpio, bytes).expect("a GPIO port is always encodable")
     }
 
     /// Reads back what [`Snapshot::to_bytes`] wrote, putting `cartridge`'s
@@ -102,8 +109,12 @@ impl Snapshot {
         if fingerprint != cartridge.fingerprint() {
             return Err(GbaError::StateCartridge);
         }
-        let mut gba: Gba = postcard::from_bytes(&bytes[HEADER_LEN..])
-            .map_err(|err| GbaError::StateCorrupt(err.to_string()))?;
+        let corrupt = |err: postcard::Error| GbaError::StateCorrupt(err.to_string());
+        let (mut gba, rest): (Gba, _) =
+            postcard::take_from_bytes(&bytes[HEADER_LEN..]).map_err(corrupt)?;
+        if !rest.is_empty() {
+            gba.bus.gpio = postcard::from_bytes(rest).map_err(corrupt)?;
+        }
         gba.bus.cartridge.attach_rom(cartridge.shared_rom());
         Ok(Self { gba })
     }
@@ -142,6 +153,8 @@ mod tests {
     use crate::cpu::registers::PC;
     use crate::memory::cartridge::HEADER_END;
     use crate::memory::io::reg;
+
+    use super::HEADER_LEN;
 
     /// The smallest cartridge the loader accepts: an entry branch into an
     /// infinite loop and a title. Enough to step a machine that has state
@@ -299,6 +312,27 @@ mod tests {
             "a state should be RAM-sized, got {} bytes",
             bytes.len()
         );
+    }
+
+    /// The GPIO port travels in a trailing section, and a file written
+    /// before that section existed still loads.
+    #[test]
+    fn the_gpio_port_survives_and_older_files_still_load() {
+        use crate::memory::gpio::{CONTROL, DIRECTION};
+        let cartridge = Cartridge::from_bytes(minimal_rom()).unwrap();
+        let mut gba = Gba::new(cartridge.clone());
+        gba.bus.write16(0x0800_0000 + CONTROL, 1);
+        gba.bus.write16(0x0800_0000 + DIRECTION, 0b0111);
+        let snapshot = gba.snapshot();
+        let bytes = snapshot.to_bytes();
+        let back = Snapshot::from_bytes(&bytes, &cartridge).unwrap();
+        assert_eq!(back.gba.bus.gpio, gba.bus.gpio);
+
+        let mut version_1 = bytes[..HEADER_LEN].to_vec();
+        version_1 = postcard::to_extend(&snapshot.gba, version_1).unwrap();
+        let old = Snapshot::from_bytes(&version_1, &cartridge).unwrap();
+        assert_eq!(old.gba.bus.gpio, crate::memory::Gpio::default());
+        assert_eq!(old.gba.cpu.next_pc(), gba.cpu.next_pc());
     }
 
     #[test]

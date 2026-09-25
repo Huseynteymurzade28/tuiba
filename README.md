@@ -47,11 +47,12 @@ plays through the default audio device (`M` mutes it).
 | Video    | Modes 0–5, text and affine backgrounds, sprites (affine, double-size), windows, alpha blending, mosaic        |
 | Sound    | All four PSG channels and both direct-sound FIFOs, mixed at 32 kHz and played through the default audio device |
 | Saves    | SRAM, 64/128 KiB flash and serial EEPROM, auto-detected from the ROM; `.sav` written as you play              |
+| Clock    | The cartridge real-time clock (S-3511 over GPIO) some games use for day and night, reading your local time     |
 | BIOS     | Runs without a BIOS image: `IntrWait`, `Div`, `Sqrt`, `ArcTan2`, `CpuSet`, LZ77/RL/`BitUnPack`, affine helpers are emulated in software |
 | Input    | Keyboard with exact key releases on terminals that support the Kitty keyboard protocol; gamepads, hot-pluggable; bindings in a config file |
 | Frontend | IPS/UPS/BPS patches applied on load; library with folders, filter, sort and last-played memory; pixels over the Kitty, Sixel or iTerm2 protocol, or half-blocks; pause, frame step, fast-forward, rewind and screenshots; headless debug mode |
 
-Not there yet: serial link, real-time clock, cycle-exact PPU/DMA
+Not there yet: serial link, cycle-exact PPU/DMA
 interleaving. Accurate enough for the homebrew below; not a reference
 implementation.
 
@@ -269,9 +270,11 @@ that needs no terminal:
 tuiba rom.gba --frames 600 --key start@400-410 --screenshot out.png --wav out.wav
 ```
 
-It runs the given number of frames with scripted input, prints CPU state
-and throughput, and can dump the final frame as a PNG and the sound as a
-WAV file.
+It runs the given number of frames with scripted input, prints CPU state,
+throughput and a hash of the final frame, and can dump the final frame as
+a PNG and the sound as a WAV file. A cartridge clock starts at
+2000-01-01 00:00:00 (or `--clock 2026-09-25T21:00:00`) and advances with
+the emulated frames, so runs are reproducible.
 
 ## Building
 

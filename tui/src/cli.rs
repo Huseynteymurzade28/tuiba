@@ -6,6 +6,8 @@
 use std::fmt;
 use std::path::PathBuf;
 
+use chrono::NaiveDateTime;
+
 use crate::graphics::Renderer;
 use crate::input::GbaKey;
 
@@ -25,6 +27,9 @@ Debug options (headless, no terminal UI; need a ROM path):
   --key BUTTON@FROM-TO  hold BUTTON from frame FROM to frame TO (exclusive);
                         BUTTON is one of a b select start right left up down r l;
                         may be given several times
+  --clock DATETIME      what a cartridge's real-time clock reads on the first
+                        frame, as YYYY-MM-DDTHH:MM:SS (default 2000-01-01
+                        00:00:00); it advances with the emulated frames
 
 Display and sound options:
   --renderer NAME       how to draw the game screen: auto (default: an image
@@ -59,6 +64,11 @@ pub struct Headless {
     pub wav: Option<PathBuf>,
     /// Scripted key holds.
     pub keys: Vec<KeyHold>,
+    /// What the cartridge clock reads on the first frame; it then
+    /// advances with the emulated frames. `None` starts it at
+    /// [`headless::DEFAULT_CLOCK`](crate::headless::DEFAULT_CLOCK), so
+    /// runs are reproducible either way.
+    pub clock: Option<NaiveDateTime>,
 }
 
 /// A button held over a half-open range of frames.
@@ -119,6 +129,7 @@ impl Args {
         let mut screenshot = None;
         let mut wav = None;
         let mut keys = Vec::new();
+        let mut clock = None;
         let mut renderer = Renderer::Auto;
         let mut mute = false;
 
@@ -141,6 +152,10 @@ impl Args {
                     renderer = v.parse().map_err(|()| bad("--renderer", &v))?;
                 }
                 "--mute" => mute = true,
+                "--clock" => {
+                    let v = value("--clock")?;
+                    clock = Some(crate::clock::parse(&v).ok_or_else(|| bad("--clock", &v))?);
+                }
                 "--key" => {
                     let v = value("--key")?;
                     keys.push(parse_key_hold(&v).ok_or_else(|| bad("--key", &v))?);
@@ -153,7 +168,11 @@ impl Args {
             }
         }
 
-        let debug = frames.is_some() || screenshot.is_some() || wav.is_some() || !keys.is_empty();
+        let debug = frames.is_some()
+            || screenshot.is_some()
+            || wav.is_some()
+            || !keys.is_empty()
+            || clock.is_some();
         if debug && rom.is_none() {
             return Err(ArgError::MissingRom);
         }
@@ -163,6 +182,7 @@ impl Args {
             screenshot,
             wav,
             keys,
+            clock,
         });
         Ok(Self {
             rom,
