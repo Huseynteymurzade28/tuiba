@@ -49,7 +49,7 @@ plays through the default audio device (`M` mutes it).
 | Saves    | SRAM, 64/128 KiB flash and serial EEPROM, auto-detected from the ROM; `.sav` written as you play              |
 | BIOS     | Runs without a BIOS image: `IntrWait`, `Div`, `Sqrt`, `ArcTan2`, `CpuSet`, LZ77/RL/`BitUnPack`, affine helpers are emulated in software |
 | Input    | Keyboard with exact key releases on terminals that support the Kitty keyboard protocol; gamepads, hot-pluggable; bindings in a config file |
-| Frontend | IPS/UPS/BPS patches applied on load; library with folders, filter, sort and last-played memory; pixels over the Kitty, Sixel or iTerm2 protocol, or half-blocks; pause, frame step and fast-forward; headless debug mode |
+| Frontend | IPS/UPS/BPS patches applied on load; library with folders, filter, sort and last-played memory; pixels over the Kitty, Sixel or iTerm2 protocol, or half-blocks; pause, frame step, fast-forward, rewind and screenshots; headless debug mode |
 
 Not there yet: serial link, real-time clock, cycle-exact PPU/DMA
 interleaving. Accurate enough for the homebrew below; not a reference
@@ -175,6 +175,12 @@ second of the game saving and again when you leave, so a crash or a closed
 terminal costs at most a moment of progress. The save type (SRAM, flash,
 EEPROM) is detected from the ROM.
 
+Hold `W` to play the last minute or so backwards, at twice the speed
+it was played; let go and the game carries on from there. It works while
+paused too, which is the way to find the frame just before a mistake.
+The rewind buffer lives in memory (64 MiB at most) and is gone when you
+leave the game.
+
 `F12` saves the frame on screen as a 240×160 PNG in `tuiba` inside your
 pictures folder (`XDG_PICTURES_DIR`, else `~/Pictures`), numbered after
 the ROM: `anguna-001.png`, `anguna-002.png`, …
@@ -193,6 +199,7 @@ report.
 | `s` — sort: title, file, last played, size | `Space` or `Backspace` — Select    |
 | `a` — add a folder               | `P` — pause, `.` — advance one frame         |
 | `tab` — folder list, `x` removes | `Tab` or `F` (held) — fast-forward           |
+|                                  | `W` (held) — rewind                          |
 | `r` — rescan folders             | `M` — mute                                   |
 |                                  | `F5` — save state, `F8` — load it back       |
 |                                  | `F2` — the four save-state slots             |
@@ -235,7 +242,7 @@ Windows), one action per line:
 
 ```ini
 # button = key [key ...]      actions: up down left right a b l r
-a      = j                    #          start select pause step fast
+a      = j                    #          start select pause step fast rewind
 b      = k pad:west           #          mute save load states screenshot leave help
 select = space                # unlisted actions keep their defaults
 fast   = f9 tab               # an empty right-hand side unbinds
