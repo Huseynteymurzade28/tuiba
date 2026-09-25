@@ -66,7 +66,10 @@ Tested with freely distributed homebrew:
 | Heartwrench Advance          | Plays, SRAM saves                                                     |
 | Pliko                        | Plays                                                                 |
 
-No ROMs are needed to build or test the project.
+No ROMs are needed to build or test the project. CI additionally runs
+freely licensed test ROMs ([jsmolka/gba-tests](https://github.com/jsmolka/gba-tests):
+ARM, THUMB, memory, save chips and PPU demos), fetched at a pinned commit;
+see [`ci/test-roms`](ci/test-roms/README.md).
 
 ## Scope and legal
 

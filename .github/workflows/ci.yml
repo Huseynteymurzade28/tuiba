@@ -40,6 +40,20 @@ jobs:
           cargo run -p tuiba -- smoke.gba --frames 5 --screenshot smoke.png
           test -s smoke.png
 
+  test-roms:
+    name: test ROMs
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Install ALSA and udev headers (cpal, gilrs)
+        run: sudo apt-get update && sudo apt-get install -y libasound2-dev libudev-dev
+      - run: cargo build --release -p tuiba
+      # Freely licensed test ROMs, fetched at a pinned commit and checked
+      # against their sha256; see ci/test-roms/README.md.
+      - run: ci/test-roms/run.sh target/release/tuiba
+
   msrv:
     name: tests (MSRV)
     runs-on: ubuntu-latest

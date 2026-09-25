@@ -44,15 +44,28 @@ pub fn run(gba: &mut Gba, config: &Headless) -> io::Result<()> {
         .map(|n| format!(" unsupported_swi={n:#04x}"))
         .unwrap_or_default();
     println!(
-        "frames={} time={:.2}s ({fps:.0} fps) pc={:#010x} mode={:?}{} dispcnt={:#06x}{swi}",
+        "frames={} time={:.2}s ({fps:.0} fps) pc={:#010x} mode={:?}{} dispcnt={:#06x} frame={:016x}{swi}",
         config.frames,
         elapsed.as_secs_f64(),
         gba.cpu.next_pc(),
         gba.cpu.regs.mode(),
         if gba.cpu.halted { " halted" } else { "" },
         gba.bus.io.read16(reg::DISPCNT),
+        frame_hash(gba.framebuffer().pixels()),
     );
     Ok(())
+}
+
+/// FNV-1a over the final frame's pixels: a fingerprint of what is on
+/// screen, for comparing a run against a known-good one (the test-ROM
+/// job in CI does) without keeping reference images around.
+fn frame_hash(pixels: &[u32]) -> u64 {
+    pixels
+        .iter()
+        .flat_map(|p| p.to_le_bytes())
+        .fold(0xCBF2_9CE4_8422_2325, |h, b| {
+            (h ^ u64::from(b)).wrapping_mul(0x0000_0100_0000_01B3)
+        })
 }
 
 /// Writes interleaved stereo 16-bit samples as a canonical 44-byte-header
@@ -93,6 +106,13 @@ fn keyinput_at(holds: &[KeyHold], frame: u32) -> u16 {
 mod tests {
     use super::*;
     use crate::input::GbaKey;
+
+    #[test]
+    fn frame_hash_is_fnv1a() {
+        // FNV-1a of no bytes is the offset basis.
+        assert_eq!(frame_hash(&[]), 0xCBF2_9CE4_8422_2325);
+        assert_ne!(frame_hash(&[0x0000_00FF]), frame_hash(&[0x0000_01FF]));
+    }
 
     #[test]
     fn wav_header_describes_stereo_16_bit_pcm() {

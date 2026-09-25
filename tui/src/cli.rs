@@ -17,7 +17,8 @@ Run a Game Boy Advance ROM in the terminal. With no argument, or with a
 folder, open the library screen (the folder is added to the library).
 
 Debug options (headless, no terminal UI; need a ROM path):
-  --frames N            emulate N frames and exit
+  --frames N            emulate N frames and exit; the summary line ends
+                        with a hash of the final frame (frame=...)
   --screenshot FILE     write the final frame as a PNG (implies --frames)
   --wav FILE            write the sound produced during the run as a WAV
                         file (implies --frames)
