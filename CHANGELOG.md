@@ -4,6 +4,25 @@ All notable changes to tuiba. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow
 [Semantic Versioning](https://semver.org/).
 
+## [0.9.0] – 2026-09-25
+
+### Added
+- Windows builds. Each release now carries a zip with `tuiba.exe` for
+  64-bit Windows, with the C runtime built in, so nothing else needs
+  installing. Run it in Windows Terminal. (#47)
+- Performance figures. `--stats` or `F3` shows in the status bar the
+  emulated and the shown frame rate, how long drawing a frame takes
+  (average and worst over the last second), how much sound is queued
+  and how often it ran dry: what to include in a report when a game
+  stutters or crackles. (#47)
+- A speed limit for fast-forward. `--fast-speed 2` to `16`, or `max`
+  (the default), and `F4` in a game cycles ×2, ×4 and uncapped. (#44)
+
+### Changed
+- The README says what building on Windows really needs (the MSVC
+  toolchain and the Visual Studio Build Tools), and points to the
+  prebuilt binaries.
+
 ## [0.8.0] – 2026-09-25
 
 ### Added
@@ -178,6 +197,7 @@ First release: ARM7TDMI, memory map with DMA and timers, PPU modes 0–5
 with sprites, windows and blending, HLE BIOS, SRAM/flash/EEPROM saves,
 Kitty graphics and half-block renderers, library screen, headless mode.
 
+[0.9.0]: https://github.com/Huseynteymurzade28/tuiba/compare/v0.8.0...v0.9.0
 [0.8.0]: https://github.com/Huseynteymurzade28/tuiba/compare/v0.7.0...v0.8.0
 [0.7.0]: https://github.com/Huseynteymurzade28/tuiba/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/Huseynteymurzade28/tuiba/compare/v0.5.0...v0.6.0
