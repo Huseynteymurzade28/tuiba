@@ -97,14 +97,19 @@ or endorsed by Nintendo.
 | Method                        | Command                                                        |
 | ----------------------------- | -------------------------------------------------------------- |
 | Arch Linux (AUR)              | `yay -S tuiba`                                                 |
+| Prebuilt (Linux, macOS, Windows) | download from [Releases](https://github.com/Huseynteymurzade28/tuiba/releases/latest) |
 | Any platform with Rust        | `cargo install tuiba`                                          |
 | From source                   | `git clone https://github.com/Huseynteymurzade28/tuiba && cd tuiba && cargo install --path tui` |
 
 Stable Rust 1.88 or newer. On Linux, sound goes through ALSA and
 gamepads are found through udev, so building needs their headers
 (`alsa-lib` and `systemd-libs` on Arch, `libasound2-dev libudev-dev` on
-Debian/Ubuntu, `alsa-lib-devel systemd-devel` on Fedora); macOS and
-Windows need nothing extra. A keyboard-only build skips udev:
+Debian/Ubuntu, `alsa-lib-devel systemd-devel` on Fedora). macOS needs
+nothing extra. On Windows use Rust's default MSVC toolchain, which needs
+the Visual Studio Build Tools (rustup offers to install them); the
+`windows-gnu` toolchain needs a full MinGW-w64 install to link. The
+Windows build in Releases needs none of this: unzip it and run
+`tuiba.exe` in Windows Terminal. A keyboard-only build skips udev:
 `cargo install tuiba --no-default-features`. Any
 terminal with 24-bit colour and a font that has the block characters
 (`▀ ▄ █`) works. For the pixel renderer use Kitty, Ghostty, WezTerm,
