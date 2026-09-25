@@ -38,6 +38,7 @@ use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Borders, Clear, Padding, Paragraph};
 use ratatui::{Frame, Terminal};
+use tuiba_core::patch::Format;
 use tuiba_core::{Cartridge, Gba, Snapshot};
 
 use crate::audio::AudioOutput;
@@ -64,6 +65,15 @@ enum AppError {
     /// Terminal I/O failed.
     #[error("terminal error: {0}")]
     Io(#[from] std::io::Error),
+
+    /// The patch next to the ROM could not be applied.
+    #[error("{name}: {err}")]
+    Patch {
+        /// The patch's file name.
+        name: String,
+        /// Why it failed.
+        err: tuiba_core::GbaError,
+    },
 
     /// The game loop panicked; the message is what the panic said.
     #[error("crashed: {0}")]
@@ -776,7 +786,7 @@ fn run() -> Result<(), AppError> {
             .rom
             .as_deref()
             .expect("parser requires a ROM for headless flags");
-        let mut gba = load_gba(rom)?;
+        let (mut gba, _) = load_gba(rom)?;
         return Ok(headless::run(&mut gba, config)?);
     }
 
@@ -906,7 +916,9 @@ fn library_loop(
                     Ok(GameExit::Quit) => return Ok(()),
                     // A broken ROM, or a bug it trips over, should not
                     // take the library down with it.
-                    Err(AppError::Core(err)) => picker.notify_error(err.to_string()),
+                    Err(err @ (AppError::Core(_) | AppError::Patch { .. })) => {
+                        picker.notify_error(err.to_string());
+                    }
                     Err(err @ AppError::Crash(_)) => {
                         picker.notify_error(format!("{err} (see {})", crash_log_hint()));
                     }
@@ -952,14 +964,36 @@ fn crash_log_hint() -> String {
     )
 }
 
-/// Loads a cartridge and its save file.
-fn load_gba(rom: &Path) -> Result<Gba, AppError> {
-    let cartridge = Cartridge::load(rom)?;
-    let mut gba = Gba::new(cartridge);
+/// Loads a cartridge and its save file, applying the patch next to it
+/// if there is one. Returns the patch's path along with the machine.
+fn load_gba(rom: &Path) -> Result<(Gba, Option<PathBuf>), AppError> {
+    let mut image = std::fs::read(rom).map_err(tuiba_core::GbaError::RomIo)?;
+    let patch = find_patch(rom);
+    if let Some(path) = &patch {
+        let failed = |err: tuiba_core::GbaError| AppError::Patch {
+            name: path
+                .file_name()
+                .map_or_else(String::new, |n| n.to_string_lossy().into_owned()),
+            err,
+        };
+        let bytes = std::fs::read(path).map_err(|e| failed(tuiba_core::GbaError::RomIo(e)))?;
+        image = tuiba_core::patch::apply(&image, &bytes).map_err(failed)?;
+    }
+    let mut gba = Gba::new(Cartridge::from_bytes(image)?);
     if let Ok(data) = std::fs::read(rom.with_extension("sav")) {
         gba.load_save_data(&data);
     }
-    Ok(gba)
+    Ok((gba, patch))
+}
+
+/// The patch that goes with `rom`: a file of the same name with a
+/// `.bps`, `.ups` or `.ips` extension, tried in that order (the formats
+/// with checksums first, should a folder somehow hold more than one).
+fn find_patch(rom: &Path) -> Option<PathBuf> {
+    [Format::Bps, Format::Ups, Format::Ips]
+        .into_iter()
+        .map(|format| rom.with_extension(format.extension()))
+        .find(|path| path.is_file())
 }
 
 /// Runs one cartridge until the user leaves it, then writes its save.
@@ -973,7 +1007,7 @@ fn play(
     session: &Session,
     gamepads: &mut Gamepads,
 ) -> Result<GameExit, AppError> {
-    let gba = load_gba(rom)?;
+    let (gba, patch) = load_gba(rom)?;
     let header_title = gba.bus.cartridge.header().title.trim().to_string();
     let title = if library::is_placeholder_title(&header_title) {
         // Untitled homebrew: fall back to the file name, as the library
@@ -1021,7 +1055,10 @@ fn play(
         slot: 0,
         held_state: None,
         panel: None,
-        state_notice: None,
+        state_notice: patch.map(|p| {
+            let name = p.file_name().unwrap_or_default().to_string_lossy();
+            (format!("patched with {name}"), Instant::now())
+        }),
     };
     let result = std::panic::catch_unwind(AssertUnwindSafe(|| {
         // Whatever the pads did in the library is old news, and a button

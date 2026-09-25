@@ -14,6 +14,7 @@
 //! - [`bios`]   – software emulation of BIOS system calls.
 //! - [`gba`]    – the assembled system and its run loop.
 //! - [`state`]  – save states: the whole machine, frozen and thawed.
+//! - [`patch`]  – IPS, UPS and BPS ROM patches.
 
 pub mod apu;
 pub mod bios;
@@ -21,6 +22,7 @@ pub mod cpu;
 pub mod error;
 pub mod gba;
 pub mod memory;
+pub mod patch;
 pub mod ppu;
 pub mod state;
 

@@ -64,6 +64,10 @@ pub enum GbaError {
     #[error("save state is corrupt: {0}")]
     StateCorrupt(String),
 
+    /// A ROM patch could not be applied.
+    #[error("{0}")]
+    Patch(crate::patch::PatchError),
+
     /// A memory access hit an address with no mapped device.
     #[error("unmapped memory access at {address:#010x}")]
     UnmappedAddress {
