@@ -4,6 +4,21 @@ All notable changes to tuiba. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow
 [Semantic Versioning](https://semver.org/).
 
+## [0.7.0] – 2026-09-25
+
+### Added
+- Rewind. Hold `W` to play the last minute or so backwards, at twice the
+  speed it was played, and let go to carry on from there. It works while
+  paused too. States are kept as small deltas against the newest one, in
+  64 MiB at most, and are dropped when you leave the game. (#38)
+- ROM patches. A `.bps`, `.ups` or `.ips` file next to the ROM with the
+  same name is applied in memory when the game starts; the ROM file is
+  never changed. BPS and UPS checksums are verified, so a patch for a
+  different revision of the game is refused with a message. Save states
+  follow the patched ROM and never mix with the original's. (#38)
+- Screenshots. `F12` saves the frame on screen as a 240×160 PNG in
+  `tuiba` under your pictures folder, numbered after the ROM. (#38)
+
 ## [0.6.0] – 2026-09-25
 
 ### Added
@@ -135,6 +150,7 @@ First release: ARM7TDMI, memory map with DMA and timers, PPU modes 0–5
 with sprites, windows and blending, HLE BIOS, SRAM/flash/EEPROM saves,
 Kitty graphics and half-block renderers, library screen, headless mode.
 
+[0.7.0]: https://github.com/Huseynteymurzade28/tuiba/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/Huseynteymurzade28/tuiba/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/Huseynteymurzade28/tuiba/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/Huseynteymurzade28/tuiba/compare/v0.3.0...v0.4.0

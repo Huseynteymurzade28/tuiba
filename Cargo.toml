@@ -3,7 +3,7 @@ resolver = "3"
 members = ["core", "tui"]
 
 [workspace.package]
-version = "0.6.0"
+version = "0.7.0"
 edition = "2024"
 rust-version = "1.88"
 license = "MIT"
@@ -16,7 +16,7 @@ categories = ["emulators", "command-line-utilities", "games"]
 
 [workspace.dependencies]
 # Internal crates
-tuiba-core = { path = "core", version = "0.6.0" }
+tuiba-core = { path = "core", version = "0.7.0" }
 
 # Error handling
 thiserror = "2.0"
