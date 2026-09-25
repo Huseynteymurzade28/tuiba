@@ -22,7 +22,8 @@ Terminal, mintty, mlterm) or iTerm2's inline images. Everywhere else it is drawn
 Unicode half-block characters and 24-bit colour, so a 240×80-cell terminal
 shows the full screen at 1:1. Smaller terminals get a downscaled picture;
 the status bar shows the current scale and the size needed for 1:1. Sound
-plays through the default audio device (`M` mutes it).
+plays through the default audio device (`M` mutes it, `-` and `+` set the
+volume).
 
 <p align="center">
   <img src="https://raw.githubusercontent.com/Huseynteymurzade28/tuiba/master/docs/demo.gif" alt="Filtering the library, playing two homebrew games, fast-forward, save states and the key list" width="800">
@@ -140,6 +141,7 @@ tuiba path/to/rom.gba  # play a cartridge directly, skipping the library
 tuiba --renderer sixel # pick the image protocol yourself
 tuiba --no-graphics    # force the half-block renderer
 tuiba --mute           # start silent; M toggles sound in a game
+tuiba --volume 50      # start at half volume; - and + change it in a game
 ```
 
 `F5` freezes the machine into the current slot and `F8` puts it back —
@@ -204,7 +206,7 @@ report.
 | `a` — add a folder               | `P` — pause, `.` — advance one frame         |
 | `tab` — folder list, `x` removes | `Tab` or `F` (held) — fast-forward           |
 |                                  | `W` (held) — rewind                          |
-| `r` — rescan folders             | `M` — mute                                   |
+| `r` — rescan folders             | `M` — mute, `-` / `+` — volume               |
 |                                  | `F5` — save state, `F8` — load it back       |
 |                                  | `F2` — the four save-state slots             |
 |                                  | `F12` — screenshot                           |
@@ -247,8 +249,9 @@ Windows), one action per line:
 ```ini
 # button = key [key ...]      actions: up down left right a b l r
 a      = j                    #          start select pause step fast rewind
-b      = k pad:west           #          mute save load states screenshot leave help
-select = space                # unlisted actions keep their defaults
+b      = k pad:west           #          mute quieter louder save load states
+select = space                #          screenshot leave help
+start  = enter                # unlisted actions keep their defaults
 fast   = f9 tab               # an empty right-hand side unbinds
 ```
 

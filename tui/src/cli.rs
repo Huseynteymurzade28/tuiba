@@ -37,6 +37,8 @@ Display and sound options:
                         sixel, iterm2, or blocks (half-block characters)
   --no-graphics         same as --renderer blocks
   --mute                start with sound off (M toggles it in a game)
+  --volume PERCENT      sound volume, 0 to 100 (default 100; - and + change
+                        it in a game)
   -h, --help            show this help";
 
 /// What the user asked us to do.
@@ -51,6 +53,8 @@ pub struct Args {
     pub renderer: Renderer,
     /// Start with sound off.
     pub mute: bool,
+    /// Sound volume in percent, 0 to 100.
+    pub volume: u8,
 }
 
 /// Headless (non-interactive) run configuration.
@@ -132,6 +136,7 @@ impl Args {
         let mut clock = None;
         let mut renderer = Renderer::Auto;
         let mut mute = false;
+        let mut volume = 100;
 
         while let Some(arg) = args.next() {
             let mut value = |flag: &str| {
@@ -152,6 +157,14 @@ impl Args {
                     renderer = v.parse().map_err(|()| bad("--renderer", &v))?;
                 }
                 "--mute" => mute = true,
+                "--volume" => {
+                    let v = value("--volume")?;
+                    volume = v
+                        .parse()
+                        .ok()
+                        .filter(|&n| n <= 100)
+                        .ok_or_else(|| bad("--volume", &v))?;
+                }
                 "--clock" => {
                     let v = value("--clock")?;
                     clock = Some(crate::clock::parse(&v).ok_or_else(|| bad("--clock", &v))?);
@@ -189,6 +202,7 @@ impl Args {
             headless,
             renderer,
             mute,
+            volume,
         })
     }
 }
@@ -250,6 +264,7 @@ mod tests {
                 headless: None,
                 renderer: Renderer::Auto,
                 mute: false,
+                volume: 100,
             }
         );
         assert_eq!(
@@ -262,6 +277,9 @@ mod tests {
         );
         assert!(parse(&["--renderer", "png"]).is_err());
         assert!(parse(&["--mute"]).unwrap().mute);
+        assert_eq!(parse(&["--volume", "40"]).unwrap().volume, 40);
+        assert!(parse(&["--volume", "101"]).is_err());
+        assert!(parse(&["--volume", "-5"]).is_err());
     }
 
     #[test]

@@ -20,6 +20,7 @@ mod states;
 mod theme;
 mod wordmark;
 
+use std::cell::Cell;
 use std::io::stdout;
 use std::panic::AssertUnwindSafe;
 use std::path::{Path, PathBuf};
@@ -203,6 +204,8 @@ struct App {
     audio: Result<AudioOutput, String>,
     /// Sound switched off by the user; samples are dropped.
     muted: bool,
+    /// Sound volume in percent; carried from game to game by the session.
+    volume: u8,
     /// The cartridge being played, for naming its state files.
     rom: PathBuf,
     /// Which slot `F5` and `F8` act on, counting from zero. The panel
@@ -231,6 +234,9 @@ const MIN_LEAVE_GAP: Duration = Duration::from_millis(250);
 /// How long "state saved" and friends stay in the status bar.
 const NOTICE_WINDOW: Duration = Duration::from_secs(2);
 
+/// How much one press of `-` or `+` changes the volume, in percent.
+const VOLUME_STEP: u8 = 10;
+
 /// Nominal GBA frame rate, for the fast-forward multiplier.
 const NOMINAL_FPS: f64 = 1_000_000.0 / 16_743.0;
 
@@ -254,7 +260,7 @@ impl App {
             && !self.muted
             && !self.fast_held(now)
         {
-            audio.push(self.gba.audio());
+            audio.push(self.gba.audio(), self.volume);
         }
         self.gba.clear_audio();
         self.fps_frames += 1;
@@ -370,6 +376,8 @@ impl App {
     fn trigger(&mut self, action: Action, now: Instant) -> Option<GameExit> {
         match action {
             Action::Mute => self.muted = !self.muted,
+            Action::VolumeDown => self.set_volume(self.volume.saturating_sub(VOLUME_STEP), now),
+            Action::VolumeUp => self.set_volume(self.volume + VOLUME_STEP, now),
             Action::Pause => self.toggle_pause(now),
             Action::Step if self.paused => self.step = true,
             Action::SaveState => self.save_state(now),
@@ -389,6 +397,14 @@ impl App {
             Action::Button(_) | Action::FastForward | Action::Rewind | Action::Step => {}
         }
         None
+    }
+
+    /// Sets the volume (clamped to 100 %) and shows it. Turning it up
+    /// also unmutes: the one wanting it louder wants to hear it.
+    fn set_volume(&mut self, percent: u8, now: Instant) {
+        self.volume = percent.min(100);
+        self.muted = false;
+        self.state_notice = Some((format!("volume {} %", self.volume), now));
     }
 
     /// How a hint should name what does `action`: the pad's button while
@@ -867,6 +883,7 @@ fn run() -> Result<(), AppError> {
         release_events: *release_events,
         renderer: args.renderer,
         sound: !args.mute,
+        volume: Cell::new(args.volume),
         bindings,
     };
     if let Some(rom) = direct_rom {
@@ -887,6 +904,8 @@ struct Session {
     renderer: Renderer,
     /// Open the sound device.
     sound: bool,
+    /// Sound volume in percent, as last set in a game.
+    volume: Cell<u8>,
     bindings: Bindings,
 }
 
@@ -1094,12 +1113,10 @@ fn play(
         leave_armed: None,
         esc_released: false,
         seen_release: false,
-        audio: if session.sound {
-            AudioOutput::open().map_err(|e| e.to_string())
-        } else {
-            Err("muted".into())
-        },
+        // Opened even when starting muted, so M can turn the sound on.
+        audio: AudioOutput::open().map_err(|e| e.to_string()),
         muted: !session.sound,
+        volume: session.volume.get(),
         rom: rom.to_path_buf(),
         slot: 0,
         held_state: None,
@@ -1120,6 +1137,7 @@ fn play(
 
     // Persist the save however the loop ended.
     app.flush_save();
+    session.volume.set(app.volume);
     if let Some(err) = &app.save_error {
         crashlog::record(
             "save",
@@ -1228,12 +1246,15 @@ fn handle_key(app: &mut App, key: crossterm::event::KeyEvent) -> Option<GameExit
 
 /// Emulate → draw → handle input, paced to the GBA's frame rate.
 ///
-/// Emulation and rendering are decoupled: if a frame takes longer than
-/// the period we simply run late rather than skipping emulation, so the
-/// game never sees dropped input or jumps in time. Fast-forward keeps
-/// drawing at the usual rate but fills each period with as many frames
-/// as the machine manages; pause keeps the loop (and input) alive with
-/// no emulation at all.
+/// The game keeps real time even where drawing cannot: a terminal slow to
+/// take a frame (sixel in Windows Terminal, a busy machine) makes us late,
+/// and the next pass emulates the frames it missed without drawing them,
+/// up to [`MAX_CATCH_UP`] at once. The picture then skips frames rather
+/// than the whole game slowing down — and the sound, which is made by
+/// emulated frames, keeps coming at the rate the device plays it.
+/// Fast-forward keeps drawing at the usual rate but fills each period
+/// with as many frames as the machine manages; pause keeps the loop (and
+/// input) alive with no emulation at all.
 fn event_loop(
     terminal: &mut ratatui::DefaultTerminal,
     app: &mut App,
@@ -1273,8 +1294,13 @@ fn event_loop(
             // not pay for states nobody watched.
             app.rewind.frame(&app.gba);
         } else {
-            app.emulate_frame(now);
+            let due = frames_due(next_frame, now);
+            for _ in 0..due {
+                app.emulate_frame(Instant::now());
+            }
+            // The frames just caught up on were never drawn.
             app.rewind.frame(&app.gba);
+            next_frame += FRAME_PERIOD * (due - 1);
         }
         app.rewinding = rewinding;
         if now >= next_autosave {
@@ -1305,12 +1331,27 @@ fn event_loop(
         let now = Instant::now();
         if next_frame > now {
             std::thread::sleep(next_frame - now);
-        } else {
-            // Running behind (or fast-forwarding): resynchronise instead
-            // of trying to catch up.
+        } else if now - next_frame > FRAME_PERIOD * MAX_CATCH_UP {
+            // Too far behind to catch up (fast-forward, an overlay, a
+            // stall): start the count again from here.
             next_frame = now;
         }
     }
+}
+
+/// Most frames one pass of the loop emulates to catch up with the clock:
+/// the game keeps full speed on terminals taking up to this many frame
+/// periods (100 ms) to draw one. A machine that cannot even emulate at
+/// full speed would, without a limit, spend ever longer passes catching
+/// up and never draw or read input.
+const MAX_CATCH_UP: u32 = 6;
+
+/// How many frames are due at `now` when the next one was due at `next`:
+/// one, plus those whole periods we are late by, up to [`MAX_CATCH_UP`].
+fn frames_due(next: Instant, now: Instant) -> u32 {
+    let late = now.saturating_duration_since(next);
+    let missed = late.as_micros() / FRAME_PERIOD.as_micros();
+    (1 + missed).min(u128::from(MAX_CATCH_UP)) as u32
 }
 
 fn main() -> ExitCode {
@@ -1345,6 +1386,17 @@ fn main() -> ExitCode {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn late_frames_are_caught_up_within_a_bound() {
+        let next = Instant::now();
+        let at = |d: Duration| frames_due(next, next + d);
+        assert_eq!(frames_due(next + FRAME_PERIOD, next), 1, "early");
+        assert_eq!(at(Duration::ZERO), 1, "on time");
+        assert_eq!(at(FRAME_PERIOD / 2), 1, "late, but not a frame late");
+        assert_eq!(at(FRAME_PERIOD * 2 + FRAME_PERIOD / 2), 3);
+        assert_eq!(at(Duration::from_secs(1)), MAX_CATCH_UP);
+    }
 
     /// One physical press can reach us as several events — a terminal
     /// that sends a key's press and release as the same bare `\x1b`, or
