@@ -25,6 +25,7 @@ tuiba-core.workspace = true
 thiserror.workspace = true
 ratatui.workspace = true
 crossterm.workspace = true
+chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 cpal = "0.18"
 gilrs = { version = "0.11", optional = true }
 

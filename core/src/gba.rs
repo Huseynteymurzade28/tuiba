@@ -6,7 +6,7 @@ use crate::error::Result;
 use crate::memory::dma::{self, Timing};
 use crate::memory::io::reg;
 use crate::memory::timers::Timers;
-use crate::memory::{Bus, Cartridge, Memory};
+use crate::memory::{Bus, Cartridge, DateTime, Memory};
 use crate::ppu::{CYCLES_PER_LINE, Framebuffer, Ppu};
 
 /// Cycles the system skips at a time while the CPU is halted. Small
@@ -71,6 +71,13 @@ impl Gba {
             intr_wait: None,
             last_unsupported_swi: None,
         }
+    }
+
+    /// Sets the date and time the cartridge's real-time clock reports,
+    /// for games that have one. The frontend calls this as often as it
+    /// likes — every frame is plenty; nothing reads the clock between.
+    pub fn set_clock(&mut self, now: DateTime) {
+        self.bus.gpio.set_clock(now);
     }
 
     /// Installs a real BIOS image and restarts from the reset vector.

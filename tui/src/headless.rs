@@ -11,13 +11,26 @@ use tuiba_core::memory::io::{KEYINPUT_ALL_RELEASED, reg};
 use tuiba_core::{Gba, SCREEN_HEIGHT, SCREEN_WIDTH};
 
 use crate::cli::{Headless, KeyHold};
-use crate::{png, screenshot};
+use crate::{clock, png, screenshot};
+
+/// One GBA frame, 280 896 cycles at 16.78 MHz, in microseconds.
+const FRAME_MICROS: i64 = 16_743;
+
+/// Where the cartridge clock starts when `--clock` is not given: a fixed
+/// moment, so that two runs of a clock-reading game match.
+pub const DEFAULT_CLOCK: &str = "2000-01-01T00:00:00";
 
 /// Runs `gba` as configured and prints a one-line summary to stdout.
 pub fn run(gba: &mut Gba, config: &Headless) -> io::Result<()> {
     let mut audio = Vec::new();
     let start = Instant::now();
+    let clock_start = config
+        .clock
+        .or_else(|| clock::parse(DEFAULT_CLOCK))
+        .expect("the default clock parses");
     for frame in 0..config.frames {
+        let elapsed = chrono::TimeDelta::microseconds(i64::from(frame) * FRAME_MICROS);
+        gba.set_clock(clock::from_chrono(clock_start + elapsed));
         gba.set_keyinput(keyinput_at(&config.keys, frame));
         gba.run_frame();
         if config.wav.is_some() {

@@ -3,6 +3,7 @@
 mod audio;
 mod bindings;
 mod cli;
+mod clock;
 mod crashlog;
 mod gamepad;
 mod graphics;
@@ -242,6 +243,10 @@ impl App {
     /// Emulates one frame with the current keypad state.
     fn emulate_frame(&mut self, now: Instant) {
         self.gba.set_keyinput(self.keypad.keyinput(now));
+        // The wall clock, not emulated time: a cartridge clock keeps the
+        // real date through pauses, fast-forward and rewinds, as the
+        // battery-backed chip in a real cartridge would.
+        self.gba.set_clock(clock::now());
         self.gba.run_frame();
         // Fast-forward makes far more sound than real time can play;
         // dropping it whole is less jarring than playing chopped-up bits.

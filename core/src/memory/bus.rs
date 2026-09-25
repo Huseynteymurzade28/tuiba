@@ -1,14 +1,15 @@
 //! The system bus: routes CPU/DMA accesses to the right device.
 //!
-//! All accessors take an **aligned** address for their width. The ARM7TDMI
-//! forces alignment itself (and rotates misaligned loads), so that logic
-//! lives in the CPU, not here.
+//! Halfword and word accessors ignore the low address bits, as the 16-
+//! and 32-bit buses do, except on SRAM's 8-bit bus, which sees the exact
+//! address. The rotation of misaligned loads is the CPU's business.
 
 use std::cell::Cell;
 
 use crate::error::{GbaError, Result};
 use crate::memory::backup::Backup;
 use crate::memory::cartridge::Cartridge;
+use crate::memory::gpio::Gpio;
 use crate::memory::io::{IoRegisters, reg};
 use crate::memory::video::VideoMemory;
 use crate::memory::wait::WaitStates;
@@ -54,6 +55,12 @@ pub struct Bus {
     pub video: VideoMemory,
     /// The inserted cartridge.
     pub cartridge: Cartridge,
+    /// The cartridge's GPIO port and real-time clock. Not in the
+    /// serialized machine: it was added after the state format was
+    /// fixed, so [`Snapshot`](crate::Snapshot) carries it as a trailing
+    /// section of its own.
+    #[serde(skip)]
+    pub gpio: Gpio,
     /// Access costs, decoded from `WAITCNT`.
     pub wait: WaitStates,
     /// Cycles spent on accesses since the last [`Memory::take_access_cycles`].
@@ -88,6 +95,7 @@ impl Bus {
             io: IoRegisters::new(),
             video: VideoMemory::new(),
             cartridge,
+            gpio: Gpio::default(),
             wait: WaitStates::default(),
             access_cycles: Cell::new(0),
             next_sequential: Cell::new(u32::MAX),
@@ -182,6 +190,16 @@ impl Bus {
         }
     }
 
+    /// A GPIO register, when `address` is one and the port reads back.
+    fn gpio_read(&self, address: u32) -> Option<u16> {
+        let offset = address & 0x01FF_FFFF;
+        if Gpio::covers(offset) {
+            self.gpio.read16(offset)
+        } else {
+            None
+        }
+    }
+
     fn eeprom_read(&self) -> u16 {
         self.backup.eeprom().map_or(1, super::eeprom::Eeprom::read)
     }
@@ -207,7 +225,10 @@ impl Memory for Bus {
             Some(MemoryRegion::Vram) => self.video.vram[VideoMemory::vram_index(off)],
             Some(MemoryRegion::Oam) => self.video.oam[VideoMemory::oam_index(off)],
             Some(MemoryRegion::Rom) if self.is_eeprom_address(address) => self.eeprom_read() as u8,
-            Some(MemoryRegion::Rom) => self.cartridge.read8(address & 0x01FF_FFFF),
+            Some(MemoryRegion::Rom) => match self.gpio_read(address & !1) {
+                Some(half) => (half >> ((address & 1) * 8)) as u8,
+                None => self.cartridge.read8(address & 0x01FF_FFFF),
+            },
             Some(MemoryRegion::Sram) => self.backup.read(off),
             None => 0,
         }
@@ -232,7 +253,9 @@ impl Memory for Bus {
             Some(MemoryRegion::Vram) => get16(&self.video.vram, VideoMemory::vram_index(off)),
             Some(MemoryRegion::Oam) => get16(&self.video.oam, VideoMemory::oam_index(off)),
             Some(MemoryRegion::Rom) if self.is_eeprom_address(address) => self.eeprom_read(),
-            Some(MemoryRegion::Rom) => self.cartridge.read16(address & 0x01FF_FFFF),
+            Some(MemoryRegion::Rom) => self
+                .gpio_read(address)
+                .unwrap_or_else(|| self.cartridge.read16(address & 0x01FF_FFFF)),
             // SRAM is on an 8-bit bus: the addressed byte is repeated
             // across the halfword.
             Some(MemoryRegion::Sram) => u16::from(self.backup.read(page_offset(exact))) * 0x0101,
@@ -261,7 +284,12 @@ impl Memory for Bus {
             Some(MemoryRegion::Rom) if self.is_eeprom_address(address) => {
                 u32::from(self.eeprom_read()) | u32::from(self.eeprom_read()) << 16
             }
-            Some(MemoryRegion::Rom) => self.cartridge.read32(address & 0x01FF_FFFF),
+            Some(MemoryRegion::Rom) => {
+                let rom = self.cartridge.read32(address & 0x01FF_FFFF);
+                let low = self.gpio_read(address).unwrap_or(rom as u16);
+                let high = self.gpio_read(address + 2).unwrap_or((rom >> 16) as u16);
+                u32::from(low) | u32::from(high) << 16
+            }
             Some(MemoryRegion::Sram) => {
                 u32::from(self.backup.read(page_offset(exact))) * 0x0101_0101
             }
@@ -340,7 +368,8 @@ impl Memory for Bus {
                 self.backup.write(page_offset(exact), byte);
             }
             Some(MemoryRegion::Rom) if self.is_eeprom_address(address) => self.eeprom_write(value),
-            Some(MemoryRegion::Bios | MemoryRegion::Rom) | None => {}
+            Some(MemoryRegion::Rom) => self.gpio.write16(address & 0x01FF_FFFF, value),
+            Some(MemoryRegion::Bios) | None => {}
         }
     }
 
@@ -381,7 +410,12 @@ impl Memory for Bus {
                 self.eeprom_write(value as u16);
                 self.eeprom_write((value >> 16) as u16);
             }
-            Some(MemoryRegion::Bios | MemoryRegion::Rom) | None => {}
+            Some(MemoryRegion::Rom) => {
+                self.gpio.write16(address & 0x01FF_FFFF, value as u16);
+                self.gpio
+                    .write16((address & 0x01FF_FFFF) + 2, (value >> 16) as u16);
+            }
+            Some(MemoryRegion::Bios) | None => {}
         }
     }
 
@@ -601,6 +635,42 @@ mod tests {
         bus.write16(base::VRAM + 0x1_0000, 0xABCD);
         assert_eq!(bus.read16(base::VRAM + 0x1_8000), 0xABCD);
         assert_eq!(bus.read16(base::VRAM + 0x2_0000 + 0x1_0000), 0xABCD);
+    }
+
+    /// The clock answers through the ROM area once the game makes the
+    /// port readable, and the ROM shows through before that.
+    #[test]
+    fn the_rtc_is_reached_through_the_rom_area() {
+        use crate::memory::gpio::{CONTROL, DATA, DIRECTION, DateTime};
+        let rom = 0x0800_0000;
+        let mut bus = bus();
+        assert_eq!(bus.read16(rom + CONTROL), 0, "ROM bytes");
+        bus.gpio.set_clock(DateTime {
+            second: 42,
+            ..DateTime::default()
+        });
+        bus.write16(rom + CONTROL, 1);
+        assert_eq!(bus.read16(rom + CONTROL), 1, "the port");
+        let pins = |bus: &mut Bus, v: u16| bus.write16(rom + DATA, v);
+        pins(&mut bus, 0b001);
+        pins(&mut bus, 0b101);
+        bus.write16(rom + DIRECTION, 0b111);
+        // Command 0x67, time only, most significant bit first.
+        for i in (0..8).rev() {
+            let sio = ((0x67 >> i) & 1) << 1;
+            pins(&mut bus, sio | 0b100);
+            pins(&mut bus, sio | 0b101);
+        }
+        bus.write16(rom + DIRECTION, 0b101);
+        let mut bytes = [0u8; 3];
+        for byte in &mut bytes {
+            for i in 0..8 {
+                pins(&mut bus, 0b100);
+                pins(&mut bus, 0b101);
+                *byte |= (((bus.read16(rom + DATA) >> 1) & 1) as u8) << i;
+            }
+        }
+        assert_eq!(bytes, [0x00, 0x00, 0x42]);
     }
 
     #[test]
