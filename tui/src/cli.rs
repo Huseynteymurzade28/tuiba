@@ -39,9 +39,63 @@ Display and sound options:
   --mute                start with sound off (M toggles it in a game)
   --volume PERCENT      sound volume, 0 to 100 (default 100; - and + change
                         it in a game)
+  --fast-speed N        fast-forward at most N times real speed (2 to 16), or
+                        max (default) for as fast as it goes; F4 cycles ×2,
+                        ×4 and max in a game
   --stats               show frame rates, draw times and the sound queue in
                         the status bar (F3 toggles it in a game)
   -h, --help            show this help";
+
+/// How fast fast-forward runs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum FastSpeed {
+    /// At most this many times real speed.
+    Times(u32),
+    /// As fast as the machine manages.
+    #[default]
+    Max,
+}
+
+impl FastSpeed {
+    /// The order `F4` cycles through.
+    #[must_use]
+    pub const fn next(self) -> Self {
+        match self {
+            Self::Times(2) => Self::Times(4),
+            Self::Times(_) => Self::Max,
+            Self::Max => Self::Times(2),
+        }
+    }
+
+    /// How many frames to emulate per frame drawn, `None` for no limit.
+    #[must_use]
+    pub const fn cap(self) -> Option<u32> {
+        match self {
+            Self::Times(n) => Some(n),
+            Self::Max => None,
+        }
+    }
+
+    fn parse(value: &str) -> Option<Self> {
+        match value {
+            "max" => Some(Self::Max),
+            _ => value
+                .parse()
+                .ok()
+                .filter(|n| (2..=16).contains(n))
+                .map(Self::Times),
+        }
+    }
+}
+
+impl fmt::Display for FastSpeed {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Times(n) => write!(f, "×{n}"),
+            Self::Max => f.write_str("uncapped"),
+        }
+    }
+}
 
 /// What the user asked us to do.
 #[derive(Debug, PartialEq, Eq)]
@@ -59,6 +113,8 @@ pub struct Args {
     pub volume: u8,
     /// Start with performance figures in the status bar.
     pub stats: bool,
+    /// Fast-forward limit.
+    pub fast_speed: FastSpeed,
 }
 
 /// Headless (non-interactive) run configuration.
@@ -142,6 +198,7 @@ impl Args {
         let mut mute = false;
         let mut volume = 100;
         let mut stats = false;
+        let mut fast_speed = FastSpeed::Max;
 
         while let Some(arg) = args.next() {
             let mut value = |flag: &str| {
@@ -163,6 +220,10 @@ impl Args {
                 }
                 "--mute" => mute = true,
                 "--stats" => stats = true,
+                "--fast-speed" => {
+                    let v = value("--fast-speed")?;
+                    fast_speed = FastSpeed::parse(&v).ok_or_else(|| bad("--fast-speed", &v))?;
+                }
                 "--volume" => {
                     let v = value("--volume")?;
                     volume = v
@@ -210,6 +271,7 @@ impl Args {
             mute,
             volume,
             stats,
+            fast_speed,
         })
     }
 }
@@ -273,6 +335,7 @@ mod tests {
                 mute: false,
                 volume: 100,
                 stats: false,
+                fast_speed: FastSpeed::Max,
             }
         );
         assert_eq!(
@@ -289,6 +352,29 @@ mod tests {
         assert!(parse(&["--volume", "101"]).is_err());
         assert!(parse(&["--volume", "-5"]).is_err());
         assert!(parse(&["--stats"]).unwrap().stats);
+        assert_eq!(
+            parse(&["--fast-speed", "4"]).unwrap().fast_speed,
+            FastSpeed::Times(4)
+        );
+        assert_eq!(
+            parse(&["--fast-speed", "max"]).unwrap().fast_speed,
+            FastSpeed::Max
+        );
+        assert!(parse(&["--fast-speed", "1"]).is_err());
+        assert!(parse(&["--fast-speed", "fast"]).is_err());
+    }
+
+    #[test]
+    fn fast_speed_cycles_through_the_common_caps() {
+        let mut speed = FastSpeed::Max;
+        let mut seen = Vec::new();
+        for _ in 0..4 {
+            speed = speed.next();
+            seen.push(speed.to_string());
+        }
+        assert_eq!(seen, ["×2", "×4", "uncapped", "×2"]);
+        // A cap from the command line that is not in the cycle joins it.
+        assert_eq!(FastSpeed::Times(8).next(), FastSpeed::Max);
     }
 
     #[test]
