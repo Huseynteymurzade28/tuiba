@@ -45,6 +45,10 @@ jobs:
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y libasound2-dev libudev-dev
       - run: cargo build --release -p tuiba --target ${{ matrix.target }}
+        env:
+          # The C runtime linked in, so the exe runs on a Windows without
+          # the Visual C++ redistributable (VCRUNTIME140.dll).
+          RUSTFLAGS: ${{ runner.os == 'Windows' && '-C target-feature=+crt-static' || '' }}
       - name: Package
         if: runner.os != 'Windows'
         run: |
