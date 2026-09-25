@@ -39,6 +39,8 @@ Display and sound options:
   --mute                start with sound off (M toggles it in a game)
   --volume PERCENT      sound volume, 0 to 100 (default 100; - and + change
                         it in a game)
+  --stats               show frame rates, draw times and the sound queue in
+                        the status bar (F3 toggles it in a game)
   -h, --help            show this help";
 
 /// What the user asked us to do.
@@ -55,6 +57,8 @@ pub struct Args {
     pub mute: bool,
     /// Sound volume in percent, 0 to 100.
     pub volume: u8,
+    /// Start with performance figures in the status bar.
+    pub stats: bool,
 }
 
 /// Headless (non-interactive) run configuration.
@@ -137,6 +141,7 @@ impl Args {
         let mut renderer = Renderer::Auto;
         let mut mute = false;
         let mut volume = 100;
+        let mut stats = false;
 
         while let Some(arg) = args.next() {
             let mut value = |flag: &str| {
@@ -157,6 +162,7 @@ impl Args {
                     renderer = v.parse().map_err(|()| bad("--renderer", &v))?;
                 }
                 "--mute" => mute = true,
+                "--stats" => stats = true,
                 "--volume" => {
                     let v = value("--volume")?;
                     volume = v
@@ -203,6 +209,7 @@ impl Args {
             renderer,
             mute,
             volume,
+            stats,
         })
     }
 }
@@ -265,6 +272,7 @@ mod tests {
                 renderer: Renderer::Auto,
                 mute: false,
                 volume: 100,
+                stats: false,
             }
         );
         assert_eq!(
@@ -280,6 +288,7 @@ mod tests {
         assert_eq!(parse(&["--volume", "40"]).unwrap().volume, 40);
         assert!(parse(&["--volume", "101"]).is_err());
         assert!(parse(&["--volume", "-5"]).is_err());
+        assert!(parse(&["--stats"]).unwrap().stats);
     }
 
     #[test]

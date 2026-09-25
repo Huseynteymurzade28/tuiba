@@ -147,6 +147,7 @@ tuiba --renderer sixel # pick the image protocol yourself
 tuiba --no-graphics    # force the half-block renderer
 tuiba --mute           # start silent; M toggles sound in a game
 tuiba --volume 50      # start at half volume; - and + change it in a game
+tuiba --stats          # frame rates, draw times and the sound queue; F3 in a game
 ```
 
 `F5` freezes the machine into the current slot and `F8` puts it back —
@@ -215,6 +216,7 @@ report.
 |                                  | `F5` — save state, `F8` — load it back       |
 |                                  | `F2` — the four save-state slots             |
 |                                  | `F12` — screenshot                           |
+|                                  | `F3` — performance figures                   |
 |                                  | `?` — show the active bindings               |
 | `q` — quit (asks first)          | `Esc` twice — back to the library            |
 |                                  | `Ctrl+Q` — quit                              |
@@ -255,7 +257,7 @@ Windows), one action per line:
 # button = key [key ...]      actions: up down left right a b l r
 a      = j                    #          start select pause step fast rewind
 b      = k pad:west           #          mute quieter louder save load states
-select = space                #          screenshot leave help
+select = space                #          screenshot stats leave help
 start  = enter                # unlisted actions keep their defaults
 fast   = f9 tab               # an empty right-hand side unbinds
 ```
