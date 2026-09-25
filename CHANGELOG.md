@@ -4,6 +4,34 @@ All notable changes to tuiba. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow
 [Semantic Versioning](https://semver.org/).
 
+## [0.8.0] – 2026-09-25
+
+### Added
+- Cartridge real-time clock. The S-3511 clock that some games read over
+  the cartridge's GPIO port is emulated and shows your local time, so
+  day and night follow the real clock. Save states keep older files
+  loadable. Headless runs start the clock at 2000-01-01 00:00:00 and
+  advance it per frame; `--clock YYYY-MM-DDTHH:MM:SS` sets it. (#40)
+- Volume steps. `-` and `=` / `+` change the volume in 10 % steps
+  (keys-file actions `quieter` and `louder`), `--volume PERCENT` sets
+  where it starts, and it carries over from game to game. (#46)
+- CI runs jsmolka's gba-tests headlessly on every change and compares
+  the frames they end on. (#39)
+
+### Fixed
+- Stutter and loud crackling sound on slow terminals (reported on
+  Windows Terminal). A slow draw used to slow the whole game down, and
+  the sound, arriving slower than it was played, broke up into a buzz.
+  Frames a slow draw misses are now emulated without being drawn, so the
+  game and its sound keep real time, the picture skips frames instead,
+  and the sound queue adapts to small clock differences and turns a
+  real stall into a short gap. (#46)
+- `--mute` still opens the sound device, so `M` can turn sound on. (#46)
+- CPU and bus fixes found by the test ROMs: a test instruction with
+  `Rd = r15` restores CPSR from SPSR, LDM/STM keep the low bits of an
+  unaligned base on writeback, and SRAM sees the exact address of
+  halfword and word accesses. (#39)
+
 ## [0.7.0] – 2026-09-25
 
 ### Added
@@ -150,6 +178,7 @@ First release: ARM7TDMI, memory map with DMA and timers, PPU modes 0–5
 with sprites, windows and blending, HLE BIOS, SRAM/flash/EEPROM saves,
 Kitty graphics and half-block renderers, library screen, headless mode.
 
+[0.8.0]: https://github.com/Huseynteymurzade28/tuiba/compare/v0.7.0...v0.8.0
 [0.7.0]: https://github.com/Huseynteymurzade28/tuiba/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/Huseynteymurzade28/tuiba/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/Huseynteymurzade28/tuiba/compare/v0.4.0...v0.5.0
