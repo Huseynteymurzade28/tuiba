@@ -11,6 +11,7 @@ mod input;
 mod library;
 mod picker;
 mod png;
+mod rewind;
 mod savestate;
 mod screen;
 mod screenshot;
@@ -48,6 +49,7 @@ use crate::graphics::{Graphics, Renderer};
 use crate::input::{GbaKey, Hold, Keypad};
 use crate::library::Library;
 use crate::picker::{Outcome, Picker};
+use crate::rewind::Rewind;
 use crate::screen::GbaScreen;
 use crate::states::StatesPanel;
 
@@ -160,6 +162,13 @@ struct App {
     step: bool,
     /// Fast-forward key held: run uncapped.
     fast: Hold,
+    /// Rewind key held: play backwards.
+    rewind_key: Hold,
+    /// The recent past, for rewinding.
+    rewind: Rewind,
+    /// Rewinding as of the last frame, so the first step of a rewind
+    /// can flush the sound queue.
+    rewinding: bool,
     /// Pad buttons held as of the last poll; a press is a button that
     /// was not in here.
     pads: PadSet,
@@ -244,6 +253,11 @@ impl App {
         }
         self.gba.clear_audio();
         self.fps_frames += 1;
+        self.update_fps(now);
+    }
+
+    /// Closes the rate window once a second has passed.
+    fn update_fps(&mut self, now: Instant) {
         let elapsed = now.duration_since(self.fps_window_start);
         if elapsed >= Duration::from_secs(1) {
             self.fps = f64::from(self.fps_frames) / elapsed.as_secs_f64();
@@ -254,11 +268,34 @@ impl App {
 
     /// Whether fast-forward is held, on the keyboard or a pad.
     fn fast_held(&self, now: Instant) -> bool {
-        self.fast.is_held(now)
-            || self
-                .pads
-                .iter()
-                .any(|b| self.bindings.pad_action(b) == Some(Action::FastForward))
+        self.fast.is_held(now) || self.pad_holds(Action::FastForward)
+    }
+
+    /// Whether rewind is held, on the keyboard or a pad.
+    fn rewind_held(&self, now: Instant) -> bool {
+        self.rewind_key.is_held(now) || self.pad_holds(Action::Rewind)
+    }
+
+    /// Whether a pad button bound to `action` is down.
+    fn pad_holds(&self, action: Action) -> bool {
+        self.pads
+            .iter()
+            .any(|b| self.bindings.pad_action(b) == Some(action))
+    }
+
+    /// Goes back one capture. Sound stops while rewinding: the queue is
+    /// flushed as it starts, and nothing is played until it ends.
+    fn rewind_step(&mut self, now: Instant) {
+        if !self.rewinding
+            && let Ok(audio) = &self.audio
+        {
+            audio.flush();
+        }
+        if let Some(snapshot) = self.rewind.step_back(&self.gba.bus.cartridge) {
+            self.gba.restore(&snapshot);
+            self.fps_frames += 1;
+        }
+        self.update_fps(now);
     }
 
     /// Reads the pads: held buttons go to the keypad, fresh presses of
@@ -344,7 +381,7 @@ impl App {
                 }
                 self.bound_leave = Some(now);
             }
-            Action::Button(_) | Action::FastForward | Action::Step => {}
+            Action::Button(_) | Action::FastForward | Action::Rewind | Action::Step => {}
         }
         None
     }
@@ -607,6 +644,10 @@ impl App {
             format!("  {} again to leave", self.hint_for(Action::Leave, "leave"))
         } else if self.paused {
             "  ⏸ paused  (. = one frame)".to_string()
+        } else if self.rewinding && self.rewind.is_empty() {
+            "  ◀◀ nothing older to rewind to".to_string()
+        } else if self.rewinding {
+            "  ◀◀ rewinding".to_string()
         } else if self.fast_held(now) {
             format!("  ▶▶ ×{:.1}", self.fps / NOMINAL_FPS)
         } else {
@@ -1036,6 +1077,9 @@ fn play(
         paused: false,
         step: false,
         fast: Hold::new(session.release_events),
+        rewind_key: Hold::new(session.release_events),
+        rewind: Rewind::default(),
+        rewinding: false,
         pads: PadSet::EMPTY,
         pads_ignored: PadSet::EMPTY,
         pad_style: None,
@@ -1170,6 +1214,7 @@ fn handle_key(app: &mut App, key: crossterm::event::KeyEvent) -> Option<GameExit
     match app.bindings.action(key.code) {
         Some(Action::Button(button)) => app.keypad.handle(button, key.kind, now),
         Some(Action::FastForward) => app.fast.update(key.kind, now),
+        Some(Action::Rewind) => app.rewind_key.update(key.kind, now),
         Some(action) if key.kind == KeyEventKind::Press => return app.trigger(action, now),
         _ => {}
     }
@@ -1196,11 +1241,17 @@ fn event_loop(
         if let Some(exit) = app.poll_pads(gamepads, now) {
             return Ok(exit);
         }
+        let rewinding = !app.help && app.panel.is_none() && app.rewind_held(now);
         if app.help || app.panel.is_some() {
             // An overlay covers the screen; nothing to see, so nothing to run.
+        } else if rewinding {
+            // Paused or not: stepping back while paused is how to look
+            // for the frame just before a mistake.
+            app.rewind_step(now);
         } else if app.paused {
             if app.step {
                 app.emulate_frame(now);
+                app.rewind.frame(&app.gba);
                 app.step = false;
             }
         } else if app.fast_held(now) {
@@ -1212,9 +1263,15 @@ fn event_loop(
                     break;
                 }
             }
+            // Captured per frame drawn, not per frame emulated: the
+            // rewind then retraces what was seen, and fast-forward does
+            // not pay for states nobody watched.
+            app.rewind.frame(&app.gba);
         } else {
             app.emulate_frame(now);
+            app.rewind.frame(&app.gba);
         }
+        app.rewinding = rewinding;
         if now >= next_autosave {
             app.flush_save();
             next_autosave = now + AUTOSAVE_INTERVAL;

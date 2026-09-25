@@ -41,6 +41,8 @@ pub enum Action {
     Step,
     /// Run uncapped while held.
     FastForward,
+    /// Play backwards while held.
+    Rewind,
     /// Toggle sound output.
     Mute,
     /// Freeze the machine into the quick slot.
@@ -59,7 +61,7 @@ pub enum Action {
 
 impl Action {
     /// Every action, in the order the help overlay and the file use.
-    pub const ALL: [Self; 20] = [
+    pub const ALL: [Self; 21] = [
         Self::Button(GbaKey::Up),
         Self::Button(GbaKey::Down),
         Self::Button(GbaKey::Left),
@@ -73,6 +75,7 @@ impl Action {
         Self::Pause,
         Self::Step,
         Self::FastForward,
+        Self::Rewind,
         Self::Mute,
         Self::SaveState,
         Self::LoadState,
@@ -99,6 +102,7 @@ impl Action {
             Self::Pause => "pause",
             Self::Step => "step",
             Self::FastForward => "fast",
+            Self::Rewind => "rewind",
             Self::Mute => "mute",
             Self::SaveState => "save",
             Self::LoadState => "load",
@@ -126,6 +130,7 @@ impl Action {
             Self::Pause => "pause",
             Self::Step => "one frame (paused)",
             Self::FastForward => "fast-forward (hold)",
+            Self::Rewind => "rewind (hold)",
             Self::Mute => "mute sound",
             Self::SaveState => "save state",
             Self::LoadState => "load state",
@@ -188,7 +193,7 @@ impl Bindings {
     /// The built-in bindings: buttons on the keys of the same name,
     /// arrows for the D-pad, `Enter` = Start, `Space` / `Backspace` /
     /// right Shift = Select, `Z`/`X` doubling as A/B, `P` pause, `.` step,
-    /// `Tab` / `F` fast-forward, `M` mute and `F12` screenshot. On a pad, the buttons sit
+    /// `Tab` / `F` fast-forward, `W` rewind, `M` mute and `F12` screenshot. On a pad, the buttons sit
     /// where a GBA has them — A east, B south, the shoulders on L1/R1 —
     /// R2 fast-forwards, L2 opens the save-state panel, north pauses,
     /// the guide button (twice) leaves and the right stick shows the
@@ -224,6 +229,7 @@ impl Bindings {
         bind(&mut b, Action::Pause, &[Char('p')]);
         bind(&mut b, Action::Step, &[Char('.')]);
         bind(&mut b, Action::FastForward, &[KeyCode::Tab, Char('f')]);
+        bind(&mut b, Action::Rewind, &[Char('w')]);
         bind(&mut b, Action::Mute, &[Char('m')]);
         bind(&mut b, Action::SaveState, &[KeyCode::F(5)]);
         bind(&mut b, Action::LoadState, &[KeyCode::F(8)]);
