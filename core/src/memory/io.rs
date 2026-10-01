@@ -364,6 +364,14 @@ impl IoRegisters {
         self.affine_refs[bg - 2][axis] = ((raw << 4) as i32) >> 4;
     }
 
+    /// Sets one byte of a register's stored value directly, bypassing
+    /// write semantics; see [`crate::memory::journal`].
+    pub fn set_raw8(&mut self, offset: u32, value: u8) {
+        if let Some(byte) = self.raw.get_mut(offset as usize) {
+            *byte = value;
+        }
+    }
+
     /// Sets a register's stored value directly, bypassing write semantics.
     ///
     /// Intended for hardware units updating their own read-only registers
