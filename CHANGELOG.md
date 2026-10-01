@@ -4,6 +4,33 @@ All notable changes to tuiba. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow
 [Semantic Versioning](https://semver.org/).
 
+## [0.10.0] – 2026-10-01
+
+Accuracy work: nothing new to press, but games that do raster tricks
+look more like they do on hardware.
+
+### Added
+- Open bus and BIOS read protection. Reads from unmapped addresses
+  return what the bus last carried, and the BIOS reads back as the
+  hardware leaves it once a game is running; jsmolka's `bios.gba` now
+  passes in CI. (#13, #48)
+- Affine backgrounds keep their own reference points, reloaded at
+  VBlank and when a game writes them, and stepped line by line, so
+  perspective effects that stream new values per line or bend the
+  walk mid-frame draw correctly. (#12, #49)
+- DMA runs alongside the rest of the machine instead of all at once:
+  an HBlank or sound DMA during a long copy now happens on every line,
+  at its own moment. (#11, #50)
+- Writes to the screen's registers, palette, VRAM or OAM while a line
+  is being drawn change only the pixels after them. (#11, #51)
+- The per-line limit on sprite drawing: sprites past the hardware's
+  cycle budget are cut off, as on the console. (#11, #52)
+
+### Changed
+- Save states carry the new state in trailing sections; files from
+  earlier versions still load.
+- Headless runs are a few percent faster.
+
 ## [0.9.0] – 2026-09-25
 
 ### Added
@@ -197,6 +224,7 @@ First release: ARM7TDMI, memory map with DMA and timers, PPU modes 0–5
 with sprites, windows and blending, HLE BIOS, SRAM/flash/EEPROM saves,
 Kitty graphics and half-block renderers, library screen, headless mode.
 
+[0.10.0]: https://github.com/Huseynteymurzade28/tuiba/compare/v0.9.0...v0.10.0
 [0.9.0]: https://github.com/Huseynteymurzade28/tuiba/compare/v0.8.0...v0.9.0
 [0.8.0]: https://github.com/Huseynteymurzade28/tuiba/compare/v0.7.0...v0.8.0
 [0.7.0]: https://github.com/Huseynteymurzade28/tuiba/compare/v0.6.0...v0.7.0
