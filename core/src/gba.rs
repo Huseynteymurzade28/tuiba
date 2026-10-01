@@ -6,7 +6,7 @@ use crate::error::Result;
 use crate::memory::dma::{self, Timing};
 use crate::memory::io::reg;
 use crate::memory::timers::Timers;
-use crate::memory::{Bus, Cartridge, DateTime, Memory};
+use crate::memory::{Bus, Cartridge, DateTime, Memory, OpenBus};
 use crate::ppu::{CYCLES_PER_LINE, Framebuffer, Ppu};
 
 /// Cycles the system skips at a time while the CPU is halted. Small
@@ -232,6 +232,11 @@ impl Gba {
     }
 
     fn service_swi(&mut self, number: u8) {
+        self.bus.latch_bios(if number == bios::call::SOFT_RESET {
+            OpenBus::AFTER_STARTUP
+        } else {
+            OpenBus::AFTER_SWI
+        });
         match bios::service(number, &mut self.cpu, &mut self.bus) {
             Outcome::Done => {}
             Outcome::WaitForInterrupt { mask } => {

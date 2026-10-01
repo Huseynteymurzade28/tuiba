@@ -3,6 +3,11 @@
 //! Halfword and word accessors ignore the low address bits, as the 16-
 //! and 32-bit buses do, except on SRAM's 8-bit bus, which sees the exact
 //! address. The rotation of misaligned loads is the CPU's business.
+//!
+//! Reads that reach no device return *open bus*: the opcode the CPU
+//! fetched last, still on the data lines. The BIOS only answers while
+//! the CPU executes inside it; any other read of it returns the last
+//! opcode the BIOS itself supplied.
 
 use std::cell::Cell;
 
@@ -41,6 +46,38 @@ fn set32(mem: &mut [u8], index: usize, value: u32) {
     mem[index..index + 4].copy_from_slice(&value.to_le_bytes());
 }
 
+/// What the bus remembers of past opcode fetches.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct OpenBus {
+    /// The last opcode fetched, as it sits on the 32-bit data bus: a
+    /// THUMB fetch shows up in both halves.
+    fetch: u32,
+    /// The last word fetched from the BIOS.
+    bios: u32,
+    /// Whether the last fetch was from the BIOS, which unlocks it.
+    in_bios: bool,
+}
+
+impl Default for OpenBus {
+    /// The machine as the BIOS hands over to the cartridge.
+    fn default() -> Self {
+        Self {
+            fetch: 0,
+            bios: OpenBus::AFTER_STARTUP,
+            in_bios: false,
+        }
+    }
+}
+
+impl OpenBus {
+    /// The BIOS opcode latched when the boot sequence (or `SoftReset`)
+    /// jumps to the cartridge: the word at `0x0DC + 8`.
+    pub const AFTER_STARTUP: u32 = 0xE129_F000;
+    /// The BIOS opcode latched on return from a system call: the word at
+    /// `0x188 + 8`.
+    pub const AFTER_SWI: u32 = 0xE3A0_2004;
+}
+
 /// The GBA memory bus and every memory-mapped device hanging off it.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct Bus {
@@ -61,6 +98,10 @@ pub struct Bus {
     /// section of its own.
     #[serde(skip)]
     pub gpio: Gpio,
+    /// Recent fetches, for open-bus and protected BIOS reads. Like
+    /// `gpio`, a trailing section of a [`Snapshot`](crate::Snapshot).
+    #[serde(skip)]
+    latches: Cell<OpenBus>,
     /// Access costs, decoded from `WAITCNT`.
     pub wait: WaitStates,
     /// Cycles spent on accesses since the last [`Memory::take_access_cycles`].
@@ -96,6 +137,7 @@ impl Bus {
             video: VideoMemory::new(),
             cartridge,
             gpio: Gpio::default(),
+            latches: Cell::new(OpenBus::default()),
             wait: WaitStates::default(),
             access_cycles: Cell::new(0),
             next_sequential: Cell::new(u32::MAX),
@@ -152,6 +194,55 @@ impl Bus {
         let i = address as usize;
         if i + 4 <= BIOS_SIZE {
             self.bios[i..i + 4].copy_from_slice(&value.to_le_bytes());
+        }
+    }
+
+    /// What the bus remembers of past fetches.
+    #[must_use]
+    pub fn open_bus(&self) -> OpenBus {
+        self.latches.get()
+    }
+
+    /// Restores what [`Bus::open_bus`] returned.
+    pub fn set_open_bus(&mut self, open_bus: OpenBus) {
+        self.latches.set(open_bus);
+    }
+
+    /// Sets the opcode a protected BIOS read returns, for an emulated
+    /// BIOS that never runs the code which would have left it there.
+    pub fn latch_bios(&mut self, opcode: u32) {
+        self.latches.get_mut().bios = opcode;
+    }
+
+    /// Records a fetch from `address`, *before* reading it so that a fetch
+    /// from the BIOS may read the BIOS.
+    fn begin_fetch(&self, address: u32) {
+        let mut open_bus = self.latches.get();
+        open_bus.in_bios = (address as usize) < BIOS_SIZE;
+        self.latches.set(open_bus);
+    }
+
+    fn end_fetch(&self, value: u32) {
+        let mut open_bus = self.latches.get();
+        open_bus.fetch = value;
+        if open_bus.in_bios {
+            open_bus.bios = value;
+        }
+        self.latches.set(open_bus);
+    }
+
+    /// The word a read of `address` in the BIOS page returns: the BIOS
+    /// itself while it runs, else the opcode it supplied last, and open
+    /// bus past its end.
+    fn bios_word(&self, address: u32) -> u32 {
+        let open_bus = self.latches.get();
+        let off = page_offset(address) as usize & !3;
+        if off >= BIOS_SIZE {
+            open_bus.fetch
+        } else if open_bus.in_bios {
+            get32(&self.bios, off)
+        } else {
+            open_bus.bios
         }
     }
 
@@ -217,7 +308,7 @@ impl Memory for Bus {
         self.account(address, 1);
         let off = page_offset(address);
         match MemoryRegion::from_address(address) {
-            Some(MemoryRegion::Bios) => self.bios.get(off as usize).copied().unwrap_or(0),
+            Some(MemoryRegion::Bios) => (self.bios_word(address) >> ((address & 3) * 8)) as u8,
             Some(MemoryRegion::Ewram) => self.ewram[off as usize & (EWRAM_SIZE - 1)],
             Some(MemoryRegion::Iwram) => self.iwram[off as usize & (IWRAM_SIZE - 1)],
             Some(MemoryRegion::Io) => self.io.read8(off),
@@ -230,7 +321,7 @@ impl Memory for Bus {
                 None => self.cartridge.read8(address & 0x01FF_FFFF),
             },
             Some(MemoryRegion::Sram) => self.backup.read(off),
-            None => 0,
+            None => (self.latches.get().fetch >> ((address & 3) * 8)) as u8,
         }
     }
 
@@ -240,10 +331,7 @@ impl Memory for Bus {
         self.account(address, 2);
         let off = page_offset(address);
         match MemoryRegion::from_address(address) {
-            Some(MemoryRegion::Bios) => self
-                .bios
-                .get(off as usize..off as usize + 2)
-                .map_or(0, |b| get16(b, 0)),
+            Some(MemoryRegion::Bios) => (self.bios_word(address) >> ((address & 2) * 8)) as u16,
             Some(MemoryRegion::Ewram) => get16(&self.ewram, off as usize & (EWRAM_SIZE - 1)),
             Some(MemoryRegion::Iwram) => get16(&self.iwram, off as usize & (IWRAM_SIZE - 1)),
             Some(MemoryRegion::Io) => self.io.read16(off),
@@ -259,7 +347,7 @@ impl Memory for Bus {
             // SRAM is on an 8-bit bus: the addressed byte is repeated
             // across the halfword.
             Some(MemoryRegion::Sram) => u16::from(self.backup.read(page_offset(exact))) * 0x0101,
-            None => 0,
+            None => (self.latches.get().fetch >> ((address & 2) * 8)) as u16,
         }
     }
 
@@ -269,10 +357,7 @@ impl Memory for Bus {
         self.account(address, 4);
         let off = page_offset(address);
         match MemoryRegion::from_address(address) {
-            Some(MemoryRegion::Bios) => self
-                .bios
-                .get(off as usize..off as usize + 4)
-                .map_or(0, |b| get32(b, 0)),
+            Some(MemoryRegion::Bios) => self.bios_word(address),
             Some(MemoryRegion::Ewram) => get32(&self.ewram, off as usize & (EWRAM_SIZE - 1)),
             Some(MemoryRegion::Iwram) => get32(&self.iwram, off as usize & (IWRAM_SIZE - 1)),
             Some(MemoryRegion::Io) => self.io.read32(off),
@@ -293,7 +378,7 @@ impl Memory for Bus {
             Some(MemoryRegion::Sram) => {
                 u32::from(self.backup.read(page_offset(exact))) * 0x0101_0101
             }
-            None => 0,
+            None => self.latches.get().fetch,
         }
     }
 
@@ -419,6 +504,20 @@ impl Memory for Bus {
         }
     }
 
+    fn fetch16(&self, address: u32) -> u16 {
+        self.begin_fetch(address);
+        let opcode = self.read16(address);
+        self.end_fetch(u32::from(opcode) * 0x0001_0001);
+        opcode
+    }
+
+    fn fetch32(&self, address: u32) -> u32 {
+        self.begin_fetch(address);
+        let opcode = self.read32(address);
+        self.end_fetch(opcode);
+        opcode
+    }
+
     fn take_access_cycles(&self) -> u32 {
         self.access_cycles.replace(0)
     }
@@ -456,6 +555,38 @@ mod tests {
             bus.write16(base, 0xBBCC);
             assert_eq!(bus.read32(base), 0xAA34_BBCC);
         }
+    }
+
+    #[test]
+    fn the_bios_reads_back_only_while_it_runs() {
+        let mut bus = bus();
+        bus.poke_bios(0x100, 0x1111_1111);
+        bus.poke_bios(0x200, 0xE129_F000);
+        bus.fetch32(0x200);
+        assert_eq!(bus.read32(0x100), 0x1111_1111, "unlocked from inside");
+
+        bus.fetch32(base::ROM_WS0 + 0x1F0);
+        assert_eq!(bus.read32(0x100), 0xE129_F000, "last BIOS opcode");
+        assert_eq!(bus.read16(0x102), 0xE129);
+        assert_eq!(bus.read8(0x101), 0xF0);
+
+        bus.latch_bios(OpenBus::AFTER_SWI);
+        assert_eq!(bus.read32(0x0), OpenBus::AFTER_SWI);
+    }
+
+    #[test]
+    fn unmapped_reads_return_the_last_fetch() {
+        let bus = bus();
+        bus.fetch32(base::ROM_WS0 + 0x1F0);
+        for address in [0x0100_0000, 0x1000_0000, 0x0000_4000] {
+            assert_eq!(bus.read32(address), 0xDEAD_BEEF, "{address:#x}");
+        }
+        assert_eq!(bus.read16(0x1000_0002), 0xDEAD);
+        assert_eq!(bus.read8(0x1000_0001), 0xBE);
+
+        // A THUMB fetch shows up in both halves of the bus.
+        bus.fetch16(base::ROM_WS0 + 0x1F2);
+        assert_eq!(bus.read32(0x1000_0000), 0xDEAD_DEAD);
     }
 
     #[test]
@@ -592,6 +723,7 @@ mod tests {
         bus.write32(base::ROM_WS0 + 0x1F0, 0);
         assert_eq!(bus.read32(base::ROM_WS0 + 0x1F0), 0xDEAD_BEEF);
         bus.write32(base::BIOS, 0xFFFF_FFFF);
+        bus.fetch32(base::BIOS + 8);
         assert_eq!(bus.read32(base::BIOS), 0);
     }
 
@@ -605,6 +737,7 @@ mod tests {
         let mut bios = vec![0; BIOS_SIZE];
         bios[0..4].copy_from_slice(&[0x18, 0x00, 0x00, 0xEA]); // b 0x68
         bus.load_bios(&bios).unwrap();
+        bus.fetch32(base::BIOS + 8);
         assert_eq!(bus.read32(base::BIOS), 0xEA00_0018);
     }
 

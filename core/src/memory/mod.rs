@@ -32,7 +32,7 @@ pub mod video;
 pub mod wait;
 
 pub use backup::{Backup, SaveType};
-pub use bus::Bus;
+pub use bus::{Bus, OpenBus};
 pub use cartridge::{Cartridge, Header};
 pub use gpio::{DateTime, Gpio};
 pub use io::{Interrupt, IoRegisters};
@@ -58,6 +58,18 @@ pub trait Memory {
     fn write16(&mut self, address: u32, value: u16);
     /// Writes a word to the word containing `address`.
     fn write32(&mut self, address: u32, value: u32);
+
+    /// Fetches a THUMB opcode. Unlike a data read, a fetch is what the
+    /// bus remembers: it decides what open-bus and protected BIOS reads
+    /// return. Memories without open bus just read.
+    fn fetch16(&self, address: u32) -> u16 {
+        self.read16(address)
+    }
+
+    /// Fetches an ARM opcode; see [`Memory::fetch16`].
+    fn fetch32(&self, address: u32) -> u32 {
+        self.read32(address)
+    }
 
     /// Returns the cycles spent on accesses since the previous call and
     /// resets the count. Memories without timing report zero.
