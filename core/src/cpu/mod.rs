@@ -160,9 +160,9 @@ impl Cpu {
     #[inline]
     fn fetch(&self, mem: &impl Memory, address: u32) -> u32 {
         if self.thumb() {
-            u32::from(mem.read16(address))
+            u32::from(mem.fetch16(address))
         } else {
-            mem.read32(address)
+            mem.fetch32(address)
         }
     }
 

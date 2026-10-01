@@ -26,8 +26,14 @@ pub const INTR_CHECK_FLAGS: u32 = 0x0300_7FF8;
 /// 0x2C: ldr   pc, [r0, #-4]       ; [0x03FFFFFC] = [0x03007FFC]
 /// 0x30: ldmfd sp!, {r0-r3, r12, lr}
 /// 0x34: subs  pc, lr, #4
+/// 0x3C: (never executed)
 /// ```
-pub const IRQ_STUB: [(u32, u32); 7] = [
+///
+/// The offsets keep the real handler's spacing, so the opcodes a
+/// protected BIOS read returns match hardware: `subs` while the game's
+/// handler runs, and afterwards the word the return prefetched, which on
+/// hardware is `ldr r12, [lr, #-2]!` from the SWI entry.
+pub const IRQ_STUB: [(u32, u32); 8] = [
     (0x18, 0xEA00_0000),
     (0x20, 0xE92D_500F),
     (0x24, 0xE3A0_0301),
@@ -35,6 +41,7 @@ pub const IRQ_STUB: [(u32, u32); 7] = [
     (0x2C, 0xE510_F004),
     (0x30, 0xE8BD_500F),
     (0x34, 0xE25E_F004),
+    (0x3C, 0xE55E_C002),
 ];
 
 /// Address of the game's IRQ handler pointer, read by the BIOS.

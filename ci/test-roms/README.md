@@ -17,10 +17,7 @@ checked against its sha256 before it runs. None are committed here.
 
 | Source | Licence | What |
 | ------ | ------- | ---- |
-| [jsmolka/gba-tests](https://github.com/jsmolka/gba-tests) | MIT | ARM and THUMB instructions, memory mirrors and widths, save chips, three PPU demos |
-
-`bios/bios.gba` from the same suite is left out until BIOS read
-protection lands (#13): it fails its first test.
+| [jsmolka/gba-tests](https://github.com/jsmolka/gba-tests) | MIT | ARM and THUMB instructions, memory mirrors and widths, BIOS read protection, save chips, three PPU demos |
 
 ## Adding a ROM
 
