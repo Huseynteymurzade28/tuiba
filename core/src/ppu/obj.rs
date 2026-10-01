@@ -4,6 +4,10 @@
 //! the first opaque sprite in OAM order together with its priority;
 //! among sprites OAM order wins outright, the priority attribute only
 //! matters against backgrounds (this is the real hardware behaviour).
+//!
+//! The hardware has a fixed number of cycles per line for drawing
+//! objects (see [`line_budget`]); objects that do not fit are cut off
+//! where the cycles run out, and the ones after them are not drawn.
 
 use crate::memory::VideoMemory;
 use crate::memory::io::{IoRegisters, reg};
@@ -16,6 +20,22 @@ const OBJ_VRAM_BASE: usize = 0x1_0000;
 const OBJ_PALETTE_BASE: usize = 0x200;
 /// Number of OAM entries.
 const OBJ_COUNT: usize = 128;
+
+/// OBJ rendering cycles per line, and with `DISPCNT` bit 5 ("H-Blank
+/// interval free") set, which gives HBlank's cycles to the CPU instead.
+const CYCLES_PER_LINE: i32 = 1210;
+const CYCLES_PER_LINE_HBLANK_FREE: i32 = 954;
+/// Cycles an affine object spends on its matrix before its pixels.
+const AFFINE_SETUP_CYCLES: i32 = 10;
+
+/// The cycles available for objects on a line under `dispcnt`.
+fn line_budget(dispcnt: u16) -> i32 {
+    if dispcnt & (1 << 5) != 0 {
+        CYCLES_PER_LINE_HBLANK_FREE
+    } else {
+        CYCLES_PER_LINE
+    }
+}
 
 /// `(width, height)` for each `(shape, size)` combination.
 const SIZES: [[(usize, usize); 4]; 3] = [
@@ -193,8 +213,9 @@ pub fn render_line(io: &IoRegisters, video: &VideoMemory, y: usize, out: &mut Ob
     let bitmap_mode = (dispcnt & 0x7) >= 3;
     let mosaic = Mosaic::read(io);
     let y = y as i32;
+    let mut budget = line_budget(dispcnt);
 
-    for index in 0..OBJ_COUNT {
+    'objects: for index in 0..OBJ_COUNT {
         let Some(obj) = Object::read(video, index) else {
             continue;
         };
@@ -214,8 +235,20 @@ pub fn render_line(io: &IoRegisters, video: &VideoMemory, y: usize, out: &mut Ob
 
         let matrix = obj.affine.map(|i| affine_params(video, i));
         let (half_w, half_h) = (box_w as i32 / 2, box_h as i32 / 2);
+        // Every pixel of the box costs, on screen or not: one cycle, or
+        // two for an affine object after its setup.
+        let pixel_cost = if matrix.is_some() {
+            budget -= AFFINE_SETUP_CYCLES;
+            2
+        } else {
+            1
+        };
 
         for ix in 0..box_w {
+            if budget < pixel_cost {
+                break 'objects;
+            }
+            budget -= pixel_cost;
             let sx = obj.x + ix as i32;
             if !(0..SCREEN_WIDTH as i32).contains(&sx) {
                 continue;
@@ -288,6 +321,56 @@ mod tests {
         let mut out = ObjLine::default();
         render_line(io, video, y, &mut out);
         (out.colors, out.priorities)
+    }
+
+    /// `count` 64x64 sprites off the left edge on line 0, then a visible
+    /// one at x = 0 using tile 0, which is solid colour 1.
+    fn crowded_line(video: &mut VideoMemory, count: usize, affine: bool) {
+        video.vram[OBJ_VRAM_BASE..OBJ_VRAM_BASE + 32 * 64].fill(0x11);
+        // Square shape, size 3 (64x64); x = -64 as 9 bits.
+        let a0 = if affine { 1 << 8 } else { 0 };
+        for i in 0..count {
+            write_oam(video, i, a0, (3 << 14) | (512 - 64), 1 << 12);
+        }
+        write_oam(video, count, a0, 3 << 14, 1 << 12);
+        // Identity matrix in group 0.
+        video.oam[6..8].copy_from_slice(&0x100u16.to_le_bytes());
+        video.oam[30..32].copy_from_slice(&0x100u16.to_le_bytes());
+    }
+
+    /// Pixels of line 0 the visible sprite managed to draw.
+    fn drawn(io: &IoRegisters, video: &VideoMemory) -> usize {
+        render(io, video, 0)
+            .0
+            .iter()
+            .take_while(|&&c| c == 0x001F)
+            .count()
+    }
+
+    #[test]
+    fn objects_past_the_cycle_budget_are_cut_off() {
+        let (mut io, mut video) = setup();
+        crowded_line(&mut video, 18, false);
+        // 18 * 64 = 1152 of 1210 cycles spent off screen.
+        assert_eq!(drawn(&io, &video), 1210 - 18 * 64);
+
+        io.write16(reg::DISPCNT, 1 << 5); // H-Blank interval free
+        crowded_line(&mut video, 14, false);
+        assert_eq!(drawn(&io, &video), 954 - 14 * 64);
+
+        crowded_line(&mut video, 30, false);
+        assert_eq!(drawn(&io, &video), 0);
+    }
+
+    #[test]
+    fn affine_objects_cost_twice_per_pixel_plus_setup() {
+        let (io, mut video) = setup();
+        crowded_line(&mut video, 9, true);
+        // 9 * (10 + 128) = 1242 > 1210: the ninth already ran out.
+        assert_eq!(drawn(&io, &video), 0);
+        crowded_line(&mut video, 8, true);
+        // 8 * 138 = 1104; 106 left, 10 for setup, 48 pixels at 2.
+        assert_eq!(drawn(&io, &video), 48);
     }
 
     #[test]
