@@ -140,60 +140,135 @@ impl Dma {
     pub fn take_pending(&mut self) -> u8 {
         std::mem::take(&mut self.pending)
     }
+
+    /// Takes the highest-priority waiting channel numbered below `below`
+    /// (the lower the number, the higher the priority), so a channel
+    /// that is running can let only the ones that outrank it in.
+    pub fn take_next_below(&mut self, below: usize) -> Option<usize> {
+        let n = self.pending.trailing_zeros() as usize;
+        (n < below).then(|| {
+            self.pending &= !(1 << n);
+            n
+        })
+    }
+
+    /// Drops a waiting request for channel `n`.
+    pub fn cancel(&mut self, n: usize) {
+        self.pending &= !(1 << n);
+    }
 }
 
-/// Performs channel `n`'s transfer on `mem`. Returns the interrupt to raise
-/// on completion, if the channel asks for one.
+/// Performs channel `n`'s whole transfer on `mem`. Returns the interrupt
+/// to raise on completion, if the channel asks for one.
+///
+/// The system steps a [`Transfer`] unit by unit instead, so the rest of
+/// the machine moves while it runs; this is the same thing in one go.
 pub fn run(dma: &mut Dma, n: usize, mem: &mut impl Memory) -> Option<Interrupt> {
-    let ch = &mut dma.channels[n];
-    if !ch.enabled() {
-        return None;
+    let mut transfer = Transfer::begin(dma, n)?;
+    while !transfer.done() {
+        transfer.unit(mem);
     }
-    let fifo = ch.timing() == Timing::Special;
-    if fifo && n == 3 {
-        // Video capture: not emulated. Leave the channel armed so software
-        // sees it as running, but move nothing.
-        return None;
-    }
+    transfer.finish(dma)
+}
 
-    // A FIFO refill is always four words to a fixed destination.
-    let word = fifo || ch.control & Channel::WORD != 0;
-    let unit = if word { 4 } else { 2 };
-    let count = if fifo {
-        FIFO_TRANSFER_WORDS
-    } else {
-        ch.unit_count(n)
-    };
-    let src_ctrl = (ch.control >> 7) & 0b11;
-    let dst_ctrl = if fifo { 2 } else { (ch.control >> 5) & 0b11 };
+/// A transfer in progress on one channel.
+///
+/// Started by [`Transfer::begin`], advanced one unit at a time with
+/// [`Transfer::unit`], and written back to its channel by
+/// [`Transfer::finish`]. It holds its own copy of the addresses, so the
+/// bus is free for the rest of the machine between units.
+#[derive(Debug)]
+pub struct Transfer {
+    /// The channel.
+    n: usize,
+    word: bool,
+    fifo: bool,
+    remaining: u32,
+    src: u32,
+    dst: u32,
+    src_ctrl: u16,
+    dst_ctrl: u16,
+}
 
-    let mut src = ch.latched_source & !(unit - 1);
-    let mut dst = ch.latched_dest & !(unit - 1);
-    for _ in 0..count {
-        if word {
-            mem.write32(dst, mem.read32(src));
-        } else {
-            mem.write16(dst, mem.read16(src));
+impl Transfer {
+    /// Starts channel `n`'s transfer, or returns `None` if there is
+    /// nothing to move: the channel is off, or it is channel 3 in video
+    /// capture mode (not emulated; the channel stays armed so software
+    /// sees it running).
+    #[must_use]
+    pub fn begin(dma: &Dma, n: usize) -> Option<Self> {
+        let ch = &dma.channels[n];
+        if !ch.enabled() {
+            return None;
         }
-        src = step(src, src_ctrl, unit);
-        dst = step(dst, dst_ctrl, unit);
+        let fifo = ch.timing() == Timing::Special;
+        if fifo && n == 3 {
+            return None;
+        }
+        // A FIFO refill is always four words to a fixed destination.
+        let word = fifo || ch.control & Channel::WORD != 0;
+        let unit = if word { 4 } else { 2 };
+        Some(Self {
+            n,
+            word,
+            fifo,
+            remaining: if fifo {
+                FIFO_TRANSFER_WORDS
+            } else {
+                ch.unit_count(n)
+            },
+            src: ch.latched_source & !(unit - 1),
+            dst: ch.latched_dest & !(unit - 1),
+            src_ctrl: (ch.control >> 7) & 0b11,
+            dst_ctrl: if fifo { 2 } else { (ch.control >> 5) & 0b11 },
+        })
     }
-    ch.latched_source = src;
 
-    if fifo || ch.control & Channel::REPEAT != 0 && ch.timing() != Timing::Immediate {
-        // Repeat: keep running on later triggers; dest reloads with mode 3.
-        ch.latched_dest = if dst_ctrl == 3 { ch.dest } else { dst };
-    } else {
-        ch.latched_dest = dst;
-        ch.control &= !Channel::ENABLE;
+    /// Whether every unit has been moved.
+    #[must_use]
+    pub fn done(&self) -> bool {
+        self.remaining == 0
     }
 
-    (ch.control & Channel::IRQ != 0).then_some(match n {
-        0 => Interrupt::Dma0,
-        1 => Interrupt::Dma1,
-        2 => Interrupt::Dma2,
-        _ => Interrupt::Dma3,
-    })
+    /// Moves one unit (a halfword or a word).
+    pub fn unit(&mut self, mem: &mut impl Memory) {
+        let unit = if self.word {
+            mem.write32(self.dst, mem.read32(self.src));
+            4
+        } else {
+            mem.write16(self.dst, mem.read16(self.src));
+            2
+        };
+        self.src = step(self.src, self.src_ctrl, unit);
+        self.dst = step(self.dst, self.dst_ctrl, unit);
+        self.remaining -= 1;
+    }
+
+    /// Writes the addresses back to the channel and disarms it unless it
+    /// repeats. Returns the interrupt to raise, if the channel asks for
+    /// one.
+    pub fn finish(self, dma: &mut Dma) -> Option<Interrupt> {
+        let ch = &mut dma.channels[self.n];
+        ch.latched_source = self.src;
+        if self.fifo || ch.control & Channel::REPEAT != 0 && ch.timing() != Timing::Immediate {
+            // Repeat: keep running on later triggers; dest reloads with mode 3.
+            ch.latched_dest = if self.dst_ctrl == 3 {
+                ch.dest
+            } else {
+                self.dst
+            };
+        } else {
+            ch.latched_dest = self.dst;
+            ch.control &= !Channel::ENABLE;
+        }
+
+        (ch.control & Channel::IRQ != 0).then_some(match self.n {
+            0 => Interrupt::Dma0,
+            1 => Interrupt::Dma1,
+            2 => Interrupt::Dma2,
+            _ => Interrupt::Dma3,
+        })
+    }
 }
 
 /// Applies an address-control mode: 0 = increment, 1 = decrement,

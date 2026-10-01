@@ -132,6 +132,17 @@ impl Ppu {
         io.set_raw16(reg::DISPSTAT, stat);
     }
 
+    /// Cycles until the next HBlank start or line end, whichever comes
+    /// first. Stepping by no more than this reports at most one event.
+    #[must_use]
+    pub fn cycles_to_event(&self) -> u32 {
+        if self.in_hblank {
+            CYCLES_PER_LINE - self.line_cycle
+        } else {
+            HBLANK_START - self.line_cycle
+        }
+    }
+
     /// Advances the PPU by `cycles` and reports the events that occurred.
     pub fn step(&mut self, cycles: u32, io: &mut IoRegisters, video: &VideoMemory) -> Events {
         self.line_cycle += cycles;

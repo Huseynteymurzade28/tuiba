@@ -156,24 +156,33 @@ impl Gba {
             cycles
         };
 
-        let cycles = cycles + self.run_dma();
-        self.step_timers(cycles);
-        self.bus.io.apu.step(cycles);
-
-        let events = self.ppu.step(cycles, &mut self.bus.io, &self.bus.video);
-        if events.hblank {
-            self.bus.io.dma.trigger(Timing::HBlank);
-        }
-        if events.vblank {
-            self.bus.io.dma.trigger(Timing::VBlank);
-        }
-        // Cycles of DMAs started by this line's events, and of an IRQ
-        // entry, are only picked up with the next step; the PPU has
-        // already moved on for this one.
-        self.run_dma();
-
+        let mut frame = self.advance(cycles);
+        frame |= self.run_dma();
         self.service_interrupts();
-        events.vblank
+        frame
+    }
+
+    /// Moves everything but the CPU forward by `cycles`: timers, sound
+    /// and the PPU, stopping at each PPU event so every HBlank and VBlank
+    /// triggers its DMAs at its own moment, however long the stretch.
+    /// Returns `true` if a frame was completed.
+    fn advance(&mut self, mut cycles: u32) -> bool {
+        let mut frame = false;
+        while cycles > 0 {
+            let chunk = cycles.min(self.ppu.cycles_to_event());
+            cycles -= chunk;
+            self.step_timers(chunk);
+            self.bus.io.apu.step(chunk);
+            let events = self.ppu.step(chunk, &mut self.bus.io, &self.bus.video);
+            if events.hblank {
+                self.bus.io.dma.trigger(Timing::HBlank);
+            }
+            if events.vblank {
+                self.bus.io.dma.trigger(Timing::VBlank);
+                frame = true;
+            }
+        }
+        frame
     }
 
     /// Advances the timers, raising their interrupts and feeding the sound
@@ -197,26 +206,44 @@ impl Gba {
         }
     }
 
-    /// Runs every DMA channel that has been triggered and returns the
-    /// cycles the transfers took. The CPU is stalled for that long: it
-    /// is simply not stepped in the meantime.
-    fn run_dma(&mut self) -> u32 {
-        let pending = self.bus.io.dma.take_pending();
-        let mut cycles = 0;
-        for n in (0..4).filter(|n| pending & (1 << n) != 0) {
-            // The transfer needs the whole bus, so the controller state is
-            // moved out for its duration.
-            let mut controller = std::mem::take(&mut self.bus.io.dma);
-            self.hint_eeprom(&controller.channels[n], n);
-            let irq = dma::run(&mut controller, n, &mut self.bus);
-            self.bus.io.dma = controller;
-            if let Some(irq) = irq {
-                self.bus.io.request_interrupt(irq);
-            }
-            // Two internal cycles to start, plus the bus time.
-            cycles += DMA_START_CYCLES + self.bus.take_access_cycles();
+    /// Runs every DMA channel that has been triggered, highest priority
+    /// first. The CPU is stalled meanwhile — it is simply not stepped —
+    /// while the rest of the machine keeps time with the transfers.
+    /// Returns `true` if a frame was completed during them.
+    fn run_dma(&mut self) -> bool {
+        let mut frame = false;
+        while let Some(n) = self.bus.io.dma.take_next_below(4) {
+            frame |= self.run_channel(n);
         }
-        cycles
+        frame
+    }
+
+    /// Runs channel `n`'s transfer a unit at a time, advancing the clock
+    /// by each unit's bus time. A higher-priority channel triggered
+    /// along the way (an HBlank or sound FIFO DMA during a long copy)
+    /// runs to completion in between, as on hardware.
+    fn run_channel(&mut self, n: usize) -> bool {
+        let channel = self.bus.io.dma.channels[n];
+        self.hint_eeprom(&channel, n);
+        let Some(mut transfer) = dma::Transfer::begin(&self.bus.io.dma, n) else {
+            return false;
+        };
+        // Two internal cycles to start.
+        let mut frame = self.advance(DMA_START_CYCLES);
+        while !transfer.done() {
+            while let Some(m) = self.bus.io.dma.take_next_below(n) {
+                frame |= self.run_channel(m);
+            }
+            transfer.unit(&mut self.bus);
+            let cycles = self.bus.take_access_cycles();
+            frame |= self.advance(cycles);
+        }
+        // A trigger that came while the channel was busy is lost.
+        self.bus.io.dma.cancel(n);
+        if let Some(irq) = transfer.finish(&mut self.bus.io.dma) {
+            self.bus.io.request_interrupt(irq);
+        }
+        frame
     }
 
     /// EEPROM chips cannot tell their own size; the length of the DMA that
@@ -324,6 +351,66 @@ mod tests {
         assert!(gba.cpu.cycles >= (lines - 1) * u64::from(CYCLES_PER_LINE));
         assert!(gba.cpu.cycles < u64::from(CYCLES_PER_FRAME));
         assert_eq!(gba.ppu.vcount(), 160);
+    }
+
+    /// Arms DMA channel `n` (enable bit included in `control`).
+    fn arm_dma(gba: &mut Gba, n: u32, src: u32, dst: u32, count: u16, control: u16) {
+        let io = &mut gba.bus.io;
+        io.write32(reg::DMA0SAD + 12 * n, src);
+        io.write32(reg::DMA0SAD + 12 * n + 4, dst);
+        io.write16(reg::DMA0SAD + 12 * n + 8, count);
+        io.write16(reg::DMA0CNT_H + 12 * n, control);
+    }
+
+    /// Sets up a long immediate DMA3 copy within EWRAM next to an HBlank
+    /// DMA0 that appends one halfword per line to a log at `LOG`.
+    const LOG: u32 = 0x0201_0000;
+    fn long_copy_with_hblank_log(start_line: u16) -> Gba {
+        let mut gba = gba_with(&[0xEAFF_FFFE]); // b .
+        gba.ppu.set_line(start_line, &mut gba.bus.io);
+        for i in 0..256 {
+            gba.bus.write16(0x0200_0000 + 2 * i, i as u16 + 1);
+        }
+        // DMA0: HBlank, repeat, halfwords, both addresses incrementing.
+        arm_dma(
+            &mut gba,
+            0,
+            0x0200_0000,
+            LOG,
+            1,
+            0x8000 | (2 << 12) | (1 << 9),
+        );
+        // DMA3: immediate, 0x2000 halfwords — a few dozen lines' worth.
+        arm_dma(&mut gba, 3, 0x0202_0000, 0x0203_0000, 0x2000, 0x8000);
+        gba
+    }
+
+    /// Entries in the HBlank log.
+    fn hblank_log_len(gba: &Gba) -> u32 {
+        (0..256)
+            .take_while(|&i| gba.bus.read16(LOG + 2 * i) != 0)
+            .count() as u32
+    }
+
+    #[test]
+    fn hblank_dma_runs_on_every_line_of_a_long_transfer() {
+        let mut gba = long_copy_with_hblank_log(0);
+        assert!(!gba.run_dma());
+        let hblank = gba.bus.io.read16(reg::DISPSTAT) & 0b10 != 0;
+        let lines = u32::from(gba.ppu.vcount()) + u32::from(hblank);
+        assert!(lines > 20, "the copy spans many lines ({lines})");
+        // Each HBlank preempted the copy and logged its own entry.
+        assert_eq!(hblank_log_len(&gba), lines);
+        assert_eq!(gba.bus.read16(LOG + 2 * (lines - 1)), lines as u16);
+    }
+
+    #[test]
+    fn a_frame_completed_during_a_transfer_is_reported() {
+        let mut gba = long_copy_with_hblank_log(150);
+        assert!(gba.run_dma(), "VBlank came mid-copy");
+        assert!(gba.ppu.vcount() > 160);
+        // HBlank DMA only fires on visible lines.
+        assert_eq!(hblank_log_len(&gba), 10);
     }
 
     #[test]
