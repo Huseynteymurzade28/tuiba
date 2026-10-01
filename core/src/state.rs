@@ -30,7 +30,8 @@ const FORMAT_VERSION: u16 = 1;
 /// Magic, version and cartridge fingerprint, ahead of the payload.
 ///
 /// The payload is the machine, then trailing sections for state added
-/// since version 1 — the GPIO port, then the open-bus latches. A version-1 file simply
+/// since version 1 — the GPIO port, the open-bus latches, then the affine
+/// backgrounds' internal reference points. A version-1 file simply
 /// ends before them and reads back with those parts as they power up;
 /// a machine gaining a section does not strand every state already on
 /// disk the way a new field in the machine itself would.
@@ -79,7 +80,10 @@ impl Snapshot {
         let bytes = postcard::to_extend(&self.gba, bytes).expect("a machine is always encodable");
         let bytes = postcard::to_extend(&self.gba.bus.gpio, bytes)
             .expect("a GPIO port is always encodable");
-        postcard::to_extend(&self.gba.bus.open_bus(), bytes).expect("open bus is always encodable")
+        let bytes = postcard::to_extend(&self.gba.bus.open_bus(), bytes)
+            .expect("open bus is always encodable");
+        postcard::to_extend(&self.gba.bus.io.affine_refs(), bytes)
+            .expect("reference points are always encodable")
     }
 
     /// Reads back what [`Snapshot::to_bytes`] wrote, putting `cartridge`'s
@@ -114,12 +118,20 @@ impl Snapshot {
         let corrupt = |err: postcard::Error| GbaError::StateCorrupt(err.to_string());
         let (mut gba, rest): (Gba, _) =
             postcard::take_from_bytes(&bytes[HEADER_LEN..]).map_err(corrupt)?;
+        // Reference points missing from an older file come from their
+        // registers, which is what they hold anywhere in VBlank.
+        gba.bus.io.reload_affine_refs();
         if !rest.is_empty() {
             let (gpio, rest) = postcard::take_from_bytes(rest).map_err(corrupt)?;
             gba.bus.gpio = gpio;
             if !rest.is_empty() {
-                gba.bus
-                    .set_open_bus(postcard::from_bytes(rest).map_err(corrupt)?);
+                let (open_bus, rest) = postcard::take_from_bytes(rest).map_err(corrupt)?;
+                gba.bus.set_open_bus(open_bus);
+                if !rest.is_empty() {
+                    gba.bus
+                        .io
+                        .set_affine_refs(postcard::from_bytes(rest).map_err(corrupt)?);
+                }
             }
         }
         gba.bus.cartridge.attach_rom(cartridge.shared_rom());
@@ -359,6 +371,26 @@ mod tests {
         without = postcard::to_extend(&gba.bus.gpio, without).unwrap();
         let old = Snapshot::from_bytes(&without, &cartridge).unwrap();
         assert_eq!(old.gba.bus.open_bus(), OpenBus::default());
+    }
+
+    /// The affine reference points follow the open bus; a file without
+    /// them loads them from their registers.
+    #[test]
+    fn affine_reference_points_survive_and_older_files_still_load() {
+        let cartridge = Cartridge::from_bytes(minimal_rom()).unwrap();
+        let mut gba = Gba::new(cartridge.clone());
+        gba.bus.io.write32(reg::BG2X, 0x100);
+        gba.bus.io.set_affine_refs([[7, 8], [9, 10]]);
+        let bytes = gba.snapshot().to_bytes();
+        let back = Snapshot::from_bytes(&bytes, &cartridge).unwrap();
+        assert_eq!(back.gba.bus.io.affine_refs(), [[7, 8], [9, 10]]);
+
+        let mut without = bytes[..HEADER_LEN].to_vec();
+        without = postcard::to_extend(&gba, without).unwrap();
+        without = postcard::to_extend(&gba.bus.gpio, without).unwrap();
+        without = postcard::to_extend(&gba.bus.open_bus(), without).unwrap();
+        let old = Snapshot::from_bytes(&without, &cartridge).unwrap();
+        assert_eq!(old.gba.bus.io.affine_refs(), [[0x100, 0], [0, 0]]);
     }
 
     #[test]
