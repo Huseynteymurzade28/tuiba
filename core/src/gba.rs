@@ -143,6 +143,7 @@ impl Gba {
     /// frame was completed.
     pub fn step(&mut self) -> bool {
         self.check_intr_wait();
+        self.bus.journal.enable(self.ppu.drawing());
         let cycles = if self.cpu.halted {
             HALT_STEP.min(CYCLES_PER_LINE)
         } else {
@@ -155,6 +156,8 @@ impl Gba {
             }
             cycles
         };
+        // The instruction's writes count from its last cycle.
+        self.bus.journal.mark(self.ppu.dot_after(cycles));
 
         let mut frame = self.advance(cycles);
         frame |= self.run_dma();
@@ -173,7 +176,10 @@ impl Gba {
             cycles -= chunk;
             self.step_timers(chunk);
             self.bus.io.apu.step(chunk);
-            let events = self.ppu.step(chunk, &mut self.bus.io, &self.bus.video);
+            let bus = &mut self.bus;
+            let events = self
+                .ppu
+                .step(chunk, &mut bus.io, &mut bus.video, &mut bus.journal);
             if events.hblank {
                 self.bus.io.dma.trigger(Timing::HBlank);
             }
@@ -234,8 +240,10 @@ impl Gba {
             while let Some(m) = self.bus.io.dma.take_next_below(n) {
                 frame |= self.run_channel(m);
             }
+            self.bus.journal.enable(self.ppu.drawing());
             transfer.unit(&mut self.bus);
             let cycles = self.bus.take_access_cycles();
+            self.bus.journal.mark(self.ppu.dot_after(cycles));
             frame |= self.advance(cycles);
         }
         // A trigger that came while the channel was busy is lost.
@@ -318,7 +326,7 @@ mod tests {
     use crate::memory::base;
     use crate::memory::io::Interrupt;
     use crate::memory::test_util::rom_with_header;
-    use crate::ppu::{CYCLES_PER_FRAME, SCREEN_WIDTH};
+    use crate::ppu::{CYCLES_PER_FRAME, HBLANK_START, SCREEN_WIDTH};
 
     /// A cartridge whose entry point runs `code` (ARM).
     fn gba_with(code: &[u32]) -> Gba {
@@ -411,6 +419,61 @@ mod tests {
         assert!(gba.ppu.vcount() > 160);
         // HBlank DMA only fires on visible lines.
         assert_eq!(hblank_log_len(&gba), 10);
+    }
+
+    /// Writes `value` to `address` the way the CPU would at the current
+    /// moment, journalled if the PPU is drawing.
+    fn write_now(gba: &mut Gba, address: u32, value: u16) {
+        gba.bus.journal.enable(gba.ppu.drawing());
+        gba.bus.write16(address, value);
+        gba.bus.journal.mark(gba.ppu.dot_after(0));
+    }
+
+    #[test]
+    fn a_palette_write_mid_line_changes_only_the_pixels_after_it() {
+        let mut gba = gba_with(&[0xEAFF_FFFE]); // b .
+        gba.ppu.set_line(0, &mut gba.bus.io); // mode 0, no layers: backdrop
+        gba.advance(4 * 120);
+        write_now(&mut gba, base::PALETTE, 0x001F);
+        gba.advance(CYCLES_PER_LINE * 2 - 4 * 120);
+        let red = crate::ppu::framebuffer::bgr555_to_rgba(0x001F);
+        let black = crate::ppu::framebuffer::bgr555_to_rgba(0);
+        assert_eq!(gba.framebuffer().row(0)[119], black);
+        assert_eq!(gba.framebuffer().row(0)[120], red);
+        assert_eq!(gba.framebuffer().row(0)[239], red);
+        assert_eq!(gba.framebuffer().row(1)[0], red, "the next line is all new");
+    }
+
+    #[test]
+    fn several_mid_line_writes_split_the_line_in_order() {
+        let mut gba = gba_with(&[0xEAFF_FFFE]);
+        gba.ppu.set_line(0, &mut gba.bus.io);
+        gba.advance(4 * 40);
+        write_now(&mut gba, base::PALETTE, 0x001F); // red from 40
+        gba.advance(4 * 80);
+        write_now(&mut gba, base::PALETTE, 0x03E0); // green from 120
+        gba.advance(CYCLES_PER_LINE - 4 * 120);
+        let row = gba.framebuffer().row(0);
+        let colour = crate::ppu::framebuffer::bgr555_to_rgba;
+        assert_eq!(row[39], colour(0));
+        assert_eq!(row[40], colour(0x001F));
+        assert_eq!(row[119], colour(0x001F));
+        assert_eq!(row[120], colour(0x03E0));
+        assert!(gba.bus.journal.is_empty(), "consumed with the line");
+        assert_eq!(gba.bus.read16(base::PALETTE), 0x03E0, "memory ends new");
+    }
+
+    #[test]
+    fn writes_in_hblank_are_not_journalled() {
+        let mut gba = gba_with(&[0xEAFF_FFFE]);
+        gba.ppu.set_line(0, &mut gba.bus.io);
+        gba.advance(HBLANK_START + 8);
+        write_now(&mut gba, base::PALETTE, 0x001F);
+        assert!(gba.bus.journal.is_empty());
+        gba.advance(CYCLES_PER_LINE);
+        let red = crate::ppu::framebuffer::bgr555_to_rgba(0x001F);
+        assert_ne!(gba.framebuffer().row(0)[200], red);
+        assert_eq!(gba.framebuffer().row(1)[0], red);
     }
 
     #[test]

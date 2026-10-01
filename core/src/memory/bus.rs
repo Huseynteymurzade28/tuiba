@@ -16,6 +16,7 @@ use crate::memory::backup::Backup;
 use crate::memory::cartridge::Cartridge;
 use crate::memory::gpio::Gpio;
 use crate::memory::io::{IoRegisters, reg};
+use crate::memory::journal::{self, Journal, Target};
 use crate::memory::video::VideoMemory;
 use crate::memory::wait::WaitStates;
 use crate::memory::{BIOS_SIZE, EWRAM_SIZE, IWRAM_SIZE, Memory, MemoryRegion};
@@ -102,6 +103,10 @@ pub struct Bus {
     /// `gpio`, a trailing section of a [`Snapshot`](crate::Snapshot).
     #[serde(skip)]
     latches: Cell<OpenBus>,
+    /// Video writes made while the PPU draws a line. Always empty
+    /// between lines, so never part of a save state.
+    #[serde(skip)]
+    pub journal: Journal,
     /// Access costs, decoded from `WAITCNT`.
     pub wait: WaitStates,
     /// Cycles spent on accesses since the last [`Memory::take_access_cycles`].
@@ -138,6 +143,7 @@ impl Bus {
             cartridge,
             gpio: Gpio::default(),
             latches: Cell::new(OpenBus::default()),
+            journal: Journal::default(),
             wait: WaitStates::default(),
             access_cycles: Cell::new(0),
             next_sequential: Cell::new(u32::MAX),
@@ -302,6 +308,67 @@ impl Bus {
     }
 }
 
+/// A journalled write in flight: what was at its target before.
+#[derive(Clone, Copy)]
+struct Pending {
+    target: Target,
+    index: usize,
+    len: usize,
+    old: [u8; 4],
+}
+
+impl Bus {
+    /// Where a write of `len` bytes at `address` lands, and what is
+    /// there now, if the journal is recording and the renderer reads it.
+    fn journal_before(&self, address: u32, len: usize) -> Option<Pending> {
+        if !self.journal.is_enabled() {
+            return None;
+        }
+        let off = page_offset(address) & !(len as u32 - 1);
+        let (target, index) = match MemoryRegion::from_address(address)? {
+            MemoryRegion::Io if off < journal::IO_RANGE => (Target::Io, off as usize),
+            MemoryRegion::Palette => (Target::Palette, VideoMemory::palette_index(off)),
+            MemoryRegion::Vram => (Target::Vram, VideoMemory::vram_index(off)),
+            MemoryRegion::Oam => (Target::Oam, VideoMemory::oam_index(off)),
+            _ => return None,
+        };
+        Some(Pending {
+            target,
+            index,
+            len,
+            old: self.peek(target, index, len),
+        })
+    }
+
+    /// Records what [`Bus::journal_before`] saw against what is there now.
+    fn journal_after(&mut self, before: Option<Pending>) {
+        if let Some(Pending {
+            target,
+            index,
+            len,
+            old,
+        }) = before
+        {
+            let new = self.peek(target, index, len);
+            self.journal.record(target, index, &old[..len], &new[..len]);
+        }
+    }
+
+    /// The `len` bytes at `index` of `target`.
+    fn peek(&self, target: Target, index: usize, len: usize) -> [u8; 4] {
+        let mut bytes = [0; 4];
+        for (i, byte) in bytes.iter_mut().take(len).enumerate() {
+            *byte = match target {
+                Target::Io => self.io.read8((index + i) as u32),
+                Target::Palette => self.video.palette[index + i],
+                Target::Vram => self.video.vram[index + i],
+                Target::Oam => self.video.oam[index + i],
+            };
+        }
+        bytes
+    }
+}
+
 impl Memory for Bus {
     /// Reads a byte.
     fn read8(&self, address: u32) -> u8 {
@@ -389,6 +456,7 @@ impl Memory for Bus {
     /// halfword, byte writes to OAM and the VRAM object area are ignored.
     fn write8(&mut self, address: u32, value: u8) {
         self.account(address, 1);
+        let journal = self.journal_before(address, 2);
         let off = page_offset(address);
         match MemoryRegion::from_address(address) {
             Some(MemoryRegion::Ewram) => self.ewram[off as usize & (EWRAM_SIZE - 1)] = value,
@@ -415,12 +483,14 @@ impl Memory for Bus {
             }
             Some(MemoryRegion::Bios | MemoryRegion::Oam | MemoryRegion::Rom) | None => {}
         }
+        self.journal_after(journal);
     }
 
     /// Writes a halfword to an even address.
     fn write16(&mut self, exact: u32, value: u16) {
         let address = exact & !1;
         self.account(address, 2);
+        let journal = self.journal_before(address, 2);
         let off = page_offset(address);
         match MemoryRegion::from_address(address) {
             Some(MemoryRegion::Ewram) => {
@@ -456,12 +526,14 @@ impl Memory for Bus {
             Some(MemoryRegion::Rom) => self.gpio.write16(address & 0x01FF_FFFF, value),
             Some(MemoryRegion::Bios) | None => {}
         }
+        self.journal_after(journal);
     }
 
     /// Writes a word to a word-aligned address.
     fn write32(&mut self, exact: u32, value: u32) {
         let address = exact & !3;
         self.account(address, 4);
+        let journal = self.journal_before(address, 4);
         let off = page_offset(address);
         match MemoryRegion::from_address(address) {
             Some(MemoryRegion::Ewram) => {
@@ -502,6 +574,7 @@ impl Memory for Bus {
             }
             Some(MemoryRegion::Bios) | None => {}
         }
+        self.journal_after(journal);
     }
 
     fn fetch16(&self, address: u32) -> u16 {

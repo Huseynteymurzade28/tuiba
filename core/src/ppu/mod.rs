@@ -22,7 +22,9 @@ pub use framebuffer::{Framebuffer, Rgba, SCREEN_HEIGHT, SCREEN_WIDTH};
 
 use crate::memory::VideoMemory;
 use crate::memory::io::{Interrupt, IoRegisters, reg};
+use crate::memory::journal::Journal;
 use framebuffer::bgr555_to_rgba;
+use std::ops::Range;
 use tiled::{BgControl, Mosaic, TRANSPARENT};
 
 /// Cycles per scanline.
@@ -88,6 +90,13 @@ pub struct Ppu {
     /// Composed 15-bit scanline before conversion to RGBA. Scratch.
     #[serde(skip, default = "blank_line")]
     composed: [u16; SCREEN_WIDTH],
+    /// Where BG2 and BG3 start this line, latched from their internal
+    /// reference points as the line begins: a write to `BGxX/Y` while
+    /// the line is drawn moves the next line, not this one. Relatched
+    /// at the start of every line, so a state taken in VBlank does not
+    /// need it.
+    #[serde(skip)]
+    line_origin: [(i32, i32); 2],
 }
 
 impl Default for Ppu {
@@ -108,7 +117,27 @@ impl Ppu {
             bg_lines: [[TRANSPARENT; SCREEN_WIDTH]; 4],
             obj_line: obj::ObjLine::default(),
             composed: [0; SCREEN_WIDTH],
+            line_origin: [(0, 0); 2],
         }
+    }
+
+    /// Whether the visible part of a visible line is being drawn, the
+    /// stretch during which writes to video state are journalled (see
+    /// [`crate::memory::journal`]).
+    #[must_use]
+    pub fn drawing(&self) -> bool {
+        !self.in_hblank && usize::from(self.vcount) < SCREEN_HEIGHT
+    }
+
+    /// The pixel of the current line being drawn `cycles` from now,
+    /// [`SCREEN_WIDTH`] once the visible part is over.
+    #[must_use]
+    pub fn dot_after(&self, cycles: u32) -> u16 {
+        ((self.line_cycle + cycles) / 4).min(SCREEN_WIDTH as u32) as u16
+    }
+
+    fn latch_origins(&mut self, io: &IoRegisters) {
+        self.line_origin = [io.affine_origin(2), io.affine_origin(3)];
     }
 
     /// Current scanline.
@@ -130,6 +159,7 @@ impl Ppu {
             stat |= dispstat::VBLANK;
         }
         io.set_raw16(reg::DISPSTAT, stat);
+        self.latch_origins(io);
     }
 
     /// Cycles until the next HBlank start or line end, whichever comes
@@ -144,13 +174,23 @@ impl Ppu {
     }
 
     /// Advances the PPU by `cycles` and reports the events that occurred.
-    pub fn step(&mut self, cycles: u32, io: &mut IoRegisters, video: &VideoMemory) -> Events {
+    ///
+    /// `journal` holds the video writes made while the current line was
+    /// being drawn; the line is drawn as they make it look dot by dot,
+    /// and the journal is emptied.
+    pub fn step(
+        &mut self,
+        cycles: u32,
+        io: &mut IoRegisters,
+        video: &mut VideoMemory,
+        journal: &mut Journal,
+    ) -> Events {
         self.line_cycle += cycles;
         let mut events = Events::default();
 
         loop {
             if !self.in_hblank && self.line_cycle >= HBLANK_START {
-                events.hblank |= self.enter_hblank(io, video);
+                events.hblank |= self.enter_hblank(io, video, journal);
             }
             if self.line_cycle < CYCLES_PER_LINE {
                 break;
@@ -162,13 +202,19 @@ impl Ppu {
     }
 
     /// Returns `true` if this was a visible line (HBlank DMA fires).
-    fn enter_hblank(&mut self, io: &mut IoRegisters, video: &VideoMemory) -> bool {
+    fn enter_hblank(
+        &mut self,
+        io: &mut IoRegisters,
+        video: &mut VideoMemory,
+        journal: &mut Journal,
+    ) -> bool {
         self.in_hblank = true;
         let visible = usize::from(self.vcount) < SCREEN_HEIGHT;
         if visible {
-            self.render_line(io, video);
+            self.draw_line(io, video, journal);
             io.advance_affine_refs();
         }
+        journal.clear();
         let stat = io.read16(reg::DISPSTAT);
         io.set_raw16(reg::DISPSTAT, stat | dispstat::HBLANK);
         // The HBlank interrupt fires on every line, VBlank lines included.
@@ -200,6 +246,7 @@ impl Ppu {
             227 => stat &= !dispstat::VBLANK,
             _ => {}
         }
+        self.latch_origins(io);
 
         if self.vcount == stat >> 8 {
             stat |= dispstat::VCOUNT_MATCH;
@@ -212,15 +259,42 @@ impl Ppu {
         entered_vblank
     }
 
-    /// Renders the current scanline: each enabled background into its
-    /// scratch buffer, then composited front-to-back by priority.
-    fn render_line(&mut self, io: &IoRegisters, video: &VideoMemory) {
+    /// Draws the current scanline, replaying the journal's mid-line
+    /// writes: the video state is wound back to how the line began,
+    /// and each stretch of pixels is drawn as it stood when the beam
+    /// got there.
+    fn draw_line(&mut self, io: &mut IoRegisters, video: &mut VideoMemory, journal: &Journal) {
+        if journal.is_empty() {
+            self.render_line(io, video, 0..SCREEN_WIDTH);
+            return;
+        }
+        journal.undo_all(io, video);
+        let (mut from, mut applied) = (0, 0);
+        for &(end, dot) in journal.marks() {
+            let dot = usize::from(dot);
+            if dot > from {
+                self.render_line(io, video, from..dot);
+                from = dot;
+            }
+            journal.redo(applied..end, io, video);
+            applied = end;
+        }
+        journal.redo(applied..journal.len(), io, video);
+        if from < SCREEN_WIDTH {
+            self.render_line(io, video, from..SCREEN_WIDTH);
+        }
+    }
+
+    /// Renders pixels `span` of the current scanline: each enabled
+    /// background into its scratch buffer, then composited front-to-back
+    /// by priority.
+    fn render_line(&mut self, io: &IoRegisters, video: &VideoMemory, span: Range<usize>) {
         let dispcnt = io.read16(reg::DISPCNT);
         let y = usize::from(self.vcount);
 
         // Forced blank: the LCD shows white.
         if dispcnt & (1 << 7) != 0 {
-            self.framebuffer.row_mut(y).fill(0xFFFF_FFFF);
+            self.framebuffer.row_mut(y)[span].fill(0xFFFF_FFFF);
             return;
         }
 
@@ -261,7 +335,7 @@ impl Ppu {
                 _ if affine[bg] => {
                     // A mosaic block repeats its first line, which started
                     // that many PB/PD steps before this one.
-                    let (x, y0) = io.affine_origin(bg);
+                    let (x, y0) = self.line_origin[bg - 2];
                     let params = tiled::AffineParams::read(io, bg);
                     let back = (y - src_y) as i32;
                     let origin = (
@@ -295,8 +369,8 @@ impl Ppu {
             backdrop,
             &mut self.composed,
         );
-        let out = self.framebuffer.row_mut(y);
-        for (px, &c) in out.iter_mut().zip(self.composed.iter()) {
+        let out = &mut self.framebuffer.row_mut(y)[span.clone()];
+        for (px, &c) in out.iter_mut().zip(&self.composed[span]) {
             *px = bgr555_to_rgba(c);
         }
     }
@@ -312,16 +386,29 @@ mod tests {
 
     #[test]
     fn hblank_and_line_advance() {
-        let (mut ppu, mut io, video) = setup();
+        let (mut ppu, mut io, mut video) = setup();
         assert_eq!(
-            ppu.step(HBLANK_START - 1, &mut io, &video),
+            ppu.step(
+                HBLANK_START - 1,
+                &mut io,
+                &mut video,
+                &mut Journal::default()
+            ),
             Events::default()
         );
         assert_eq!(io.read16(reg::DISPSTAT) & dispstat::HBLANK, 0);
-        assert!(ppu.step(1, &mut io, &video).hblank);
+        assert!(
+            ppu.step(1, &mut io, &mut video, &mut Journal::default())
+                .hblank
+        );
         assert_ne!(io.read16(reg::DISPSTAT) & dispstat::HBLANK, 0);
         assert_eq!(ppu.vcount(), 0);
-        ppu.step(CYCLES_PER_LINE - HBLANK_START, &mut io, &video);
+        ppu.step(
+            CYCLES_PER_LINE - HBLANK_START,
+            &mut io,
+            &mut video,
+            &mut Journal::default(),
+        );
         assert_eq!(ppu.vcount(), 1);
         assert_eq!(io.read16(reg::VCOUNT), 1);
         assert_eq!(io.read16(reg::DISPSTAT) & dispstat::HBLANK, 0);
@@ -329,10 +416,15 @@ mod tests {
 
     #[test]
     fn vblank_spans_lines_160_to_226() {
-        let (mut ppu, mut io, video) = setup();
+        let (mut ppu, mut io, mut video) = setup();
         let mut frames = 0;
         for line in 0..LINES_PER_FRAME {
-            let events = ppu.step(CYCLES_PER_LINE, &mut io, &video);
+            let events = ppu.step(
+                CYCLES_PER_LINE,
+                &mut io,
+                &mut video,
+                &mut Journal::default(),
+            );
             frames += u32::from(events.vblank);
             let next = (line + 1) % LINES_PER_FRAME;
             assert_eq!(events.vblank, next == 160, "line {next}");
@@ -350,27 +442,37 @@ mod tests {
 
     #[test]
     fn interrupts_follow_dispstat_enables() {
-        let (mut ppu, mut io, video) = setup();
+        let (mut ppu, mut io, mut video) = setup();
         io.write16(
             reg::DISPSTAT,
             dispstat::VBLANK_IRQ | dispstat::HBLANK_IRQ | dispstat::VCOUNT_IRQ | (5 << 8),
         );
-        ppu.step(HBLANK_START, &mut io, &video);
+        ppu.step(HBLANK_START, &mut io, &mut video, &mut Journal::default());
         assert_eq!(io.read16(reg::IF), Interrupt::HBlank.mask());
         io.write16(reg::IF, 0xFFFF);
-        ppu.step(CYCLES_PER_LINE * 5, &mut io, &video);
+        ppu.step(
+            CYCLES_PER_LINE * 5,
+            &mut io,
+            &mut video,
+            &mut Journal::default(),
+        );
         assert_eq!(ppu.vcount(), 5);
         assert_ne!(io.read16(reg::IF) & Interrupt::VCount.mask(), 0);
         assert_ne!(io.read16(reg::DISPSTAT) & dispstat::VCOUNT_MATCH, 0);
         io.write16(reg::IF, 0xFFFF);
-        ppu.step(CYCLES_PER_LINE * 155, &mut io, &video);
+        ppu.step(
+            CYCLES_PER_LINE * 155,
+            &mut io,
+            &mut video,
+            &mut Journal::default(),
+        );
         assert_eq!(ppu.vcount(), 160);
         assert_ne!(io.read16(reg::IF) & Interrupt::VBlank.mask(), 0);
     }
 
     #[test]
     fn set_line_updates_vcount_and_vblank_flag() {
-        let (mut ppu, mut io, video) = setup();
+        let (mut ppu, mut io, mut video) = setup();
         ppu.set_line(126, &mut io);
         assert_eq!(io.read16(reg::VCOUNT), 126);
         assert_eq!(io.read16(reg::DISPSTAT) & dispstat::VBLANK, 0);
@@ -378,15 +480,28 @@ mod tests {
         assert_ne!(io.read16(reg::DISPSTAT) & dispstat::VBLANK, 0);
         ppu.set_line(126, &mut io);
         // 34 lines to VBlank from here.
-        let events = ppu.step(CYCLES_PER_LINE * 34, &mut io, &video);
+        let events = ppu.step(
+            CYCLES_PER_LINE * 34,
+            &mut io,
+            &mut video,
+            &mut Journal::default(),
+        );
         assert!(events.vblank);
         assert_eq!(ppu.vcount(), 160);
     }
 
     #[test]
     fn large_steps_catch_up_multiple_lines() {
-        let (mut ppu, mut io, video) = setup();
-        assert!(ppu.step(CYCLES_PER_FRAME, &mut io, &video).vblank);
+        let (mut ppu, mut io, mut video) = setup();
+        assert!(
+            ppu.step(
+                CYCLES_PER_FRAME,
+                &mut io,
+                &mut video,
+                &mut Journal::default()
+            )
+            .vblank
+        );
         assert_eq!(ppu.vcount(), 0);
     }
 
@@ -395,9 +510,14 @@ mod tests {
         let (mut ppu, mut io, mut video) = setup();
         io.write16(reg::DISPCNT, 0x0403); // mode 3, BG2 on
         video.vram[0..2].copy_from_slice(&0x001Fu16.to_le_bytes());
-        ppu.step(HBLANK_START - 1, &mut io, &video);
+        ppu.step(
+            HBLANK_START - 1,
+            &mut io,
+            &mut video,
+            &mut Journal::default(),
+        );
         assert_eq!(ppu.framebuffer.row(0)[0], 0x0000_00FF, "not rendered yet");
-        ppu.step(1, &mut io, &video);
+        ppu.step(1, &mut io, &mut video, &mut Journal::default());
         assert_eq!(ppu.framebuffer.row(0)[0], 0xFF00_00FF);
     }
 
@@ -416,7 +536,12 @@ mod tests {
                 video.vram[o..o + 2].copy_from_slice(&c.to_le_bytes());
             }
         }
-        ppu.step(CYCLES_PER_LINE * 5, &mut io, &video);
+        ppu.step(
+            CYCLES_PER_LINE * 5,
+            &mut io,
+            &mut video,
+            &mut Journal::default(),
+        );
         let px = |x: usize, y: usize| ppu.framebuffer.row(y)[x] >> 8 & 0xFF;
         let expect = |x: usize, y: usize| bgr555_to_rgba((x + 32 * y) as u16) >> 8 & 0xFF;
         assert_eq!(px(0, 0), expect(0, 0));
@@ -455,27 +580,63 @@ mod tests {
 
     #[test]
     fn affine_reference_point_written_mid_frame_applies_from_the_next_line() {
-        let (mut ppu, mut io, video) = affine_columns();
-        ppu.step(HBLANK_START + CYCLES_PER_LINE * 4, &mut io, &video); // lines 0..=4
+        let (mut ppu, mut io, mut video) = affine_columns();
+        ppu.step(
+            HBLANK_START + CYCLES_PER_LINE * 4,
+            &mut io,
+            &mut video,
+            &mut Journal::default(),
+        ); // lines 0..=4
         io.write32(reg::BG2X, 8 << 8);
-        ppu.step(CYCLES_PER_LINE * 4, &mut io, &video); // lines 5..=8
+        ppu.step(
+            CYCLES_PER_LINE * 4,
+            &mut io,
+            &mut video,
+            &mut Journal::default(),
+        ); // lines 5..=8
         assert_eq!(start_column(&ppu, 4), 0);
         assert_eq!(start_column(&ppu, 5), 1, "the write lands on the next line");
         assert_eq!(start_column(&ppu, 8), 1);
 
         // VBlank reloads the walk from the registers.
-        ppu.step(CYCLES_PER_FRAME - CYCLES_PER_LINE * 8, &mut io, &video);
+        ppu.step(
+            CYCLES_PER_FRAME - CYCLES_PER_LINE * 8,
+            &mut io,
+            &mut video,
+            &mut Journal::default(),
+        );
         assert_eq!(ppu.vcount(), 0);
         assert_eq!(start_column(&ppu, 0), 1);
     }
 
     #[test]
+    fn affine_reference_point_written_while_drawing_moves_the_next_line() {
+        let (mut ppu, mut io, mut video) = affine_columns();
+        let mut journal = Journal::default();
+        ppu.step(CYCLES_PER_LINE * 2 + 400, &mut io, &mut video, &mut journal);
+        io.write32(reg::BG2X, 8 << 8); // mid-line 2
+        ppu.step(CYCLES_PER_LINE * 2, &mut io, &mut video, &mut journal);
+        assert_eq!(start_column(&ppu, 2), 0, "the line already began");
+        assert_eq!(start_column(&ppu, 3), 1);
+    }
+
+    #[test]
     fn affine_walk_accumulates_pb_instead_of_recomputing_it() {
-        let (mut ppu, mut io, video) = affine_columns();
+        let (mut ppu, mut io, mut video) = affine_columns();
         io.write16(reg::BG2PB, 8 << 8); // one tile further right per line
-        ppu.step(HBLANK_START + CYCLES_PER_LINE * 2, &mut io, &video); // lines 0..=2
+        ppu.step(
+            HBLANK_START + CYCLES_PER_LINE * 2,
+            &mut io,
+            &mut video,
+            &mut Journal::default(),
+        ); // lines 0..=2
         io.write16(reg::BG2PB, 0);
-        ppu.step(CYCLES_PER_LINE * 3, &mut io, &video); // lines 3..=5
+        ppu.step(
+            CYCLES_PER_LINE * 3,
+            &mut io,
+            &mut video,
+            &mut Journal::default(),
+        ); // lines 3..=5
         assert_eq!(start_column(&ppu, 2), 2);
         // Recomputed from BG2X + PB * y it would snap back to column 0.
         assert_eq!(start_column(&ppu, 3), 3);
@@ -484,11 +645,16 @@ mod tests {
 
     #[test]
     fn affine_mosaic_repeats_the_block_start_line() {
-        let (mut ppu, mut io, video) = affine_columns();
+        let (mut ppu, mut io, mut video) = affine_columns();
         io.write16(reg::BG2CNT, (2 << 8) | (1 << 13) | (1 << 6));
         io.write16(reg::MOSAIC, 0x20); // 3-line vertical blocks
         io.write16(reg::BG2PB, 8 << 8);
-        ppu.step(HBLANK_START + CYCLES_PER_LINE * 5, &mut io, &video);
+        ppu.step(
+            HBLANK_START + CYCLES_PER_LINE * 5,
+            &mut io,
+            &mut video,
+            &mut Journal::default(),
+        );
         let columns: Vec<u32> = (0..6).map(|y| start_column(&ppu, y)).collect();
         assert_eq!(columns, [0, 0, 0, 3, 3, 3]);
     }
@@ -498,10 +664,15 @@ mod tests {
         let (mut ppu, mut io, mut video) = setup();
         video.palette[0..2].copy_from_slice(&0x03E0u16.to_le_bytes());
         io.write16(reg::DISPCNT, 0x0083);
-        ppu.step(HBLANK_START, &mut io, &video);
+        ppu.step(HBLANK_START, &mut io, &mut video, &mut Journal::default());
         assert_eq!(ppu.framebuffer.row(0)[100], 0xFFFF_FFFF);
         io.write16(reg::DISPCNT, 0x0003); // mode 3 but BG2 off
-        ppu.step(CYCLES_PER_LINE, &mut io, &video);
+        ppu.step(
+            CYCLES_PER_LINE,
+            &mut io,
+            &mut video,
+            &mut Journal::default(),
+        );
         assert_eq!(ppu.framebuffer.row(1)[100], 0x00FF_00FF);
     }
 }
