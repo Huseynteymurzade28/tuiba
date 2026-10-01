@@ -16,6 +16,10 @@ const DMA_RANGE: std::ops::RangeInclusive<usize> = 0x0B0..=0x0DE;
 /// First and last timer register offsets.
 const TIMER_RANGE: std::ops::RangeInclusive<usize> = 0x100..=0x10E;
 
+/// The internal reference points of BG2 and BG3, `[bg - 2][x, y]`, 20.8
+/// fixed point. See [`IoRegisters::affine_origin`].
+pub type AffineRefs = [[i32; 2]; 2];
+
 /// Register offsets relative to the I/O base address.
 #[allow(missing_docs)]
 pub mod reg {
@@ -116,6 +120,16 @@ impl Interrupt {
     }
 }
 
+/// The background and coordinate (`0` = x, `1` = y) of an affine
+/// reference point register, if `offset` is one of its halves.
+fn affine_ref_register(offset: u32) -> Option<(usize, usize)> {
+    match offset {
+        0x028..=0x02F => Some((2, ((offset - 0x028) / 4) as usize)),
+        0x038..=0x03F => Some((3, ((offset - 0x038) / 4) as usize)),
+        _ => None,
+    }
+}
+
 /// The I/O register block.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct IoRegisters {
@@ -130,6 +144,12 @@ pub struct IoRegisters {
     pub dma: Dma,
     /// The sound unit.
     pub apu: Apu,
+    /// The affine backgrounds' internal reference points.
+    ///
+    /// Kept outside the machine's serde layout and written as a trailing
+    /// section of a state file instead; see [`crate::Snapshot`].
+    #[serde(skip)]
+    affine_refs: AffineRefs,
 }
 
 impl Default for IoRegisters {
@@ -149,6 +169,7 @@ impl IoRegisters {
             timers: Timers::new(),
             dma: Dma::new(),
             apu: Apu::new(),
+            affine_refs: [[0; 2]; 2],
         }
     }
 
@@ -241,6 +262,9 @@ impl IoRegisters {
             _ => value,
         };
         self.raw[off..off + 2].copy_from_slice(&value.to_le_bytes());
+        if let Some((bg, axis)) = affine_ref_register(off as u32) {
+            self.reload_affine_ref(bg, axis);
+        }
     }
 
     /// Writes a byte register by merging it into the containing halfword.
@@ -284,6 +308,60 @@ impl IoRegisters {
     #[must_use]
     pub fn irq_pending(&self) -> bool {
         self.read16(reg::IME) & 1 != 0 && self.read16(reg::IE) & self.read16(reg::IF) != 0
+    }
+
+    /// Where the current line of affine background `bg` (2 or 3) starts
+    /// in texture space, 20.8 fixed point.
+    ///
+    /// The hardware does not read `BGxX/Y` per line: it keeps an internal
+    /// copy that is loaded from the register at VBlank and on every write
+    /// to it, and steps by `PB/PD` after each drawn line. A game that
+    /// rewrites the reference point mid-frame (an HBlank DMA streaming a
+    /// perspective floor, say) restarts the walk from the new value,
+    /// while one that only changes `PB/PD` bends it from where it is.
+    #[must_use]
+    pub fn affine_origin(&self, bg: usize) -> (i32, i32) {
+        let [x, y] = self.affine_refs[bg - 2];
+        (x, y)
+    }
+
+    /// Steps both affine backgrounds' reference points to the next line.
+    pub fn advance_affine_refs(&mut self) {
+        for (i, base) in [reg::BG2PA, reg::BG3PA].into_iter().enumerate() {
+            let pb = i32::from(self.read16(base + 2) as i16);
+            let pd = i32::from(self.read16(base + 6) as i16);
+            let refs = &mut self.affine_refs[i];
+            refs[0] = refs[0].wrapping_add(pb);
+            refs[1] = refs[1].wrapping_add(pd);
+        }
+    }
+
+    /// Reloads both affine backgrounds' reference points from `BGxX/Y`,
+    /// as VBlank does.
+    pub fn reload_affine_refs(&mut self) {
+        for bg in 2..4 {
+            for axis in 0..2 {
+                self.reload_affine_ref(bg, axis);
+            }
+        }
+    }
+
+    /// The internal reference points, for a save state.
+    #[must_use]
+    pub fn affine_refs(&self) -> AffineRefs {
+        self.affine_refs
+    }
+
+    /// Restores what [`IoRegisters::affine_refs`] returned.
+    pub fn set_affine_refs(&mut self, refs: AffineRefs) {
+        self.affine_refs = refs;
+    }
+
+    /// Loads one coordinate from its 28-bit signed register.
+    fn reload_affine_ref(&mut self, bg: usize, axis: usize) {
+        let base = if bg == 2 { reg::BG2X } else { reg::BG3X };
+        let raw = self.read32(base + 4 * axis as u32);
+        self.affine_refs[bg - 2][axis] = ((raw << 4) as i32) >> 4;
     }
 
     /// Sets a register's stored value directly, bypassing write semantics.

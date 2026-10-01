@@ -212,10 +212,6 @@ pub struct AffineParams {
     pub pc: i32,
     /// `dy` per screen line.
     pub pd: i32,
-    /// Reference point, 20.8 fixed point.
-    pub x: i32,
-    /// Reference point, 20.8 fixed point.
-    pub y: i32,
 }
 
 impl AffineParams {
@@ -224,25 +220,23 @@ impl AffineParams {
     pub fn read(io: &IoRegisters, bg: usize) -> Self {
         let base = if bg == 2 { reg::BG2PA } else { reg::BG3PA };
         let param = |offset| i32::from(io.read16(base + offset) as i16);
-        // 28-bit signed reference points.
-        let point = |offset| (io.read32(base + offset) << 4) as i32 >> 4;
         Self {
             pa: param(0),
             pb: param(2),
             pc: param(4),
             pd: param(6),
-            x: point(8),
-            y: point(12),
         }
     }
 }
 
-/// Renders line `y` of affine background `bg` into `out`.
+/// Renders a line of affine background `bg` that starts at `origin` in
+/// texture space (20.8 fixed point, see [`IoRegisters::affine_origin`])
+/// into `out`.
 pub fn render_affine(
     io: &IoRegisters,
     video: &VideoMemory,
     bg: usize,
-    y: usize,
+    origin: (i32, i32),
     out: &mut [u16; SCREEN_WIDTH],
 ) {
     let cnt = BgControl::read(io, bg);
@@ -250,9 +244,8 @@ pub fn render_affine(
     let size = 128usize << cnt.size;
     let tiles_per_row = size / 8;
 
-    // Start of this line in texture space, then walk along PA/PC.
-    let mut tx = params.x.wrapping_add(params.pb.wrapping_mul(y as i32));
-    let mut ty = params.y.wrapping_add(params.pd.wrapping_mul(y as i32));
+    // Walk along PA/PC from the start of the line.
+    let (mut tx, mut ty) = origin;
 
     for px_out in out.iter_mut() {
         let (mut x, mut y) = (tx >> 8, ty >> 8);
@@ -385,13 +378,13 @@ mod tests {
         video.vram[64 * 2 + 8 + 3] = 5; // tile 2, pixel (3, 1)
         video.vram[2 * SCREEN_BLOCK + 16 + 1] = 2; // map (1, 1) = tile 2
         let mut line = [0; SCREEN_WIDTH];
-        render_affine(&io, &video, 2, 9, &mut line);
+        render_affine(&io, &video, 2, (0, 9 << 8), &mut line);
         assert_eq!(line[11], 0x03E0);
         assert_eq!(line[10], TRANSPARENT);
         assert_eq!(line[128 + 11], 0x03E0, "wraps at 128");
 
         io.write16(reg::BG2CNT, 2 << 8); // no wrap
-        render_affine(&io, &video, 2, 9, &mut line);
+        render_affine(&io, &video, 2, (0, 9 << 8), &mut line);
         assert_eq!(line[128 + 11], TRANSPARENT);
         assert_eq!(line[11], 0x03E0);
     }
@@ -406,7 +399,7 @@ mod tests {
         video.vram[64 * 2 + 3] = 5; // tile 2, pixel (3, 0)
         video.vram[2 * SCREEN_BLOCK] = 2; // map (0, 0) = tile 2
         let mut line = [0; SCREEN_WIDTH];
-        render_affine(&io, &video, 2, 0, &mut line);
+        render_affine(&io, &video, 2, io.affine_origin(2), &mut line);
         // texture x = -1 + 2*sx -> pixel 3 at sx = 2
         assert_eq!(line[2], 0x03E0);
         assert_eq!(line[1], TRANSPARENT);

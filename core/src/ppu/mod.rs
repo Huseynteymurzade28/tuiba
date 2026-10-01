@@ -156,6 +156,7 @@ impl Ppu {
         let visible = usize::from(self.vcount) < SCREEN_HEIGHT;
         if visible {
             self.render_line(io, video);
+            io.advance_affine_refs();
         }
         let stat = io.read16(reg::DISPSTAT);
         io.set_raw16(reg::DISPSTAT, stat | dispstat::HBLANK);
@@ -178,6 +179,7 @@ impl Ppu {
         match self.vcount {
             160 => {
                 stat |= dispstat::VBLANK;
+                io.reload_affine_refs();
                 entered_vblank = true;
                 if stat & dispstat::VBLANK_IRQ != 0 {
                     io.request_interrupt(Interrupt::VBlank);
@@ -245,7 +247,18 @@ impl Ppu {
                 3 => bitmap::render_mode3(video, src_y, line),
                 4 => bitmap::render_mode4(video, frame1, src_y, line),
                 5 => bitmap::render_mode5(video, frame1, src_y, line),
-                _ if affine[bg] => tiled::render_affine(io, video, bg, src_y, line),
+                _ if affine[bg] => {
+                    // A mosaic block repeats its first line, which started
+                    // that many PB/PD steps before this one.
+                    let (x, y0) = io.affine_origin(bg);
+                    let params = tiled::AffineParams::read(io, bg);
+                    let back = (y - src_y) as i32;
+                    let origin = (
+                        x.wrapping_sub(params.pb.wrapping_mul(back)),
+                        y0.wrapping_sub(params.pd.wrapping_mul(back)),
+                    );
+                    tiled::render_affine(io, video, bg, origin, line);
+                }
                 _ => tiled::render_text(io, video, bg, src_y, line),
             }
             if control.mosaic {
@@ -400,6 +413,73 @@ mod tests {
         assert_eq!(px(4, 0), expect(4, 0));
         assert_eq!(px(5, 2), expect(4, 0), "y snaps to the block top");
         assert_eq!(px(9, 4), expect(8, 3));
+    }
+
+    /// Mode 2 with BG2 on: a 128x128 wrapping map whose column `c` holds
+    /// tile `c`, and tile `t` is solid palette colour `t + 1`. The first
+    /// pixel of a line tells which tile column the line starts in.
+    fn affine_columns() -> (Ppu, IoRegisters, VideoMemory) {
+        let (ppu, mut io, mut video) = setup();
+        io.write16(reg::DISPCNT, 0x0402);
+        io.write16(reg::BG2CNT, (2 << 8) | (1 << 13));
+        io.write16(reg::BG2PA, 0x100);
+        io.write16(reg::BG2PD, 0x100);
+        for t in 0..16u8 {
+            video.vram[usize::from(t) * 64..][..64].fill(t + 1);
+            video.palette[usize::from(t + 1) * 2..][..2]
+                .copy_from_slice(&u16::from(t + 1).to_le_bytes());
+            for row in 0..16 {
+                video.vram[0x1000 + row * 16 + usize::from(t)] = t;
+            }
+        }
+        (ppu, io, video)
+    }
+
+    /// The tile column line `y` starts in.
+    fn start_column(ppu: &Ppu, y: usize) -> u32 {
+        (0..16)
+            .find(|&t| ppu.framebuffer.row(y)[0] == bgr555_to_rgba(t as u16 + 1))
+            .expect("a tile colour")
+    }
+
+    #[test]
+    fn affine_reference_point_written_mid_frame_applies_from_the_next_line() {
+        let (mut ppu, mut io, video) = affine_columns();
+        ppu.step(HBLANK_START + CYCLES_PER_LINE * 4, &mut io, &video); // lines 0..=4
+        io.write32(reg::BG2X, 8 << 8);
+        ppu.step(CYCLES_PER_LINE * 4, &mut io, &video); // lines 5..=8
+        assert_eq!(start_column(&ppu, 4), 0);
+        assert_eq!(start_column(&ppu, 5), 1, "the write lands on the next line");
+        assert_eq!(start_column(&ppu, 8), 1);
+
+        // VBlank reloads the walk from the registers.
+        ppu.step(CYCLES_PER_FRAME - CYCLES_PER_LINE * 8, &mut io, &video);
+        assert_eq!(ppu.vcount(), 0);
+        assert_eq!(start_column(&ppu, 0), 1);
+    }
+
+    #[test]
+    fn affine_walk_accumulates_pb_instead_of_recomputing_it() {
+        let (mut ppu, mut io, video) = affine_columns();
+        io.write16(reg::BG2PB, 8 << 8); // one tile further right per line
+        ppu.step(HBLANK_START + CYCLES_PER_LINE * 2, &mut io, &video); // lines 0..=2
+        io.write16(reg::BG2PB, 0);
+        ppu.step(CYCLES_PER_LINE * 3, &mut io, &video); // lines 3..=5
+        assert_eq!(start_column(&ppu, 2), 2);
+        // Recomputed from BG2X + PB * y it would snap back to column 0.
+        assert_eq!(start_column(&ppu, 3), 3);
+        assert_eq!(start_column(&ppu, 5), 3);
+    }
+
+    #[test]
+    fn affine_mosaic_repeats_the_block_start_line() {
+        let (mut ppu, mut io, video) = affine_columns();
+        io.write16(reg::BG2CNT, (2 << 8) | (1 << 13) | (1 << 6));
+        io.write16(reg::MOSAIC, 0x20); // 3-line vertical blocks
+        io.write16(reg::BG2PB, 8 << 8);
+        ppu.step(HBLANK_START + CYCLES_PER_LINE * 5, &mut io, &video);
+        let columns: Vec<u32> = (0..6).map(|y| start_column(&ppu, y)).collect();
+        assert_eq!(columns, [0, 0, 0, 3, 3, 3]);
     }
 
     #[test]
