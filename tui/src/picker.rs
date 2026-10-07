@@ -1094,7 +1094,7 @@ mod tests {
                 .as_ref()
                 .is_some_and(|(m, ok)| !ok && m.starts_with("not a folder"))
         );
-        assert!(p.library.folders.is_empty());
+        assert_eq!(p.library.folders, Vec::<PathBuf>::new());
 
         // Esc abandons the prompt without quitting.
         p.handle(key(KeyCode::Char('a')));

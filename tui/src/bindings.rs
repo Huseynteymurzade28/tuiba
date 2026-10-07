@@ -546,7 +546,10 @@ mod tests {
             b.keys_for(Action::Button(GbaKey::B)),
             ["k", "u", "pad:south"]
         );
-        assert!(b.keys_for(Action::Button(GbaKey::Select)).is_empty());
+        assert_eq!(
+            b.keys_for(Action::Button(GbaKey::Select)),
+            Vec::<String>::new()
+        );
         assert_eq!(b.action(KeyCode::F(5)), Some(Action::FastForward));
         assert_eq!(b.action(KeyCode::Tab), None);
         // Untouched actions keep their defaults.
@@ -613,7 +616,7 @@ mod tests {
     fn a_line_replaces_only_the_kinds_it_names() {
         let (b, _) = Bindings::parse("b = k\nl =\n");
         assert_eq!(b.keys_for(Action::Button(GbaKey::B)), ["k", "pad:south"]);
-        assert!(b.keys_for(Action::Button(GbaKey::L)).is_empty());
+        assert_eq!(b.keys_for(Action::Button(GbaKey::L)), Vec::<String>::new());
         assert_eq!(b.pad_action(PadButton::L1), None);
     }
 

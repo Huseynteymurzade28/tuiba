@@ -587,7 +587,7 @@ mod tests {
         lib.remove(5);
         assert_eq!(lib.folders.len(), 1);
         lib.remove(0);
-        assert!(lib.folders.is_empty());
+        assert_eq!(lib.folders, Vec::<PathBuf>::new());
     }
 
     #[test]
