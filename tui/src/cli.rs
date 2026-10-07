@@ -44,6 +44,8 @@ Display and sound options:
                         ×4 and max in a game
   --stats               show frame rates, draw times and the sound queue in
                         the status bar (F3 toggles it in a game)
+  --color-correction    show colours as the GBA's LCD does: darker, less
+                        saturated (C toggles it in a game)
   -h, --help            show this help";
 
 /// How fast fast-forward runs.
@@ -115,6 +117,8 @@ pub struct Args {
     pub stats: bool,
     /// Fast-forward limit.
     pub fast_speed: FastSpeed,
+    /// Start with LCD colour correction on.
+    pub lcd_colours: bool,
 }
 
 /// Headless (non-interactive) run configuration.
@@ -198,6 +202,7 @@ impl Args {
         let mut mute = false;
         let mut volume = 100;
         let mut stats = false;
+        let mut lcd_colours = false;
         let mut fast_speed = FastSpeed::Max;
 
         while let Some(arg) = args.next() {
@@ -220,6 +225,7 @@ impl Args {
                 }
                 "--mute" => mute = true,
                 "--stats" => stats = true,
+                "--color-correction" => lcd_colours = true,
                 "--fast-speed" => {
                     let v = value("--fast-speed")?;
                     fast_speed = FastSpeed::parse(&v).ok_or_else(|| bad("--fast-speed", &v))?;
@@ -272,6 +278,7 @@ impl Args {
             volume,
             stats,
             fast_speed,
+            lcd_colours,
         })
     }
 }
@@ -336,6 +343,7 @@ mod tests {
                 volume: 100,
                 stats: false,
                 fast_speed: FastSpeed::Max,
+                lcd_colours: false,
             }
         );
         assert_eq!(
@@ -352,6 +360,7 @@ mod tests {
         assert!(parse(&["--volume", "101"]).is_err());
         assert!(parse(&["--volume", "-5"]).is_err());
         assert!(parse(&["--stats"]).unwrap().stats);
+        assert!(parse(&["--color-correction"]).unwrap().lcd_colours);
         assert_eq!(
             parse(&["--fast-speed", "4"]).unwrap().fast_speed,
             FastSpeed::Times(4)
