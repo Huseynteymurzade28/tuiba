@@ -452,6 +452,6 @@ mod tests {
         gba.run_frame();
         assert!(!gba.audio().is_empty(), "a frame should produce samples");
         gba.restore(&snapshot);
-        assert!(gba.audio().is_empty());
+        assert_eq!(gba.audio(), []);
     }
 }

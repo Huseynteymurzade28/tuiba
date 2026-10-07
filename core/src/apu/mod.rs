@@ -451,13 +451,13 @@ mod tests {
     fn produces_one_stereo_pair_per_512_cycles() {
         let mut apu = powered();
         apu.step(511);
-        assert!(apu.samples().is_empty());
+        assert_eq!(apu.samples(), []);
         apu.step(1);
         assert_eq!(apu.samples().len(), 2);
         apu.step(CYCLES_PER_SAMPLE * 10 + 3);
         assert_eq!(apu.samples().len(), 22);
         apu.clear_samples();
-        assert!(apu.samples().is_empty());
+        assert_eq!(apu.samples(), []);
     }
 
     #[test]
