@@ -4,6 +4,15 @@ All notable changes to tuiba. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow
 [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+- ROMs inside `.zip` archives: the library lists them and plays them
+  without unpacking, and `tuiba game.zip` works like `tuiba game.gba`.
+  A lone ROM in an archive is named after the archive, so its save,
+  patch and save states sit next to it as `game.sav`, `game.bps`, …
+  (#41)
+
 ## [0.10.0] – 2026-10-01
 
 Accuracy work: nothing new to press, but games that do raster tricks
@@ -224,6 +233,7 @@ First release: ARM7TDMI, memory map with DMA and timers, PPU modes 0–5
 with sprites, windows and blending, HLE BIOS, SRAM/flash/EEPROM saves,
 Kitty graphics and half-block renderers, library screen, headless mode.
 
+[Unreleased]: https://github.com/Huseynteymurzade28/tuiba/compare/v0.10.0...HEAD
 [0.10.0]: https://github.com/Huseynteymurzade28/tuiba/compare/v0.9.0...v0.10.0
 [0.9.0]: https://github.com/Huseynteymurzade28/tuiba/compare/v0.8.0...v0.9.0
 [0.8.0]: https://github.com/Huseynteymurzade28/tuiba/compare/v0.7.0...v0.8.0

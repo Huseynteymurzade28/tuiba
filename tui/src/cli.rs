@@ -13,7 +13,7 @@ use crate::input::GbaKey;
 
 /// Usage text printed on `--help` or a bad invocation.
 pub const USAGE: &str = "\
-usage: tuiba [<rom.gba> | <folder>] [options]
+usage: tuiba [<rom.gba> | <rom.zip> | <folder>] [options]
 
 Run a Game Boy Advance ROM in the terminal. With no argument, or with a
 folder, open the library screen (the folder is added to the library).

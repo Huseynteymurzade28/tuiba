@@ -1,7 +1,7 @@
 //! The library screen: pick a cartridge, manage the folders it comes from.
 
 use std::fmt::Write as _;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use ratatui::Frame;
@@ -14,14 +14,14 @@ use ratatui::widgets::{
 use tuiba_core::memory::SaveType;
 
 use crate::gamepad::{PadButton, PadStyle};
-use crate::library::{Library, Recent, Rom, compact_home, expand_home, human_size};
+use crate::library::{Library, Location, Recent, Rom, compact_home, expand_home, human_size};
 use crate::{theme, wordmark};
 
 /// What the user decided.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Outcome {
     /// Start this cartridge.
-    Play(PathBuf),
+    Play(Location),
     /// Leave the program.
     Quit,
 }
@@ -329,7 +329,7 @@ impl Picker {
             KeyCode::Enter => match self.focus {
                 Focus::Roms => {
                     if let Some(rom) = self.selected() {
-                        return Some(Outcome::Play(rom.path.clone()));
+                        return Some(Outcome::Play(rom.location()));
                     }
                 }
                 Focus::Folders => {
@@ -365,7 +365,7 @@ impl Picker {
                     && self.visible.len() == 1
                 {
                     // One match: Enter plays it straight away.
-                    return Some(Outcome::Play(rom.path.clone()));
+                    return Some(Outcome::Play(rom.location()));
                 }
             }
             KeyCode::Backspace => {
@@ -728,7 +728,7 @@ impl Picker {
         lines.push(row(
             "Path",
             Span::styled(
-                truncate_start(&compact_home(&rom.path), path_width),
+                truncate_start(&compact_home(&rom.location().shown_path()), path_width),
                 theme::dim(),
             ),
         ));
@@ -962,7 +962,10 @@ fn pad4(code: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    use std::path::PathBuf;
+
     use super::*;
+    use crate::library::Source;
 
     fn key(code: KeyCode) -> KeyEvent {
         KeyEvent::new(code, KeyModifiers::NONE)
@@ -999,7 +1002,7 @@ mod tests {
         // One match: Enter plays it.
         assert_eq!(
             p.handle(key(KeyCode::Enter)),
-            Some(Outcome::Play(PathBuf::from("/r/Pliko.gba")))
+            Some(Outcome::Play(Location::file(PathBuf::from("/r/Pliko.gba"))))
         );
         // Esc in browse mode clears the filter before it asks to quit.
         assert_eq!(p.handle(key(KeyCode::Esc)), None);
@@ -1034,6 +1037,7 @@ mod tests {
     fn rom(name: &str) -> Rom {
         Rom {
             path: PathBuf::from(format!("/r/{name}.gba")),
+            source: Source::File,
             folder: 0,
             header: None,
             size: 0,
@@ -1056,7 +1060,7 @@ mod tests {
         assert_eq!(p.rom_index, 1);
         assert_eq!(
             p.handle(key(KeyCode::Enter)),
-            Some(Outcome::Play(PathBuf::from("/r/b.gba")))
+            Some(Outcome::Play(Location::file(PathBuf::from("/r/b.gba"))))
         );
         // q asks first; any key but y/Enter backs out.
         assert_eq!(p.handle(key(KeyCode::Char('q'))), None);
