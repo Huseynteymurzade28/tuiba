@@ -4,7 +4,10 @@ All notable changes to tuiba. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow
 [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [0.11.0] – 2026-10-07
+
+Two quality-of-life additions: play zipped ROMs as they are, and see
+games in the colours their artists saw.
 
 ### Added
 - ROMs inside `.zip` archives: the library lists them and plays them
@@ -236,7 +239,7 @@ First release: ARM7TDMI, memory map with DMA and timers, PPU modes 0–5
 with sprites, windows and blending, HLE BIOS, SRAM/flash/EEPROM saves,
 Kitty graphics and half-block renderers, library screen, headless mode.
 
-[Unreleased]: https://github.com/Huseynteymurzade28/tuiba/compare/v0.10.0...HEAD
+[0.11.0]: https://github.com/Huseynteymurzade28/tuiba/compare/v0.10.0...v0.11.0
 [0.10.0]: https://github.com/Huseynteymurzade28/tuiba/compare/v0.9.0...v0.10.0
 [0.9.0]: https://github.com/Huseynteymurzade28/tuiba/compare/v0.8.0...v0.9.0
 [0.8.0]: https://github.com/Huseynteymurzade28/tuiba/compare/v0.7.0...v0.8.0
