@@ -4,6 +4,7 @@ mod audio;
 mod bindings;
 mod cli;
 mod clock;
+mod colour;
 mod crashlog;
 mod gamepad;
 mod graphics;
@@ -44,7 +45,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Borders, Clear, Padding, Paragraph};
 use ratatui::{Frame, Terminal};
 use tuiba_core::patch::Format;
-use tuiba_core::{Cartridge, Gba, Snapshot};
+use tuiba_core::{Cartridge, Framebuffer, Gba, Snapshot};
 
 use crate::audio::AudioOutput;
 use crate::bindings::{Action, Bindings, Input};
@@ -212,6 +213,8 @@ struct App {
     volume: u8,
     /// Performance figures, while they are shown in the status bar.
     stats: Option<Stats>,
+    /// The frame with LCD colour correction applied, while it is on.
+    lcd: Option<Box<Framebuffer>>,
     /// How fast fast-forward may run.
     fast_speed: FastSpeed,
     /// The cartridge being played, for naming its state files.
@@ -401,6 +404,14 @@ impl App {
                     Some(_) => None,
                     None => Some(Stats::new(now)),
                 };
+            }
+            Action::LcdColours => {
+                self.lcd = match self.lcd {
+                    Some(_) => None,
+                    None => Some(Box::default()),
+                };
+                let state = if self.lcd.is_some() { "on" } else { "off" };
+                self.state_notice = Some((format!("LCD colours {state}"), now));
             }
             Action::Help => self.toggle_help(now),
             Action::Leave => {
@@ -735,6 +746,19 @@ impl App {
         Line::from(spans)
     }
 
+    /// The frame as it should be shown: corrected for the LCD if that
+    /// is on. Call [`App::refresh_screen`] after emulating first.
+    fn screen(&self) -> &Framebuffer {
+        self.lcd.as_deref().unwrap_or(self.gba.framebuffer())
+    }
+
+    /// Brings the corrected frame up to date with the machine's.
+    fn refresh_screen(&mut self) {
+        if let Some(lcd) = &mut self.lcd {
+            colour::correct(self.gba.framebuffer(), lcd);
+        }
+    }
+
     fn draw(&mut self, frame: &mut Frame) {
         let [screen_area, status_area] =
             Layout::vertical([Constraint::Fill(1), Constraint::Length(1)]).areas(frame.area());
@@ -746,7 +770,7 @@ impl App {
             // underneath stay blank.
             String::new()
         } else {
-            frame.render_widget(GbaScreen::new(self.gba.framebuffer()), screen_area);
+            frame.render_widget(GbaScreen::new(self.screen()), screen_area);
             let scale = GbaScreen::scale_for(screen_area);
             if !GbaScreen::fits(screen_area) {
                 format!(
@@ -915,6 +939,7 @@ fn run() -> Result<(), AppError> {
         sound: !args.mute,
         volume: Cell::new(args.volume),
         stats: Cell::new(args.stats),
+        lcd_colours: Cell::new(args.lcd_colours),
         fast_speed: Cell::new(args.fast_speed),
         bindings,
     };
@@ -940,6 +965,8 @@ struct Session {
     volume: Cell<u8>,
     /// Performance figures shown, as last set in a game.
     stats: Cell<bool>,
+    /// LCD colour correction, as last set in a game.
+    lcd_colours: Cell<bool>,
     /// Fast-forward limit, as last set in a game.
     fast_speed: Cell<FastSpeed>,
     bindings: Bindings,
@@ -1156,6 +1183,7 @@ fn play(
         muted: !session.sound,
         volume: session.volume.get(),
         stats: session.stats.get().then(|| Stats::new(Instant::now())),
+        lcd: session.lcd_colours.get().then(Box::default),
         fast_speed: session.fast_speed.get(),
         rom: rom.clone(),
         slot: 0,
@@ -1179,6 +1207,7 @@ fn play(
     app.flush_save();
     session.volume.set(app.volume);
     session.stats.set(app.stats.is_some());
+    session.lcd_colours.set(app.lcd.is_some());
     session.fast_speed.set(app.fast_speed);
     if let Some(err) = &app.save_error {
         crashlog::record(
@@ -1360,9 +1389,11 @@ fn event_loop(
             // lands on blank cells.
             graphics.hide()?;
         }
+        app.refresh_screen();
         terminal.draw(|frame| app.draw(frame))?;
         if !overlay && let Some(graphics) = &mut app.graphics {
-            graphics.present(app.gba.framebuffer(), app.screen_area)?;
+            let screen = app.lcd.as_deref().unwrap_or(app.gba.framebuffer());
+            graphics.present(screen, app.screen_area)?;
         }
         if let Some(stats) = &mut app.stats {
             let now = Instant::now();

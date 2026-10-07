@@ -150,6 +150,7 @@ tuiba --no-graphics    # force the half-block renderer
 tuiba --mute           # start silent; M toggles sound in a game
 tuiba --volume 50      # start at half volume; - and + change it in a game
 tuiba --stats          # frame rates, draw times and the sound queue; F3 in a game
+tuiba --color-correction # the GBA screen's muted colours; C in a game
 tuiba --fast-speed 4   # fast-forward at most ×4 (default max); F4 cycles ×2, ×4, max
 ```
 
@@ -205,6 +206,12 @@ leave the game.
 pictures folder (`XDG_PICTURES_DIR`, else `~/Pictures`), numbered after
 the ROM: `anguna-001.png`, `anguna-002.png`, …
 
+GBA games were coloured for the console's dim, low-contrast LCD, so on
+a modern screen they can look garish. `C` (or `--color-correction`)
+shows them the way that LCD did: darker and less saturated, using the
+approximation higan and ares use. It applies to every renderer and is
+remembered until you quit; screenshots keep the game's own colours.
+
 If tuiba ever crashes, the message and a backtrace are appended to
 `crash.log` in the same state directory; please attach that to a bug
 report.
@@ -225,6 +232,7 @@ report.
 |                                  | `F2` — the four save-state slots             |
 |                                  | `F12` — screenshot                           |
 |                                  | `F3` — performance figures                   |
+|                                  | `C` — LCD colour correction                  |
 |                                  | `?` — show the active bindings               |
 | `q` — quit (asks first)          | `Esc` twice — back to the library            |
 |                                  | `Ctrl+Q` — quit                              |
@@ -265,7 +273,7 @@ Windows), one action per line:
 # button = key [key ...]      actions: up down left right a b l r
 a      = j                    #          start select pause step fast speed rewind
 b      = k pad:west           #          mute quieter louder save load states
-select = space                #          screenshot stats leave help
+select = space                #          screenshot stats lcd leave help
 start  = enter                # unlisted actions keep their defaults
 fast   = f9 tab               # an empty right-hand side unbinds
 ```

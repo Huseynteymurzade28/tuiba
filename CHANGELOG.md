@@ -12,6 +12,9 @@ All notable changes to tuiba. The format follows
   A lone ROM in an archive is named after the archive, so its save,
   patch and save states sit next to it as `game.sav`, `game.bps`, …
   (#41)
+- LCD colour correction: `C` in a game, or `--color-correction`, shows
+  colours as the GBA's screen did — darker and less saturated — in
+  every renderer. Screenshots keep the raw colours. (#42)
 
 ## [0.10.0] – 2026-10-01
 
