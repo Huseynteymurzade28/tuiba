@@ -126,7 +126,8 @@ tuiba falls back to half-blocks there.
 1. Run `tuiba`. The library is empty the first time.
 2. Press `a`, type the folder that holds your `.gba` files (for example
    `~/Games/GBA`; `~` is expanded) and press `⏎`. Subfolders up to three
-   levels deep are searched too. The folder is remembered
+   levels deep are searched too, and so are `.zip` archives: no need to
+   unpack them. The folder is remembered
    in `~/.config/tuiba/library`, one path per line, so you can also edit
    that file by hand.
 3. Pick a cartridge with `↑`/`↓` and press `⏎` to play. `Esc` twice
@@ -143,6 +144,7 @@ Shortcuts:
 ```sh
 tuiba ~/Games/GBA      # add a folder and open the library in one go
 tuiba path/to/rom.gba  # play a cartridge directly, skipping the library
+tuiba path/to/rom.zip  # the same, straight from an archive
 tuiba --renderer sixel # pick the image protocol yourself
 tuiba --no-graphics    # force the half-block renderer
 tuiba --mute           # start silent; M toggles sound in a game
@@ -182,6 +184,11 @@ BPS, UPS and IPS patches work. BPS and UPS carry checksums, so a patch
 made for another revision of the game is refused with a message instead
 of starting a broken game. Save states follow the patched ROM, so they
 never mix with the unpatched game's.
+
+A zipped ROM is played without unpacking it. When it is the only ROM in
+the archive it goes by the archive's name — `game.zip` saves to
+`game.sav` and takes `game.bps` as its patch; an archive holding several
+names each after itself, as if they were unpacked next to it.
 
 Saves live next to the ROM as `<name>.sav`. The file is written within a
 second of the game saving and again when you leave, so a crash or a closed

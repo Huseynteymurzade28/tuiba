@@ -14,6 +14,8 @@ use tuiba_core::memory::Header;
 use tuiba_core::memory::SaveType;
 use tuiba_core::memory::cartridge::HEADER_END;
 
+use crate::zip::{Archive, Member};
+
 /// The platform's configuration root, before the application name is appended.
 ///
 /// `$XDG_CONFIG_HOME` wins everywhere when it is set. On Windows, where that
@@ -166,7 +168,7 @@ impl Library {
     }
 
     /// Scans every folder (and subfolders up to [`SCAN_DEPTH`] deep) for
-    /// `.gba` files, sorted by title.
+    /// `.gba` files, bare or in `.zip` archives, sorted by title.
     #[must_use]
     pub fn scan(&self) -> Vec<Rom> {
         let mut roms = Vec::new();
@@ -183,8 +185,9 @@ impl Library {
 /// `~` does not walk the whole disk.
 pub const SCAN_DEPTH: usize = 3;
 
-/// Collects every `.gba` file in `dir`, descending `depth` more levels.
-/// Hidden directories and unreadable ones are skipped.
+/// Collects every `.gba` file in `dir`, and every one inside a `.zip`
+/// there, descending `depth` more levels. Hidden directories and
+/// unreadable ones or archives are skipped.
 fn scan_folder(dir: &Path, folder: usize, depth: usize, out: &mut Vec<Rom>) {
     let Ok(entries) = fs::read_dir(dir) else {
         return;
@@ -197,12 +200,138 @@ fn scan_folder(dir: &Path, folder: usize, depth: usize, out: &mut Vec<Rom>) {
             if depth > 0 && !hidden {
                 scan_folder(&path, folder, depth - 1, out);
             }
-        } else if path
-            .extension()
-            .is_some_and(|ext| ext.eq_ignore_ascii_case("gba"))
-            && let Some(rom) = Rom::inspect(path, folder)
+        } else if has_extension(&path, "gba") {
+            out.extend(Rom::inspect(path, folder));
+        } else if has_extension(&path, "zip")
+            && let Ok(mut zip) = Archive::open(&path)
         {
-            out.push(rom);
+            for (location, member) in archived_roms(&path, &zip) {
+                out.extend(Rom::inspect_member(location, &member, &mut zip, folder));
+            }
+        }
+    }
+}
+
+fn has_extension(path: &Path, ext: &str) -> bool {
+    path.extension()
+        .is_some_and(|e| e.eq_ignore_ascii_case(ext))
+}
+
+/// The cartridges in `zip` (found at `archive`), with where each is
+/// played from.
+///
+/// A ROM is named after the archive when it is the only one inside, so
+/// `game.zip` keeps its save in `game.sav` and takes `game.bps` as its
+/// patch, exactly as `game.gba` would. An archive holding several names
+/// each after itself, as if extracted next to the archive.
+fn archived_roms(archive: &Path, zip: &Archive) -> Vec<(Location, Member)> {
+    let members: Vec<&Member> = zip
+        .members()
+        .iter()
+        .filter(|m| {
+            !m.is_dir()
+                // Resource forks the macOS archiver adds: `._game.gba`.
+                && !m.name.starts_with("__MACOSX/")
+                && has_extension(Path::new(m.file_name()), "gba")
+        })
+        .collect();
+    let single = members.len() == 1;
+    members
+        .into_iter()
+        .map(|member| {
+            let path = if single {
+                archive.to_path_buf()
+            } else {
+                archive.with_file_name(member.file_name())
+            };
+            let source = Source::Zip {
+                archive: archive.to_path_buf(),
+                member: member.name.clone(),
+            };
+            (Location { path, source }, member.clone())
+        })
+        .collect()
+}
+
+/// Where a cartridge's bytes are read from.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Source {
+    /// The [`Location::path`] itself.
+    File,
+    /// A member of a zip archive.
+    Zip {
+        /// The archive.
+        archive: PathBuf,
+        /// The member's name inside it.
+        member: String,
+    },
+}
+
+/// A cartridge to play.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Location {
+    /// The path the cartridge is known by: its save, patch, save states
+    /// and screenshots are named after it, and the recent list records
+    /// it. For a bare ROM, the file; for one in an archive, see
+    /// [`archived_roms`].
+    pub path: PathBuf,
+    /// Where to read it from.
+    pub source: Source,
+}
+
+impl Location {
+    /// A bare ROM file.
+    #[must_use]
+    pub const fn file(path: PathBuf) -> Self {
+        Self {
+            path,
+            source: Source::File,
+        }
+    }
+
+    /// What a path on the command line names: a `.zip` stands for the
+    /// first cartridge inside it, anything else for itself.
+    pub fn from_arg(path: PathBuf) -> io::Result<Self> {
+        if !has_extension(&path, "zip") {
+            return Ok(Self::file(path));
+        }
+        let zip = Archive::open(&path)?;
+        archived_roms(&path, &zip)
+            .into_iter()
+            .next()
+            .map(|(location, _)| location)
+            .ok_or_else(|| {
+                io::Error::new(
+                    io::ErrorKind::NotFound,
+                    format!("{}: no .gba file inside", path.display()),
+                )
+            })
+    }
+
+    /// The whole ROM image.
+    pub fn read(&self) -> io::Result<Vec<u8>> {
+        match &self.source {
+            Source::File => fs::read(&self.path),
+            Source::Zip { archive, member } => {
+                let mut zip = Archive::open(archive)?;
+                let member = zip.member(member).cloned().ok_or_else(|| {
+                    io::Error::new(
+                        io::ErrorKind::NotFound,
+                        format!("{}: {member} is gone", archive.display()),
+                    )
+                })?;
+                zip.read(&member)
+            }
+        }
+    }
+
+    /// Where the cartridge actually is, for showing the user: the file,
+    /// or the member's path inside its archive.
+    #[must_use]
+    pub fn shown_path(&self) -> PathBuf {
+        match &self.source {
+            Source::File => self.path.clone(),
+            Source::Zip { archive, member } => archive.join(member),
         }
     }
 }
@@ -283,8 +412,11 @@ impl Recent {
 /// A cartridge file and what its header says.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Rom {
-    /// The `.gba` file.
+    /// The `.gba` file, or the path a cartridge in an archive is known
+    /// by ([`Location::path`]).
     pub path: PathBuf,
+    /// Where it is read from.
+    pub source: Source,
     /// Index into [`Library::folders`] of the folder it was found in.
     pub folder: usize,
     /// Parsed header, if the file is large enough to have one.
@@ -311,12 +443,40 @@ impl Rom {
         let has_save = path.with_extension("sav").is_file();
         Some(Self {
             path,
+            source: Source::File,
             folder,
             header,
             size,
             has_save,
             save_type: None,
         })
+    }
+
+    fn inspect_member(
+        location: Location,
+        member: &Member,
+        zip: &mut Archive,
+        folder: usize,
+    ) -> Option<Self> {
+        let prefix = zip.read_prefix(member, HEADER_END).ok()?;
+        Some(Self {
+            has_save: location.path.with_extension("sav").is_file(),
+            path: location.path,
+            source: location.source,
+            folder,
+            header: Header::from_prefix(&prefix),
+            size: member.size,
+            save_type: None,
+        })
+    }
+
+    /// What to hand the game loop to play this.
+    #[must_use]
+    pub fn location(&self) -> Location {
+        Location {
+            path: self.path.clone(),
+            source: self.source.clone(),
+        }
     }
 
     /// Display name: the header title, or the file name for headerless
@@ -351,10 +511,10 @@ impl Rom {
         (self.name().to_lowercase(), self.path.clone())
     }
 
-    /// Reads the whole file to determine the save type, caching it.
+    /// Reads the whole ROM to determine the save type, caching it.
     pub fn save_type(&mut self) -> Option<SaveType> {
         if self.save_type.is_none() {
-            let rom = fs::read(&self.path).ok()?;
+            let rom = self.location().read().ok()?;
             self.save_type = Some(SaveType::detect(&rom));
         }
         self.save_type
@@ -476,9 +636,75 @@ mod tests {
     }
 
     #[test]
+    fn scans_zip_archives() {
+        use crate::zip::tests::build;
+
+        let dir = std::env::temp_dir().join(format!("tuiba-lib-zip-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let mut rom = vec![0u8; 0x4000];
+        rom[0xA0..0xA6].copy_from_slice(b"ZIPPED");
+        rom[0x1000..0x1008].copy_from_slice(b"SRAM_V11");
+        fs::write(
+            dir.join("one.zip"),
+            build(&[
+                ("readme.txt", b"hi", false),
+                ("__MACOSX/._game.gba", b"fork", false),
+                ("game.gba", &rom, true),
+            ]),
+        )
+        .unwrap();
+        fs::write(dir.join("one.sav"), [0; 8]).unwrap();
+        fs::write(
+            dir.join("pack.zip"),
+            build(&[
+                ("x/first.gba", &[0; 0x10], false),
+                ("second.GBA", &[0; 0x20], true),
+            ]),
+        )
+        .unwrap();
+        fs::write(dir.join("broken.zip"), b"not a zip").unwrap();
+
+        let lib = Library {
+            folders: vec![dir.clone()],
+        };
+        let mut roms = lib.scan();
+        let found: Vec<_> = roms
+            .iter()
+            .map(|r| (r.name(), r.path.strip_prefix(&dir).unwrap().to_path_buf()))
+            .collect();
+        assert_eq!(
+            found,
+            [
+                ("first".to_string(), PathBuf::from("first.gba")),
+                ("second".to_string(), PathBuf::from("second.GBA")),
+                ("ZIPPED".to_string(), PathBuf::from("one.zip")),
+            ],
+            "a lone ROM goes by the archive's name, several by their own"
+        );
+        let zipped = &mut roms[2];
+        assert!(zipped.has_save, "one.sav belongs to the ROM in one.zip");
+        assert_eq!(zipped.size, 0x4000);
+        assert_eq!(zipped.save_type(), Some(SaveType::Sram));
+        assert_eq!(zipped.location().read().unwrap(), rom);
+        assert_eq!(zipped.location().shown_path(), dir.join("one.zip/game.gba"));
+
+        let direct = Location::from_arg(dir.join("pack.zip")).unwrap();
+        assert_eq!(direct.path, dir.join("first.gba"));
+        assert_eq!(direct.read().unwrap(), [0; 0x10]);
+        assert!(Location::from_arg(dir.join("broken.zip")).is_err());
+        assert_eq!(
+            Location::from_arg(dir.join("plain.gba")).unwrap(),
+            Location::file(dir.join("plain.gba"))
+        );
+
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
     fn placeholder_header_fields_are_treated_as_absent() {
         let rom = Rom {
             path: PathBuf::from("homebrew.gba"),
+            source: Source::File,
             folder: 0,
             header: Some(Header {
                 title: "ROM TITLE".to_string(),

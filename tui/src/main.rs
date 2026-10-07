@@ -20,6 +20,7 @@ mod states;
 mod stats;
 mod theme;
 mod wordmark;
+mod zip;
 
 use std::cell::Cell;
 use std::io::stdout;
@@ -51,7 +52,7 @@ use crate::cli::FastSpeed;
 use crate::gamepad::{Gamepads, PadButton, PadNotice, PadSet, PadStyle};
 use crate::graphics::{Graphics, Renderer};
 use crate::input::{GbaKey, Hold, Keypad};
-use crate::library::Library;
+use crate::library::{Library, Location};
 use crate::picker::{Outcome, Picker};
 use crate::rewind::Rewind;
 use crate::screen::GbaScreen;
@@ -875,7 +876,9 @@ fn run() -> Result<(), AppError> {
             .rom
             .as_deref()
             .expect("parser requires a ROM for headless flags");
-        let (mut gba, _) = load_gba(rom)?;
+        let location =
+            Location::from_arg(rom.to_path_buf()).map_err(tuiba_core::GbaError::RomIo)?;
+        let (mut gba, _) = load_gba(&location)?;
         return Ok(headless::run(&mut gba, config)?);
     }
 
@@ -888,7 +891,7 @@ fn run() -> Result<(), AppError> {
             }
             None
         }
-        Some(path) => Some(path.clone()),
+        Some(path) => Some(Location::from_arg(path.clone()).map_err(tuiba_core::GbaError::RomIo)?),
         None => None,
     };
 
@@ -1008,7 +1011,7 @@ fn library_loop(
         match outcome {
             Outcome::Quit => return Ok(()),
             Outcome::Play(rom) => {
-                picker.mark_played(&rom);
+                picker.mark_played(&rom.path);
                 match play(terminal, &rom, session, gamepads) {
                     Ok(GameExit::Back) => {}
                     Ok(GameExit::Quit) => return Ok(()),
@@ -1064,8 +1067,9 @@ fn crash_log_hint() -> String {
 
 /// Loads a cartridge and its save file, applying the patch next to it
 /// if there is one. Returns the patch's path along with the machine.
-fn load_gba(rom: &Path) -> Result<(Gba, Option<PathBuf>), AppError> {
-    let mut image = std::fs::read(rom).map_err(tuiba_core::GbaError::RomIo)?;
+fn load_gba(location: &Location) -> Result<(Gba, Option<PathBuf>), AppError> {
+    let rom = &location.path;
+    let mut image = location.read().map_err(tuiba_core::GbaError::RomIo)?;
     let patch = find_patch(rom);
     if let Some(path) = &patch {
         let failed = |err: tuiba_core::GbaError| AppError::Patch {
@@ -1101,11 +1105,12 @@ fn find_patch(rom: &Path) -> Option<PathBuf> {
 /// reported as [`AppError::Crash`] (the panic hook has already logged it).
 fn play(
     terminal: &mut ratatui::DefaultTerminal,
-    rom: &Path,
+    location: &Location,
     session: &Session,
     gamepads: &mut Gamepads,
 ) -> Result<GameExit, AppError> {
-    let (gba, patch) = load_gba(rom)?;
+    let (gba, patch) = load_gba(location)?;
+    let rom = &location.path;
     let header_title = gba.bus.cartridge.header().title.trim().to_string();
     let title = if library::is_placeholder_title(&header_title) {
         // Untitled homebrew: fall back to the file name, as the library
@@ -1152,7 +1157,7 @@ fn play(
         volume: session.volume.get(),
         stats: session.stats.get().then(|| Stats::new(Instant::now())),
         fast_speed: session.fast_speed.get(),
-        rom: rom.to_path_buf(),
+        rom: rom.clone(),
         slot: 0,
         held_state: None,
         panel: None,
