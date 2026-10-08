@@ -57,6 +57,8 @@ pub enum Action {
     LoadState,
     /// Open the save-state panel.
     States,
+    /// Open the cheat panel.
+    Cheats,
     /// Save the frame on screen as a PNG.
     Screenshot,
     /// Show performance figures in the status bar.
@@ -71,7 +73,7 @@ pub enum Action {
 
 impl Action {
     /// Every action, in the order the help overlay and the file use.
-    pub const ALL: [Self; 26] = [
+    pub const ALL: [Self; 27] = [
         Self::Button(GbaKey::Up),
         Self::Button(GbaKey::Down),
         Self::Button(GbaKey::Left),
@@ -93,6 +95,7 @@ impl Action {
         Self::SaveState,
         Self::LoadState,
         Self::States,
+        Self::Cheats,
         Self::Screenshot,
         Self::Stats,
         Self::LcdColours,
@@ -125,6 +128,7 @@ impl Action {
             Self::SaveState => "save",
             Self::LoadState => "load",
             Self::States => "states",
+            Self::Cheats => "cheats",
             Self::Screenshot => "screenshot",
             Self::Stats => "stats",
             Self::LcdColours => "lcd",
@@ -158,6 +162,7 @@ impl Action {
             Self::SaveState => "save state",
             Self::LoadState => "load state",
             Self::States => "save-state panel",
+            Self::Cheats => "cheats",
             Self::Screenshot => "screenshot",
             Self::Stats => "performance figures",
             Self::LcdColours => "LCD colours",
@@ -218,7 +223,7 @@ impl Bindings {
     /// The built-in bindings: buttons on the keys of the same name,
     /// arrows for the D-pad, `Enter` = Start, `Space` / `Backspace` /
     /// right Shift = Select, `Z`/`X` doubling as A/B, `P` pause, `.` step,
-    /// `Tab` / `F` fast-forward, `F4` its speed limit, `W` rewind, `M` mute, `-` / `=` / `+` volume, `F3` performance figures and `F12`
+    /// `Tab` / `F` fast-forward, `F4` its speed limit, `W` rewind, `M` mute, `-` / `=` / `+` volume, `F3` performance figures, `F6` cheats and `F12`
     /// screenshot. On a pad, the buttons sit
     /// where a GBA has them — A east, B south, the shoulders on L1/R1 —
     /// R2 fast-forwards and L2 rewinds, west opens the save-state panel
@@ -264,6 +269,7 @@ impl Bindings {
         bind(&mut b, Action::SaveState, &[KeyCode::F(5)]);
         bind(&mut b, Action::LoadState, &[KeyCode::F(8)]);
         bind(&mut b, Action::States, &[KeyCode::F(2)]);
+        bind(&mut b, Action::Cheats, &[KeyCode::F(6)]);
         bind(&mut b, Action::Screenshot, &[KeyCode::F(12)]);
         bind(&mut b, Action::Stats, &[KeyCode::F(3)]);
         bind(&mut b, Action::LcdColours, &[Char('c')]);

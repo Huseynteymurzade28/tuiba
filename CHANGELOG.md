@@ -6,6 +6,15 @@ All notable changes to tuiba. The format follows
 
 ## [Unreleased]
 
+### Added
+- Cheats: `<rom>.cht` next to the ROM, in libretro's format (so
+  RetroArch and libretro-database cheat files work after a rename), and
+  `F6` to turn them on and off in a game. Raw, GameShark v1/v2, Action
+  Replay v3 and CodeBreaker codes, encrypted or not, are told apart by
+  their shape. ROM-patch and device-button codes are skipped with a
+  note; re-keyed (`DEADFACE`) and encrypted CodeBreaker codes are not
+  supported yet. (#43)
+
 ### Changed
 - Pad defaults: `LT`/L2 held rewinds, mirroring `RT`/R2 fast-forward,
   and the save-state panel moved from L2 to the west face button (`X`
