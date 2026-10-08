@@ -15,9 +15,11 @@
 //! - [`gba`]    – the assembled system and its run loop.
 //! - [`state`]  – save states: the whole machine, frozen and thawed.
 //! - [`patch`]  – IPS, UPS and BPS ROM patches.
+//! - [`cheats`] – GameShark, Action Replay, CodeBreaker and raw cheat codes.
 
 pub mod apu;
 pub mod bios;
+pub mod cheats;
 pub mod cpu;
 pub mod error;
 pub mod gba;
