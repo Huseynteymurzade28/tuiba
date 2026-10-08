@@ -51,7 +51,7 @@ volume).
 | Clock    | The cartridge real-time clock (S-3511 over GPIO) some games use for day and night, reading your local time     |
 | BIOS     | Runs without a BIOS image: `IntrWait`, `Div`, `Sqrt`, `ArcTan2`, `CpuSet`, LZ77/RL/`BitUnPack`, affine helpers are emulated in software |
 | Input    | Keyboard with exact key releases on terminals that support the Kitty keyboard protocol; gamepads, hot-pluggable; bindings in a config file |
-| Frontend | IPS/UPS/BPS patches applied on load; library with folders, filter, sort and last-played memory; pixels over the Kitty, Sixel or iTerm2 protocol, or half-blocks; pause, frame step, fast-forward, rewind and screenshots; headless debug mode |
+| Frontend | IPS/UPS/BPS patches applied on load; cheats (raw, GameShark, Action Replay, CodeBreaker) from libretro `.cht` files; library with folders, filter, sort and last-played memory; pixels over the Kitty, Sixel or iTerm2 protocol, or half-blocks; pause, frame step, fast-forward, rewind and screenshots; headless debug mode |
 
 Not there yet: serial link, cycle-exact PPU/DMA
 interleaving. Accurate enough for the homebrew below; not a reference
@@ -206,6 +206,27 @@ leave the game.
 pictures folder (`XDG_PICTURES_DIR`, else `~/Pictures`), numbered after
 the ROM: `anguna-001.png`, `anguna-002.png`, …
 
+Cheats live next to the ROM as `<name>.cht`, in libretro's format —
+so a file from RetroArch or
+[libretro-database](https://github.com/libretro/libretro-database/tree/master/cht/Nintendo%20-%20Game%20Boy%20Advance)
+works once renamed to match the ROM:
+
+```ini
+cheat0_desc = "Infinite money"
+cheat0_code = "82025BC4+270F"
+cheat0_enable = true
+```
+
+`F6` opens the list over the paused game; `⏎` turns the selected cheat
+on or off, and that is written back to the file. Raw (`02001234:63`),
+GameShark v1/v2, Action Replay v3 and CodeBreaker codes are recognised
+by their shape, encrypted or not, and run before every frame. Codes that
+need the cheat device itself — ROM patches, its button, re-keyed or
+encrypted CodeBreaker codes — are skipped or refused with a note in the
+panel, as are codes whose `??` a code list leaves for you to fill in.
+Master codes are not needed. The file is read again each time the
+panel opens, so it can be edited while the game runs.
+
 GBA games were coloured for the console's dim, low-contrast LCD, so on
 a modern screen they can look garish. `C` (or `--color-correction`)
 shows them the way that LCD did: darker and less saturated, using the
@@ -230,6 +251,7 @@ report.
 | `r` — rescan folders             | `M` — mute, `-` / `+` — volume               |
 |                                  | `F5` — save state, `F8` — load it back       |
 |                                  | `F2` — the four save-state slots             |
+|                                  | `F6` — cheats                                |
 |                                  | `F12` — screenshot                           |
 |                                  | `F3` — performance figures                   |
 |                                  | `C` — LCD colour correction                  |
@@ -274,7 +296,7 @@ Windows), one action per line:
 # button = key [key ...]      actions: up down left right a b l r
 a      = j                    #          start select pause step fast speed rewind
 b      = k pad:lstick         #          mute quieter louder save load states
-select = space                #          screenshot stats lcd leave help
+select = space                #          cheats screenshot stats lcd leave help
 start  = enter                # unlisted actions keep their defaults
 fast   = f9 tab               # an empty right-hand side unbinds
 ```

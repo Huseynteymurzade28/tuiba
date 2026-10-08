@@ -2,6 +2,7 @@
 
 mod audio;
 mod bindings;
+mod cheats;
 mod cli;
 mod clock;
 mod colour;
@@ -49,6 +50,7 @@ use tuiba_core::{Cartridge, Framebuffer, Gba, Snapshot};
 
 use crate::audio::AudioOutput;
 use crate::bindings::{Action, Bindings, Input};
+use crate::cheats::{CheatFile, CheatsPanel};
 use crate::cli::FastSpeed;
 use crate::gamepad::{Gamepads, PadButton, PadNotice, PadSet, PadStyle};
 use crate::graphics::{Graphics, Renderer};
@@ -225,11 +227,14 @@ struct App {
     /// A state with nowhere to be written: when there is no state
     /// directory, states still work, they just do not outlive the game.
     held_state: Option<Snapshot>,
-    /// The save-state panel, while it is up. Emulation waits for it.
-    panel: Option<StatesPanel>,
+    /// The save-state or cheat panel, while one is up. Emulation waits
+    /// for it.
+    panel: Option<Panel>,
     /// When the panel last opened, so a quick second press of the pad
     /// button that opened it does not count as a press inside it.
     panel_opened: Option<Instant>,
+    /// This game's cheats; the enabled ones run before every frame.
+    cheats: CheatFile,
     /// What the last save/load did (or which pad came or went) and
     /// when, for the status bar.
     state_notice: Option<(String, Instant)>,
@@ -251,21 +256,22 @@ const MIN_LEAVE_GAP: Duration = Duration::from_millis(250);
 /// by a double tap.
 const PANEL_GRACE: Duration = Duration::from_millis(300);
 
-/// The key a pad press stands for while the save-state panel is up.
-/// The panel's own meaning of a button comes first; a button that has
+/// The key a pad press stands for while a panel is up, given what the
+/// button means in the panel (`own`) and whether it is the button bound
+/// to opening it. The panel's own meaning comes first; a button that has
 /// none there but opened the panel closes it again. The opening button
 /// does nothing for [`PANEL_GRACE`] after the panel appeared.
-fn panel_pad_key(
-    button: PadButton,
-    action: Option<Action>,
-    style: PadStyle,
-    open_for: Duration,
-) -> Option<KeyCode> {
-    let opener = action == Some(Action::States);
+fn panel_pad_key(own: Option<KeyCode>, opener: bool, open_for: Duration) -> Option<KeyCode> {
     if opener && open_for < PANEL_GRACE {
         return None;
     }
-    StatesPanel::pad_key(button, style).or(opener.then_some(KeyCode::Esc))
+    own.or(opener.then_some(KeyCode::Esc))
+}
+
+/// The panel over a paused game.
+enum Panel {
+    States(StatesPanel),
+    Cheats(CheatsPanel),
 }
 
 /// How long "state saved" and friends stay in the status bar.
@@ -290,6 +296,7 @@ impl App {
         // real date through pauses, fast-forward and rewinds, as the
         // battery-backed chip in a real cartridge would.
         self.gba.set_clock(clock::now());
+        self.cheats.apply(&mut self.gba);
         self.gba.run_frame();
         // Fast-forward makes far more sound than real time can play;
         // dropping it whole is less jarring than playing chopped-up bits.
@@ -375,7 +382,11 @@ impl App {
             if self.panel.is_some() {
                 let open_for = self.panel_opened.map_or(Duration::MAX, |at| now - at);
                 let style = self.pad_style.unwrap_or(PadStyle::Generic);
-                if let Some(key) = panel_pad_key(button, action, style, open_for) {
+                let (own, opener) = match &self.panel {
+                    Some(Panel::Cheats(_)) => (CheatsPanel::pad_key(button, style), Action::Cheats),
+                    _ => (StatesPanel::pad_key(button, style), Action::States),
+                };
+                if let Some(key) = panel_pad_key(own, action == Some(opener), open_for) {
                     self.handle_panel_key(KeyEvent::new(key, KeyModifiers::NONE), now);
                 }
             } else if self.help
@@ -416,6 +427,7 @@ impl App {
             Action::SaveState => self.save_state(now),
             Action::LoadState => self.load_state(now),
             Action::States => self.open_panel(now),
+            Action::Cheats => self.open_cheats(now),
             Action::Screenshot => self.screenshot(now),
             Action::FastSpeed => {
                 self.fast_speed = self.fast_speed.next();
@@ -518,7 +530,7 @@ impl App {
             self.held_state = Some(snapshot.clone());
             "state saved (no state directory; this session only)".to_string()
         };
-        if let Some(panel) = &mut self.panel {
+        if let Some(Panel::States(panel)) = &mut self.panel {
             panel.replace_selected(Some(snapshot));
         }
         self.state_notice = Some((notice, now));
@@ -570,19 +582,61 @@ impl App {
     /// Opens the panel, which pauses the game the way the `?` overlay
     /// does.
     fn open_panel(&mut self, now: Instant) {
-        self.panel = Some(StatesPanel::open(
+        self.panel = Some(Panel::States(StatesPanel::open(
             &self.rom,
             &self.gba.bus.cartridge,
             self.slot,
-        ));
+        )));
         self.panel_opened = Some(now);
         self.reset_fps(now);
     }
 
-    /// Handles one key while the panel is up, and acts on what it asks
-    /// for.
+    /// Opens the cheat panel, reading the file again first: it may have
+    /// been edited while the game ran.
+    fn open_cheats(&mut self, now: Instant) {
+        match CheatFile::load(&self.rom) {
+            Ok(cheats) => self.cheats = cheats,
+            Err(err) => {
+                self.state_notice = Some((format!("could not read the cheats: {err}"), now));
+            }
+        }
+        self.panel = Some(Panel::Cheats(CheatsPanel::open()));
+        self.panel_opened = Some(now);
+        self.reset_fps(now);
+    }
+
+    /// Handles one key while a panel is up, and acts on what it asks for.
     fn handle_panel_key(&mut self, key: crossterm::event::KeyEvent, now: Instant) {
-        let Some(panel) = &mut self.panel else { return };
+        match &mut self.panel {
+            Some(Panel::States(_)) => self.handle_states_key(key, now),
+            Some(Panel::Cheats(panel)) => match panel.handle(key, self.cheats.entries().len()) {
+                Some(cheats::Action::Toggle(index)) => self.toggle_cheat(index, now),
+                Some(cheats::Action::Close) => self.panel = None,
+                None => {}
+            },
+            None => {}
+        }
+    }
+
+    /// Turns a cheat on or off and says so.
+    fn toggle_cheat(&mut self, index: usize, now: Instant) {
+        let written = self.cheats.toggle(index);
+        let Some(entry) = self.cheats.entries().get(index) else {
+            return;
+        };
+        let state = if entry.enabled { "on" } else { "off" };
+        let notice = match written {
+            Ok(()) => format!("{} {state}", entry.name),
+            Err(err) => format!("{} {state}, but not saved: {err}", entry.name),
+        };
+        self.state_notice = Some((notice, now));
+    }
+
+    /// Handles one key while the save-state panel is up.
+    fn handle_states_key(&mut self, key: crossterm::event::KeyEvent, now: Instant) {
+        let Some(Panel::States(panel)) = &mut self.panel else {
+            return;
+        };
         // The cursor is the current slot, whether or not this key asked
         // for anything: F5 and F8 act on wherever the panel was left.
         let action = panel.handle(key);
@@ -612,7 +666,7 @@ impl App {
                     },
                     None => format!("slot {} deleted", self.slot + 1),
                 };
-                if let Some(panel) = &mut self.panel {
+                if let Some(Panel::States(panel)) = &mut self.panel {
                     panel.replace_selected(None);
                 }
                 self.held_state = None;
@@ -658,6 +712,32 @@ impl App {
             .map(|k| format!("{k:?}"))
             .collect::<Vec<_>>()
             .join(" ")
+    }
+
+    /// What the emulator is up to, for the status bar: an overlay,
+    /// pause, rewind, fast-forward or a pending leave.
+    fn mode(&self, now: Instant) -> String {
+        if self.help {
+            "  ⏸ keys".to_string()
+        } else if let Some(Panel::States(_)) = self.panel {
+            format!("  ⏸ states  (slot {})", self.slot + 1)
+        } else if let Some(Panel::Cheats(_)) = self.panel {
+            "  ⏸ cheats".to_string()
+        } else if self.leave_armed.is_some_and(|t| now < t + LEAVE_WINDOW) {
+            "  esc again to leave".to_string()
+        } else if self.bound_leave.is_some_and(|t| now < t + LEAVE_WINDOW) {
+            format!("  {} again to leave", self.hint_for(Action::Leave, "leave"))
+        } else if self.paused {
+            "  ⏸ paused  (. = one frame)".to_string()
+        } else if self.rewinding && self.rewind.is_empty() {
+            "  ◀◀ nothing older to rewind to".to_string()
+        } else if self.rewinding {
+            "  ◀◀ rewinding".to_string()
+        } else if self.fast_held(now) {
+            format!("  ▶▶ ×{:.1}", self.fps / NOMINAL_FPS)
+        } else {
+            String::new()
+        }
     }
 
     /// The status bar: what the emulator is doing, and the three keys
@@ -707,25 +787,7 @@ impl App {
             .filter(|(_, at)| now < *at + NOTICE_WINDOW)
             .map(|(text, _)| format!("  [{text}]"))
             .unwrap_or_default();
-        let mode = if self.help {
-            "  ⏸ keys".to_string()
-        } else if self.panel.is_some() {
-            format!("  ⏸ states  (slot {})", self.slot + 1)
-        } else if self.leave_armed.is_some_and(|t| now < t + LEAVE_WINDOW) {
-            "  esc again to leave".to_string()
-        } else if self.bound_leave.is_some_and(|t| now < t + LEAVE_WINDOW) {
-            format!("  {} again to leave", self.hint_for(Action::Leave, "leave"))
-        } else if self.paused {
-            "  ⏸ paused  (. = one frame)".to_string()
-        } else if self.rewinding && self.rewind.is_empty() {
-            "  ◀◀ nothing older to rewind to".to_string()
-        } else if self.rewinding {
-            "  ◀◀ rewinding".to_string()
-        } else if self.fast_held(now) {
-            format!("  ▶▶ ×{:.1}", self.fps / NOMINAL_FPS)
-        } else {
-            String::new()
-        };
+        let mode = self.mode(now);
         let mut spans = vec![
             Span::styled(
                 format!(" {}  ", self.title),
@@ -818,8 +880,12 @@ impl App {
         if self.help {
             self.draw_help(frame, screen_area);
         }
-        if let Some(panel) = &self.panel {
-            panel.draw(frame, screen_area, self.pad_style);
+        match &mut self.panel {
+            Some(Panel::States(panel)) => panel.draw(frame, screen_area, self.pad_style),
+            Some(Panel::Cheats(panel)) => {
+                panel.draw(frame, screen_area, &self.cheats, self.pad_style);
+            }
+            None => {}
         }
     }
 
@@ -1138,6 +1204,22 @@ fn load_gba(location: &Location) -> Result<(Gba, Option<PathBuf>), AppError> {
     Ok((gba, patch))
 }
 
+/// What the status bar says as a game starts: the patch it was played
+/// with and the cheats that are on, if any.
+fn start_notice(patch: Option<&Path>, cheats: &CheatFile) -> Option<(String, Instant)> {
+    let mut parts = Vec::new();
+    if let Some(patch) = patch {
+        let name = patch.file_name().unwrap_or_default().to_string_lossy();
+        parts.push(format!("patched with {name}"));
+    }
+    match cheats.active() {
+        0 => {}
+        1 => parts.push("1 cheat on".to_string()),
+        n => parts.push(format!("{n} cheats on")),
+    }
+    (!parts.is_empty()).then(|| (parts.join(", "), Instant::now()))
+}
+
 /// The patch that goes with `rom`: a file of the same name with a
 /// `.bps`, `.ups` or `.ips` extension, tried in that order (the formats
 /// with checksums first, should a folder somehow hold more than one).
@@ -1171,6 +1253,10 @@ fn play(
     } else {
         header_title
     };
+    let cheats = CheatFile::load(rom).unwrap_or_else(|err| {
+        crashlog::record("cheats", &format!("could not read cheats: {err}"));
+        CheatFile::empty(rom)
+    });
     // Backup memory as loaded: a `.sav` is only ever written once the game
     // changes it, so cartridges that never save do not grow one.
     let saved = gba.save_data().to_vec();
@@ -1213,10 +1299,8 @@ fn play(
         held_state: None,
         panel: None,
         panel_opened: None,
-        state_notice: patch.map(|p| {
-            let name = p.file_name().unwrap_or_default().to_string_lossy();
-            (format!("patched with {name}"), Instant::now())
-        }),
+        state_notice: start_notice(patch.as_deref(), &cheats),
+        cheats,
     };
     let result = std::panic::catch_unwind(AssertUnwindSafe(|| {
         // Whatever the pads did in the library is old news, and a button
@@ -1495,21 +1579,16 @@ mod tests {
     #[test]
     fn the_pad_button_that_opens_the_panel_saves_in_it_after_a_moment() {
         let later = PANEL_GRACE * 2;
-        let west = |open_for| {
-            panel_pad_key(
-                PadButton::West,
-                Some(Action::States),
-                PadStyle::Xbox,
-                open_for,
-            )
-        };
+        let west_means = StatesPanel::pad_key(PadButton::West, PadStyle::Xbox);
+        let west = |open_for| panel_pad_key(west_means, true, open_for);
         assert_eq!(west(Duration::from_millis(120)), None, "double tap");
         assert_eq!(west(later), Some(KeyCode::Char('s')));
         // An opener with no meaning in the panel (`states = pad:l2`)
         // closes it again.
-        let l2 = panel_pad_key(PadButton::L2, Some(Action::States), PadStyle::Xbox, later);
+        let l2 = panel_pad_key(None, true, later);
         assert_eq!(l2, Some(KeyCode::Esc));
-        let east = panel_pad_key(PadButton::East, None, PadStyle::Xbox, Duration::ZERO);
+        let east_means = StatesPanel::pad_key(PadButton::East, PadStyle::Xbox);
+        let east = panel_pad_key(east_means, false, Duration::ZERO);
         assert_eq!(east, Some(KeyCode::Esc), "back works at once");
     }
 

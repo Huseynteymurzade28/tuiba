@@ -113,6 +113,15 @@ pub enum CheatError {
         /// What is wrong with it.
         reason: String,
     },
+    /// The code still has the blanks a code list leaves for the player
+    /// to choose a value (`00??`, `XXXX`).
+    #[error("line {line}: fill in the `{blank}` with a value first")]
+    Blank {
+        /// One-based line number within the cheat.
+        line: usize,
+        /// The blank as written.
+        blank: String,
+    },
     /// No format reads every line.
     #[error("not a code tuiba recognises (raw, GameShark, Action Replay or CodeBreaker)")]
     Unrecognised,
@@ -278,6 +287,7 @@ impl Op {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Cheat {
     format: Format,
+    encrypted: bool,
     ops: Vec<Op>,
     skipped: Vec<String>,
 }
@@ -299,45 +309,52 @@ impl Cheat {
         if lines.is_empty() {
             return Err(CheatError::Empty);
         }
+        if let Some(err) = lines.iter().enumerate().find_map(|(n, l)| blank(n, l)) {
+            return Err(err);
+        }
         if let Some(format) = format {
-            return decode(&lines, format);
+            return match format {
+                Format::GameShark | Format::ActionReplay => {
+                    best_reading([false, true].map(|key| decode(&lines, format, key)), false)
+                }
+                _ => decode(&lines, format, false),
+            };
         }
         let all = |fits: fn(&str) -> bool| lines.iter().all(|l| fits(l));
         if all(|l| raw_line(l).is_some()) {
-            return decode(&lines, Format::Raw);
+            return decode(&lines, Format::Raw, false);
         }
         if all(|l| codebreaker_line(l).is_some()) {
-            return decode(&lines, Format::CodeBreaker);
+            return decode(&lines, Format::CodeBreaker, false);
         }
         if !all(|l| pair_line(l).is_some()) {
             return Err(CheatError::Unrecognised);
         }
-        // The encrypted formats: the right key gives real addresses, the
-        // wrong one noise.
-        let readings = [Format::ActionReplay, Format::GameShark].map(|f| decode(&lines, f));
-        let best = readings
-            .iter()
-            .filter_map(|r| r.as_ref().ok())
-            .max_by_key(|cheat| cheat.plausibility())
-            .filter(|cheat| cheat.plausibility() > 0);
-        if let Some(cheat) = best {
-            return Ok(cheat.clone());
-        }
-        // A line that decodes but means nothing known says more than
-        // "unrecognised".
-        readings
-            .into_iter()
-            .find_map(|r| match r {
-                Err(err @ CheatError::Unsupported { .. }) => Some(err),
-                _ => None,
-            })
-            .map_or(Err(CheatError::Unrecognised), Err)
+        // GameShark and Action Replay lines look alike, and code lists
+        // carry them both encrypted and in the clear: the right reading
+        // gives real addresses, the wrong ones noise. On a tie the later
+        // reading wins — encrypted, as most published codes are.
+        let readings = [
+            (Format::ActionReplay, false),
+            (Format::GameShark, false),
+            (Format::GameShark, true),
+            (Format::ActionReplay, true),
+        ]
+        .map(|(format, key)| decode(&lines, format, key));
+        best_reading(readings, true)
     }
 
     /// The format the lines were read as.
     #[must_use]
     pub const fn format(&self) -> Format {
         self.format
+    }
+
+    /// Whether the lines were encrypted (GameShark and Action Replay
+    /// codes are published both ways).
+    #[must_use]
+    pub const fn encrypted(&self) -> bool {
+        self.encrypted
     }
 
     /// Lines that were understood but cannot work here (ROM patches,
@@ -481,10 +498,39 @@ fn write(gba: &mut Gba, address: u32, width: Width, value: u32) {
     }
 }
 
-/// Decodes every line as `format`.
-fn decode(lines: &[&str], format: Format) -> Result<Cheat, CheatError> {
+/// The most plausible of several readings of the same lines. With
+/// `believable`, a reading has to score above zero to count. When none
+/// counts, the first line that decoded to something unsupported is the
+/// most useful error.
+fn best_reading<const N: usize>(
+    readings: [Result<Cheat, CheatError>; N],
+    believable: bool,
+) -> Result<Cheat, CheatError> {
+    let best = readings
+        .iter()
+        .filter_map(|r| r.as_ref().ok())
+        .max_by_key(|cheat| cheat.plausibility())
+        .filter(|cheat| !believable || cheat.plausibility() > 0);
+    if let Some(cheat) = best {
+        return Ok(cheat.clone());
+    }
+    let mut errors = readings.into_iter().filter_map(Result::err);
+    let first = errors.next().unwrap_or(CheatError::Unrecognised);
+    let unsupported = std::iter::once(first.clone())
+        .chain(errors)
+        .find(|err| matches!(err, CheatError::Unsupported { .. }));
+    Err(if believable {
+        unsupported.unwrap_or(CheatError::Unrecognised)
+    } else {
+        unsupported.unwrap_or(first)
+    })
+}
+
+/// Decodes every line as `format`, decrypting first if `encrypted`.
+fn decode(lines: &[&str], format: Format, encrypted: bool) -> Result<Cheat, CheatError> {
     let mut cheat = Cheat {
         format,
+        encrypted,
         ops: Vec::new(),
         skipped: Vec::new(),
     };
@@ -500,7 +546,11 @@ fn decode(lines: &[&str], format: Format) -> Result<Cheat, CheatError> {
             let mut decoder = GameShark::default();
             for (n, line) in lines.iter().enumerate() {
                 let (op1, op2) = pair_line(line).ok_or_else(|| shape(n, line, format))?;
-                let (op1, op2) = decrypt(op1, op2, &GAMESHARK_SEEDS);
+                let (op1, op2) = if encrypted {
+                    decrypt(op1, op2, &GAMESHARK_SEEDS)
+                } else {
+                    (op1, op2)
+                };
                 decoder
                     .line(op1, op2, &mut cheat)
                     .map_err(|reason| CheatError::Unsupported {
@@ -513,7 +563,11 @@ fn decode(lines: &[&str], format: Format) -> Result<Cheat, CheatError> {
             let mut decoder = ActionReplay::default();
             for (n, line) in lines.iter().enumerate() {
                 let (op1, op2) = pair_line(line).ok_or_else(|| shape(n, line, format))?;
-                let (op1, op2) = decrypt(op1, op2, &ACTION_REPLAY_SEEDS);
+                let (op1, op2) = if encrypted {
+                    decrypt(op1, op2, &ACTION_REPLAY_SEEDS)
+                } else {
+                    (op1, op2)
+                };
                 decoder
                     .line(op1, op2, &mut cheat)
                     .map_err(|reason| CheatError::Unsupported {
@@ -537,6 +591,20 @@ fn decode(lines: &[&str], format: Format) -> Result<Cheat, CheatError> {
         }
     }
     Ok(cheat)
+}
+
+/// The first run of placeholder characters in `line` — `?`, or letters
+/// past `F` — as an error.
+fn blank(n: usize, line: &str) -> Option<CheatError> {
+    let is_blank = |c: char| c == '?' || (c.is_ascii_alphabetic() && !c.is_ascii_hexdigit());
+    let start = line.find(is_blank)?;
+    let len = line[start..]
+        .find(|c: char| !is_blank(c))
+        .unwrap_or(line.len() - start);
+    Some(CheatError::Blank {
+        line: n + 1,
+        blank: line[start..start + len].to_owned(),
+    })
 }
 
 fn shape(n: usize, line: &str, format: Format) -> CheatError {
@@ -765,6 +833,8 @@ impl ActionReplay {
                 cheat.ops.push(Op::write(address, width, op2));
             }
             _ if op1 & 0x0100_0000 != 0 => return Err(unknown()),
+            // Adding nothing: lists use `80000000 00000000` as padding.
+            0x8000_0000 if op2 == 0 => {}
             base => {
                 let width = Width::bytes(1 << width_bits).ok_or_else(unknown)?;
                 // Below a word, the bits above the value carry a count.
@@ -1199,6 +1269,31 @@ mod tests {
     }
 
     #[test]
+    fn unencrypted_codes_are_read_too() {
+        let mut gba = gba();
+        // A plain Action Replay fill, as some code lists print it.
+        let fill = "00000000 84200010\n00630001 01020001\n";
+        let cheat = run(fill, None, &mut gba);
+        assert_eq!(
+            (cheat.format(), cheat.encrypted()),
+            (Format::ActionReplay, false)
+        );
+        assert_eq!(gba.bus.read32(0x0200_0010), 0x0063_0001);
+        assert_eq!(gba.bus.read32(0x0200_0014), 0x0063_0002);
+        // A plain GameShark halfword write.
+        let cheat = run("12000020 0000BEEF", None, &mut gba);
+        assert_eq!(
+            (cheat.format(), cheat.encrypted()),
+            (Format::GameShark, false)
+        );
+        assert_eq!(r16(&gba, 0x0200_0020), 0xBEEF);
+        // Padding after a code does not make it implausible.
+        let padded = format!("{fill}80000000 00000000\n");
+        let cheat = Cheat::parse(&padded, None).unwrap();
+        assert_eq!(cheat.format(), Format::ActionReplay);
+    }
+
+    #[test]
     fn action_replay_skips_what_cannot_work_here() {
         let mut gba = gba();
         let cheat = ar_raw(
@@ -1251,7 +1346,20 @@ mod tests {
     #[test]
     fn errors_name_the_problem() {
         assert_eq!(Cheat::parse(" \n", None), Err(CheatError::Empty));
-        assert_eq!(Cheat::parse("hello", None), Err(CheatError::Unrecognised));
+        assert_eq!(
+            Cheat::parse("12345678", None),
+            Err(CheatError::Unrecognised)
+        );
+        let err = Cheat::parse("3300075C 00??", None).unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "line 1: fill in the `??` with a value first"
+        );
+        let err = Cheat::parse("3200E2D0 0002\n8200E2CE XXYY", None).unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "line 2: fill in the `XXYY` with a value first"
+        );
         let err = Cheat::parse("92000000 1234", None).unwrap_err();
         assert!(err.to_string().contains("type 9"), "{err}");
         let err = Cheat::parse("0200:12", Some(Format::GameShark)).unwrap_err();
