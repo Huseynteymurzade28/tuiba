@@ -227,6 +227,9 @@ struct App {
     held_state: Option<Snapshot>,
     /// The save-state panel, while it is up. Emulation waits for it.
     panel: Option<StatesPanel>,
+    /// When the panel last opened, so a quick second press of the pad
+    /// button that opened it does not count as a press inside it.
+    panel_opened: Option<Instant>,
     /// What the last save/load did (or which pad came or went) and
     /// when, for the status bar.
     state_notice: Option<(String, Instant)>,
@@ -241,6 +244,29 @@ const LEAVE_WINDOW: Duration = Duration::from_secs(2);
 /// not from two: a Kitty asked only for event types sends the press and
 /// the release of one Esc about 80 ms apart, both as a bare `\x1b`.
 const MIN_LEAVE_GAP: Duration = Duration::from_millis(250);
+
+/// How long after the panel opens a press of the button that opened it
+/// is still taken for the same, bouncing or doubled, press. West both
+/// opens the panel and saves in it, and a slot must not be overwritten
+/// by a double tap.
+const PANEL_GRACE: Duration = Duration::from_millis(300);
+
+/// The key a pad press stands for while the save-state panel is up.
+/// The panel's own meaning of a button comes first; a button that has
+/// none there but opened the panel closes it again. The opening button
+/// does nothing for [`PANEL_GRACE`] after the panel appeared.
+fn panel_pad_key(
+    button: PadButton,
+    action: Option<Action>,
+    style: PadStyle,
+    open_for: Duration,
+) -> Option<KeyCode> {
+    let opener = action == Some(Action::States);
+    if opener && open_for < PANEL_GRACE {
+        return None;
+    }
+    StatesPanel::pad_key(button, style).or(opener.then_some(KeyCode::Esc))
+}
 
 /// How long "state saved" and friends stay in the status bar.
 const NOTICE_WINDOW: Duration = Duration::from_secs(2);
@@ -347,13 +373,9 @@ impl App {
                 self.pads_ignored.insert(button);
             }
             if self.panel.is_some() {
-                // The button that opened the panel closes it again.
-                let key = if action == Some(Action::States) {
-                    Some(KeyCode::Esc)
-                } else {
-                    StatesPanel::pad_key(button, self.pad_style.unwrap_or(PadStyle::Generic))
-                };
-                if let Some(key) = key {
+                let open_for = self.panel_opened.map_or(Duration::MAX, |at| now - at);
+                let style = self.pad_style.unwrap_or(PadStyle::Generic);
+                if let Some(key) = panel_pad_key(button, action, style, open_for) {
                     self.handle_panel_key(KeyEvent::new(key, KeyModifiers::NONE), now);
                 }
             } else if self.help
@@ -553,6 +575,7 @@ impl App {
             &self.gba.bus.cartridge,
             self.slot,
         ));
+        self.panel_opened = Some(now);
         self.reset_fps(now);
     }
 
@@ -1189,6 +1212,7 @@ fn play(
         slot: 0,
         held_state: None,
         panel: None,
+        panel_opened: None,
         state_notice: patch.map(|p| {
             let name = p.file_name().unwrap_or_default().to_string_lossy();
             (format!("patched with {name}"), Instant::now())
@@ -1467,6 +1491,27 @@ fn main() -> ExitCode {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_pad_button_that_opens_the_panel_saves_in_it_after_a_moment() {
+        let later = PANEL_GRACE * 2;
+        let west = |open_for| {
+            panel_pad_key(
+                PadButton::West,
+                Some(Action::States),
+                PadStyle::Xbox,
+                open_for,
+            )
+        };
+        assert_eq!(west(Duration::from_millis(120)), None, "double tap");
+        assert_eq!(west(later), Some(KeyCode::Char('s')));
+        // An opener with no meaning in the panel (`states = pad:l2`)
+        // closes it again.
+        let l2 = panel_pad_key(PadButton::L2, Some(Action::States), PadStyle::Xbox, later);
+        assert_eq!(l2, Some(KeyCode::Esc));
+        let east = panel_pad_key(PadButton::East, None, PadStyle::Xbox, Duration::ZERO);
+        assert_eq!(east, Some(KeyCode::Esc), "back works at once");
+    }
 
     #[test]
     fn late_frames_are_caught_up_within_a_bound() {
