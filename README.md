@@ -254,8 +254,9 @@ bottom button confirms and the right one backs out.
 | On a pad (Xbox labels)     | Does                                      |
 | -------------------------- | ----------------------------------------- |
 | `RT` (held)                | fast-forward                              |
+| `LT` (held)                | rewind                                    |
 | `Y`                        | pause                                     |
-| `LT`                       | save-state panel: `A` load, `X` save, `Y` delete, `B` close |
+| `X`                        | save-state panel: `A` load, `X` save, `Y` delete, `B` close |
 | `Xbox` twice               | back to the library                       |
 | `RS` (click)               | show the bindings                         |
 | library: `A` / `Menu`      | play; `LB`/`RB` page through the list     |
@@ -272,7 +273,7 @@ Windows), one action per line:
 ```ini
 # button = key [key ...]      actions: up down left right a b l r
 a      = j                    #          start select pause step fast speed rewind
-b      = k pad:west           #          mute quieter louder save load states
+b      = k pad:lstick         #          mute quieter louder save load states
 select = space                #          screenshot stats lcd leave help
 start  = enter                # unlisted actions keep their defaults
 fast   = f9 tab               # an empty right-hand side unbinds

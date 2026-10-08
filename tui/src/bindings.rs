@@ -221,7 +221,8 @@ impl Bindings {
     /// `Tab` / `F` fast-forward, `F4` its speed limit, `W` rewind, `M` mute, `-` / `=` / `+` volume, `F3` performance figures and `F12`
     /// screenshot. On a pad, the buttons sit
     /// where a GBA has them — A east, B south, the shoulders on L1/R1 —
-    /// R2 fast-forwards, L2 opens the save-state panel, north pauses,
+    /// R2 fast-forwards and L2 rewinds, west opens the save-state panel
+    /// (where it then saves), north pauses,
     /// the guide button (twice) leaves and the right stick shows the
     /// bindings. Quick save and load stay off the pad: one stray press
     /// of a load throws progress away.
@@ -278,7 +279,8 @@ impl Bindings {
             (Action::Button(GbaKey::Start), PadButton::Start),
             (Action::Button(GbaKey::Select), PadButton::Select),
             (Action::FastForward, PadButton::R2),
-            (Action::States, PadButton::L2),
+            (Action::Rewind, PadButton::L2),
+            (Action::States, PadButton::West),
             (Action::Pause, PadButton::North),
             (Action::Leave, PadButton::Mode),
             (Action::Help, PadButton::RightStick),
@@ -598,7 +600,8 @@ mod tests {
         );
         assert_eq!(b.pad_action(PadButton::R2), Some(Action::FastForward));
         assert_eq!(b.pad_action(PadButton::Mode), Some(Action::Leave));
-        assert_eq!(b.pad_action(PadButton::West), None, "free for the panel");
+        assert_eq!(b.pad_action(PadButton::L2), Some(Action::Rewind));
+        assert_eq!(b.pad_action(PadButton::West), Some(Action::States));
 
         let (b, problems) = Bindings::parse("a = PAD:West\nstart = pad:start enter\n");
         assert!(problems.is_empty(), "{problems:?}");

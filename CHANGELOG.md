@@ -4,6 +4,15 @@ All notable changes to tuiba. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow
 [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Changed
+- Pad defaults: `LT`/L2 held rewinds, mirroring `RT`/R2 fast-forward,
+  and the save-state panel moved from L2 to the west face button (`X`
+  on Xbox), which then saves inside the panel. A second press of it
+  within 300 ms of opening is ignored, so a double tap cannot
+  overwrite a slot. (#45)
+
 ## [0.11.0] – 2026-10-07
 
 Two quality-of-life additions: play zipped ROMs as they are, and see
