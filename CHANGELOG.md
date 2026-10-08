@@ -4,7 +4,9 @@ All notable changes to tuiba. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow
 [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [0.12.0] – 2026-10-08
+
+Cheats, and a pad button for rewind.
 
 ### Added
 - Cheats: `<rom>.cht` next to the ROM, in libretro's format (so
@@ -257,6 +259,7 @@ First release: ARM7TDMI, memory map with DMA and timers, PPU modes 0–5
 with sprites, windows and blending, HLE BIOS, SRAM/flash/EEPROM saves,
 Kitty graphics and half-block renderers, library screen, headless mode.
 
+[0.12.0]: https://github.com/Huseynteymurzade28/tuiba/compare/v0.11.0...v0.12.0
 [0.11.0]: https://github.com/Huseynteymurzade28/tuiba/compare/v0.10.0...v0.11.0
 [0.10.0]: https://github.com/Huseynteymurzade28/tuiba/compare/v0.9.0...v0.10.0
 [0.9.0]: https://github.com/Huseynteymurzade28/tuiba/compare/v0.8.0...v0.9.0
