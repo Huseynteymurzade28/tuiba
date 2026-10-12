@@ -9,6 +9,7 @@
 use crate::apu::Apu;
 use crate::memory::IO_SIZE;
 use crate::memory::dma::Dma;
+use crate::memory::sio;
 use crate::memory::timers::Timers;
 
 /// First and last DMA register offsets.
@@ -74,6 +75,12 @@ pub mod reg {
     pub const TM0CNT_L: u32 = 0x100;
     pub const TM0CNT_H: u32 = 0x102;
     pub const TM3CNT_H: u32 = 0x10E;
+
+    // Serial
+    pub const SIODATA32: u32 = 0x120;
+    pub const SIOCNT: u32 = 0x128;
+    pub const SIODATA8: u32 = 0x12A;
+    pub const RCNT: u32 = 0x134;
 
     // Keypad
     pub const KEYINPUT: u32 = 0x130;
@@ -162,8 +169,11 @@ impl IoRegisters {
     /// Creates a register block in its power-on state.
     #[must_use]
     pub fn new() -> Self {
+        let mut raw = vec![0; IO_SIZE].into_boxed_slice();
+        // The serial port powers up in general-purpose mode.
+        raw[reg::RCNT as usize + 1] = 0x80;
         Self {
-            raw: vec![0; IO_SIZE].into_boxed_slice(),
+            raw,
             keyinput: KEYINPUT_ALL_RELEASED,
             halt_requested: false,
             timers: Timers::new(),
@@ -259,6 +269,7 @@ impl IoRegisters {
             reg::DISPSTAT => (value & !0x7) | (self.read16(reg::DISPSTAT) & 0x7),
             // Writing `1` acknowledges (clears) the corresponding bit.
             reg::IF => self.read16(reg::IF) & !value,
+            reg::SIOCNT => self.write_siocnt(value),
             _ => value,
         };
         self.raw[off..off + 2].copy_from_slice(&value.to_le_bytes());
@@ -295,6 +306,25 @@ impl IoRegisters {
         let aligned = offset & !3;
         self.write16(aligned, value as u16);
         self.write16(aligned + 2, (value >> 16) as u16);
+    }
+
+    /// Runs a `SIOCNT` write past the empty link port and returns what
+    /// the register holds afterwards; see [`sio`].
+    fn write_siocnt(&mut self, value: u16) -> u16 {
+        let written = sio::write_siocnt(value, self.read16(reg::RCNT));
+        if let Some(mode) = written.finished {
+            // The input line is pulled up: all ones shift in.
+            if mode == sio::Mode::Normal32 {
+                self.set_raw16(reg::SIODATA32, 0xFFFF);
+                self.set_raw16(reg::SIODATA32 + 2, 0xFFFF);
+            } else {
+                self.set_raw8(reg::SIODATA8, 0xFF);
+            }
+            if written.siocnt & sio::IRQ_ENABLE != 0 {
+                self.request_interrupt(Interrupt::Serial);
+            }
+        }
+        written.siocnt
     }
 
     /// Raises `source` in `IF`. Whether it reaches the CPU depends on `IE`
@@ -514,6 +544,27 @@ mod tests {
         io.write32(reg::TM3CNT_H - 2, 0x00C0_1234); // TM3CNT_L=0x1234, TM3CNT_H=0xC0
         assert_eq!(io.read16(reg::TM3CNT_H), 0xC0);
         assert_eq!(io.timers.counter(3), 0x1234);
+    }
+
+    #[test]
+    fn serial_transfer_without_a_partner() {
+        let mut io = IoRegisters::new();
+        assert_eq!(io.read16(reg::RCNT), 0x8000, "power-on RCNT");
+        io.write16(reg::RCNT, 0);
+        io.write16(reg::SIODATA8, 0x1234);
+        io.write16(reg::SIOCNT, 0x4081);
+        assert_eq!(io.read16(reg::SIOCNT), 0x4005);
+        assert_eq!(io.read16(reg::SIODATA8), 0x12FF, "ones shifted in");
+        assert_eq!(io.read16(reg::IF), Interrupt::Serial.mask());
+
+        io.write16(reg::IF, 0xFFFF);
+        io.write32(reg::SIODATA32, 0x1234_5678);
+        io.write16(reg::SIOCNT, 0x1081);
+        assert_eq!(io.read32(reg::SIODATA32), 0xFFFF_FFFF);
+        assert_eq!(io.read16(reg::IF), 0, "no interrupt unless enabled");
+
+        io.write16(reg::SIOCNT, 0x2080);
+        assert_eq!(io.read16(reg::SIOCNT), 0x208C, "multiplayer child");
     }
 
     #[test]

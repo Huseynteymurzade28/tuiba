@@ -4,6 +4,15 @@ All notable changes to tuiba. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow
 [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+- The link port answers as an empty one instead of plain memory: an
+  internally clocked transfer finishes with all ones and the serial
+  interrupt, multiplayer mode reports a lone child, and `RCNT` powers
+  up in general-purpose mode. Games that probe for a link cable on
+  boot see none. (#25)
+
 ## [0.13.0] – 2026-10-12
 
 Your own BIOS, if you have one.

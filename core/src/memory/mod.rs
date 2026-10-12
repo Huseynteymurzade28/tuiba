@@ -28,6 +28,7 @@ pub mod eeprom;
 pub mod gpio;
 pub mod io;
 pub mod journal;
+pub mod sio;
 pub mod timers;
 pub mod video;
 pub mod wait;
