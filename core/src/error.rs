@@ -26,6 +26,11 @@ pub enum GbaError {
         min: usize,
     },
 
+    /// A save state was taken with a real BIOS, and the machine it is
+    /// being restored into runs without one.
+    #[error("this state was saved with a BIOS image; load one to restore it")]
+    StateNeedsBios,
+
     /// A BIOS image was not exactly 16 KiB.
     #[error("BIOS image is {size} bytes, expected {expected}")]
     BiosSize {

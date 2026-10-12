@@ -59,6 +59,13 @@ impl Snapshot {
         &self.gba.bus.cartridge.header().title
     }
 
+    /// Whether the snapshot was taken while a real BIOS handled system
+    /// calls, so that only a machine with a BIOS image can resume it.
+    #[must_use]
+    pub fn needs_bios(&self) -> bool {
+        !self.gba.cpu.hle_swi
+    }
+
     /// Serializes the snapshot for writing to a file.
     ///
     /// The cartridge ROM is not included — it is the game the state
@@ -155,9 +162,23 @@ impl Gba {
     /// flight belong to the moment the snapshot replaced, and playing
     /// them after the jump is heard as a click. The frontend's own queue
     /// wants the same treatment.
-    pub fn restore(&mut self, snapshot: &Snapshot) {
+    ///
+    /// The machine keeps its own BIOS image: a state never carries one.
+    ///
+    /// # Errors
+    ///
+    /// [`GbaError::StateNeedsBios`] if the snapshot was running a real
+    /// BIOS and this machine has none to run it with. The machine is left
+    /// as it was.
+    pub fn restore(&mut self, snapshot: &Snapshot) -> Result<()> {
+        if snapshot.needs_bios() && !self.has_bios() {
+            return Err(GbaError::StateNeedsBios);
+        }
+        let bios = self.bus.bios_image();
         self.clone_from(&snapshot.gba);
+        self.bus.attach_bios(bios);
         self.clear_audio();
+        Ok(())
     }
 }
 
@@ -227,7 +248,7 @@ mod tests {
         }
         gba.bus.write32(0x0200_0000, 0);
 
-        gba.restore(&snapshot);
+        gba.restore(&snapshot).unwrap();
         assert_eq!(gba.bus.read32(0x0200_0000), 0xDEAD_BEEF);
     }
 
@@ -245,7 +266,7 @@ mod tests {
             reference.run_frame();
         }
 
-        gba.restore(&snapshot);
+        gba.restore(&snapshot).unwrap();
         for _ in 0..8 {
             gba.run_frame();
         }
@@ -269,7 +290,7 @@ mod tests {
         gba.load_save_data(&vec![0x11; 0x8000]);
         let snapshot = gba.snapshot();
         gba.load_save_data(&vec![0x22; 0x8000]);
-        gba.restore(&snapshot);
+        gba.restore(&snapshot).unwrap();
         assert_eq!(gba.save_data()[0], 0x11);
     }
 
@@ -304,7 +325,9 @@ mod tests {
         let mut in_memory = gba.clone();
 
         let mut thawed = Gba::new(cartridge.clone());
-        thawed.restore(&Snapshot::from_bytes(&bytes, &cartridge).unwrap());
+        thawed
+            .restore(&Snapshot::from_bytes(&bytes, &cartridge).unwrap())
+            .unwrap();
         assert_eq!(thawed.bus.read32(0x0300_0000), 0x0BAD_F00D);
 
         for frame in 1..=8 {
@@ -317,6 +340,63 @@ mod tests {
             );
         }
         assert_eq!(thawed.cpu.regs.get(PC), in_memory.cpu.regs.get(PC));
+    }
+
+    /// A BIOS image of a recognisable pattern, with the reset vector
+    /// branching to itself so a machine booted with it stays put.
+    fn patterned_bios() -> Vec<u8> {
+        let mut bios = vec![0xA5; crate::memory::BIOS_SIZE];
+        bios[..4].copy_from_slice(&0xEAFF_FFFEu32.to_le_bytes());
+        bios
+    }
+
+    /// A dumped BIOS is not the player's to hand out, and state files
+    /// get passed around: the image stays out of them, and the machine a
+    /// state is restored into keeps its own.
+    #[test]
+    fn a_state_leaves_the_bios_out() {
+        let cartridge = Cartridge::from_bytes(minimal_rom()).unwrap();
+        let bios = patterned_bios();
+        let mut gba = Gba::with_bios(cartridge.clone(), &bios, crate::Boot::Intro).unwrap();
+        gba.run_frame();
+        let bytes = gba.snapshot().to_bytes();
+        assert!(
+            !bytes.windows(64).any(|w| w.iter().all(|&b| b == 0xA5)),
+            "the BIOS image leaked into the state file"
+        );
+
+        let mut thawed = Gba::with_bios(cartridge.clone(), &bios, crate::Boot::Intro).unwrap();
+        thawed
+            .restore(&Snapshot::from_bytes(&bytes, &cartridge).unwrap())
+            .unwrap();
+        assert!(thawed.has_bios());
+        assert_eq!(thawed.bus.fetch32(0x100), 0xA5A5_A5A5, "image reattached");
+        assert_eq!(thawed.cpu.regs.get(PC), gba.cpu.regs.get(PC));
+    }
+
+    /// A state taken inside a real BIOS cannot run on the built-in
+    /// replacement; one taken on the replacement runs anywhere.
+    #[test]
+    fn a_bios_state_needs_a_bios() {
+        let cartridge = Cartridge::from_bytes(minimal_rom()).unwrap();
+        let with_bios = Gba::with_bios(cartridge.clone(), &patterned_bios(), crate::Boot::Intro)
+            .unwrap()
+            .snapshot();
+        assert!(with_bios.needs_bios());
+        let mut hle = Gba::new(cartridge.clone());
+        let pc = hle.cpu.regs.get(PC);
+        assert!(matches!(
+            hle.restore(&with_bios),
+            Err(GbaError::StateNeedsBios)
+        ));
+        assert_eq!(hle.cpu.regs.get(PC), pc, "a refused state changes nothing");
+
+        let hle_state = hle.snapshot();
+        assert!(!hle_state.needs_bios());
+        let mut gba = Gba::with_bios(cartridge, &patterned_bios(), crate::Boot::Intro).unwrap();
+        gba.restore(&hle_state).unwrap();
+        assert!(gba.has_bios(), "the machine keeps its image");
+        assert_eq!(gba.cpu.regs.get(PC), pc);
     }
 
     /// The ROM is not in the file, so a state is small next to the game
@@ -451,7 +531,7 @@ mod tests {
         let snapshot = gba.snapshot();
         gba.run_frame();
         assert!(!gba.audio().is_empty(), "a frame should produce samples");
-        gba.restore(&snapshot);
+        gba.restore(&snapshot).unwrap();
         assert_eq!(gba.audio(), []);
     }
 }

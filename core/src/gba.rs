@@ -48,6 +48,19 @@ pub struct Gba {
     pub last_unsupported_swi: Option<u8>,
 }
 
+/// Where a machine with a BIOS image starts.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Boot {
+    /// From the reset vector, through the BIOS's logo and chime, as a
+    /// console switched on.
+    #[default]
+    Intro,
+    /// Straight at the cartridge entry point, in the state the BIOS
+    /// would have left the machine in. System calls still go to the
+    /// BIOS image.
+    Skip,
+}
+
 impl Gba {
     /// Boots a cartridge without a BIOS image: the CPU starts at the
     /// cartridge entry point and BIOS calls are emulated in software.
@@ -57,20 +70,52 @@ impl Gba {
         for (address, word) in bios::IRQ_STUB {
             bus.poke_bios(address, word);
         }
-        let mut cpu = Cpu::new();
-        cpu.hle_swi = true;
-        cpu.skip_bios(&mut bus);
-        // The BIOS leaves this flag set after the boot sequence.
-        bus.io.write16(reg::POSTFLG, 1);
-        let mut ppu = Ppu::new();
-        ppu.set_line(BOOT_LINE, &mut bus.io);
+        let mut gba = Self::assemble(bus);
+        gba.cpu.hle_swi = true;
+        gba.skip_boot();
+        gba
+    }
+
+    /// Boots a cartridge with a BIOS image, which then services every
+    /// system call and interrupt as on hardware.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`crate::GbaError::BiosSize`] if the image is not 16 KiB.
+    pub fn with_bios(cartridge: Cartridge, bios: &[u8], boot: Boot) -> Result<Self> {
+        let mut bus = Bus::new(cartridge);
+        bus.load_bios(bios)?;
+        let mut gba = Self::assemble(bus);
+        match boot {
+            Boot::Intro => gba.cpu.reset(&mut gba.bus),
+            Boot::Skip => gba.skip_boot(),
+        }
+        Ok(gba)
+    }
+
+    fn assemble(bus: Bus) -> Self {
         Self {
-            cpu,
+            cpu: Cpu::new(),
             bus,
-            ppu,
+            ppu: Ppu::new(),
             intr_wait: None,
             last_unsupported_swi: None,
         }
+    }
+
+    /// Puts the machine where the BIOS boot sequence leaves it: at the
+    /// cartridge entry point, partway through a frame.
+    fn skip_boot(&mut self) {
+        self.cpu.skip_bios(&mut self.bus);
+        // The BIOS leaves this flag set after the boot sequence.
+        self.bus.io.write16(reg::POSTFLG, 1);
+        self.ppu.set_line(BOOT_LINE, &mut self.bus.io);
+    }
+
+    /// Whether the machine has a real BIOS image.
+    #[must_use]
+    pub fn has_bios(&self) -> bool {
+        self.bus.has_bios()
     }
 
     /// Sets the date and time the cartridge's real-time clock reports,
@@ -78,19 +123,6 @@ impl Gba {
     /// likes — every frame is plenty; nothing reads the clock between.
     pub fn set_clock(&mut self, now: DateTime) {
         self.bus.gpio.set_clock(now);
-    }
-
-    /// Installs a real BIOS image and restarts from the reset vector.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`crate::GbaError::BiosSize`] if the image is not 16 KiB.
-    pub fn load_bios(&mut self, bios: &[u8]) -> Result<()> {
-        self.bus.load_bios(bios)?;
-        self.cpu.hle_swi = false;
-        self.cpu.reset(&mut self.bus);
-        self.intr_wait = None;
-        Ok(())
     }
 
     /// The backup memory contents, for writing a save file.
@@ -323,18 +355,61 @@ impl Gba {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::memory::base;
     use crate::memory::io::Interrupt;
     use crate::memory::test_util::rom_with_header;
+    use crate::memory::{BIOS_SIZE, base};
     use crate::ppu::{CYCLES_PER_FRAME, HBLANK_START, SCREEN_WIDTH};
 
     /// A cartridge whose entry point runs `code` (ARM).
-    fn gba_with(code: &[u32]) -> Gba {
+    fn cartridge_with(code: &[u32]) -> Cartridge {
         let mut rom = rom_with_header("TEST", 0x1000);
         for (i, word) in code.iter().enumerate() {
             rom[i * 4..i * 4 + 4].copy_from_slice(&word.to_le_bytes());
         }
-        Gba::new(Cartridge::from_bytes(rom).unwrap())
+        Cartridge::from_bytes(rom).unwrap()
+    }
+
+    fn gba_with(code: &[u32]) -> Gba {
+        Gba::new(cartridge_with(code))
+    }
+
+    /// A BIOS image whose every exception vector branches to itself.
+    fn idle_bios() -> Vec<u8> {
+        0xEAFF_FFFEu32.to_le_bytes().repeat(BIOS_SIZE / 4)
+    }
+
+    #[test]
+    fn a_bios_boots_from_the_reset_vector() {
+        let gba = Gba::with_bios(cartridge_with(&[]), &idle_bios(), Boot::Intro).unwrap();
+        assert!(gba.has_bios());
+        assert_eq!(gba.cpu.next_pc(), 0);
+        assert_eq!(gba.cpu.regs.mode(), crate::cpu::Mode::Supervisor);
+        assert_eq!(
+            gba.ppu.vcount(),
+            0,
+            "a console switched on starts at line 0"
+        );
+        assert_eq!(gba.bus.io.read16(reg::POSTFLG), 0);
+        assert!(matches!(
+            Gba::with_bios(cartridge_with(&[]), &[0; 16], Boot::Intro),
+            Err(crate::GbaError::BiosSize { size: 16, .. })
+        ));
+    }
+
+    #[test]
+    fn a_bios_takes_system_calls_when_its_intro_is_skipped() {
+        let mut gba = Gba::with_bios(
+            cartridge_with(&[0xEF06_0000]), // swi 6 (Div)
+            &idle_bios(),
+            Boot::Skip,
+        )
+        .unwrap();
+        assert_eq!(gba.cpu.next_pc(), 0x0800_0000);
+        assert_eq!(gba.ppu.vcount(), BOOT_LINE);
+        gba.step();
+        assert_eq!(gba.cpu.next_pc(), 0x08, "into the BIOS's SWI vector");
+        assert_eq!(gba.cpu.regs.mode(), crate::cpu::Mode::Supervisor);
+        assert_eq!(gba.last_unsupported_swi, None);
     }
 
     #[test]

@@ -30,7 +30,7 @@ pub mod state;
 
 pub use cpu::Cpu;
 pub use error::{GbaError, Result};
-pub use gba::Gba;
+pub use gba::{Boot, Gba};
 pub use memory::{Bus, Cartridge, DateTime, Memory};
 pub use ppu::{Framebuffer, Ppu, SCREEN_HEIGHT, SCREEN_WIDTH};
 pub use state::Snapshot;

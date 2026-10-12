@@ -10,6 +10,7 @@
 //! opcode the BIOS itself supplied.
 
 use std::cell::Cell;
+use std::sync::Arc;
 
 use crate::error::{GbaError, Result};
 use crate::memory::backup::Backup;
@@ -47,6 +48,47 @@ fn set32(mem: &mut [u8], index: usize, value: u32) {
     mem[index..index + 4].copy_from_slice(&value.to_le_bytes());
 }
 
+/// The BIOS ROM.
+///
+/// Shared between a machine and its snapshots, like the cartridge ROM,
+/// and left out of save states: a dumped BIOS is copyrighted, and a
+/// state file is something people pass around. A state carries an empty
+/// image in its place, written the way an empty byte slice always was
+/// (older states still hold a full one, read and thrown away);
+/// [`Gba::restore`](crate::Gba::restore) puts the running machine's own
+/// image back.
+#[derive(Debug, Clone)]
+pub(crate) struct BiosImage {
+    bytes: Arc<[u8]>,
+    /// Whether this is a real image, rather than the HLE stubs.
+    real: bool,
+}
+
+impl BiosImage {
+    fn stubs() -> Self {
+        Self {
+            bytes: Arc::from(vec![0; BIOS_SIZE]),
+            real: false,
+        }
+    }
+}
+
+impl serde::Serialize for BiosImage {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> std::result::Result<S::Ok, S::Error> {
+        s.collect_seq(std::iter::empty::<u8>())
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for BiosImage {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> std::result::Result<Self, D::Error> {
+        Vec::<u8>::deserialize(d)?;
+        Ok(Self {
+            bytes: Arc::from(&[][..]),
+            real: false,
+        })
+    }
+}
+
 /// What the bus remembers of past opcode fetches.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct OpenBus {
@@ -82,7 +124,7 @@ impl OpenBus {
 /// The GBA memory bus and every memory-mapped device hanging off it.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct Bus {
-    bios: Box<[u8]>,
+    bios: BiosImage,
     ewram: Box<[u8]>,
     iwram: Box<[u8]>,
     /// Save memory at `0x0E00_0000`.
@@ -134,7 +176,7 @@ impl Bus {
     #[must_use]
     pub fn new(cartridge: Cartridge) -> Self {
         Self {
-            bios: vec![0; BIOS_SIZE].into_boxed_slice(),
+            bios: BiosImage::stubs(),
             ewram: vec![0; EWRAM_SIZE].into_boxed_slice(),
             iwram: vec![0; IWRAM_SIZE].into_boxed_slice(),
             backup: Backup::for_type(cartridge.save_type()),
@@ -198,9 +240,26 @@ impl Bus {
     /// exception stubs; software cannot write here.
     pub fn poke_bios(&mut self, address: u32, value: u32) {
         let i = address as usize;
-        if i + 4 <= BIOS_SIZE {
-            self.bios[i..i + 4].copy_from_slice(&value.to_le_bytes());
+        let bios = Arc::make_mut(&mut self.bios.bytes);
+        if i + 4 <= bios.len() {
+            bios[i..i + 4].copy_from_slice(&value.to_le_bytes());
         }
+    }
+
+    /// Whether a real BIOS image is installed.
+    #[must_use]
+    pub fn has_bios(&self) -> bool {
+        self.bios.real
+    }
+
+    /// The BIOS image, shared.
+    pub(crate) fn bios_image(&self) -> BiosImage {
+        self.bios.clone()
+    }
+
+    /// Puts back what [`Bus::bios_image`] returned.
+    pub(crate) fn attach_bios(&mut self, bios: BiosImage) {
+        self.bios = bios;
     }
 
     /// What the bus remembers of past fetches.
@@ -243,10 +302,10 @@ impl Bus {
     fn bios_word(&self, address: u32) -> u32 {
         let open_bus = self.latches.get();
         let off = page_offset(address) as usize & !3;
-        if off >= BIOS_SIZE {
+        if off >= self.bios.bytes.len() {
             open_bus.fetch
         } else if open_bus.in_bios {
-            get32(&self.bios, off)
+            get32(&self.bios.bytes, off)
         } else {
             open_bus.bios
         }
@@ -264,7 +323,10 @@ impl Bus {
                 expected: BIOS_SIZE,
             });
         }
-        self.bios.copy_from_slice(bios);
+        self.bios = BiosImage {
+            bytes: Arc::from(bios),
+            real: true,
+        };
         Ok(())
     }
 
