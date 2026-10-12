@@ -4,6 +4,28 @@ All notable changes to tuiba. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow
 [Semantic Versioning](https://semver.org/).
 
+## [0.13.0] – 2026-10-12
+
+Your own BIOS, if you have one.
+
+### Added
+- Real BIOS images: `--bios FILE`, or `gba_bios.bin` in the config
+  directory for every game. Games boot through the logo and chime and
+  every system call runs on the real thing; `--skip-intro` goes straight
+  to the game and `--no-bios` back to the built-in replacement. The
+  console's and the Nintendo DS's dumps are recognised; other images
+  run with a note in the status bar. (#14)
+- CI runs the test ROMs on Cult-of-GBA's replacement BIOS too, with and
+  without its intro, and expects the same frames as without a BIOS.
+
+### Changed
+- Save states never contain the BIOS image. Existing states still load.
+  A state taken while a real BIOS was running needs one to be loaded
+  back, and says so instead of crashing.
+- `tuiba-core`: `Gba::with_bios(cartridge, image, Boot)` replaces
+  `Gba::load_bios`, and `Gba::restore` returns a `Result`
+  (`GbaError::StateNeedsBios`).
+
 ## [0.12.0] – 2026-10-08
 
 Cheats, and a pad button for rewind.
@@ -259,6 +281,7 @@ First release: ARM7TDMI, memory map with DMA and timers, PPU modes 0–5
 with sprites, windows and blending, HLE BIOS, SRAM/flash/EEPROM saves,
 Kitty graphics and half-block renderers, library screen, headless mode.
 
+[0.13.0]: https://github.com/Huseynteymurzade28/tuiba/compare/v0.12.0...v0.13.0
 [0.12.0]: https://github.com/Huseynteymurzade28/tuiba/compare/v0.11.0...v0.12.0
 [0.11.0]: https://github.com/Huseynteymurzade28/tuiba/compare/v0.10.0...v0.11.0
 [0.10.0]: https://github.com/Huseynteymurzade28/tuiba/compare/v0.9.0...v0.10.0
