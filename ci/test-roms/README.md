@@ -19,6 +19,16 @@ checked against its sha256 before it runs. None are committed here.
 | ------ | ------- | ---- |
 | [jsmolka/gba-tests](https://github.com/jsmolka/gba-tests) | MIT | ARM and THUMB instructions, memory mirrors and widths, BIOS read protection, save chips, three PPU demos |
 
+## BIOS
+
+Every ROM also runs on [Cult-of-GBA's replacement BIOS](https://github.com/Cult-of-GBA/BIOS)
+(MIT), once with `--skip-intro` and once booting through its intro, and
+must reach the same frame as on tuiba's built-in replacement. That keeps
+the real-BIOS path (`--bios`) working without Nintendo's image, which
+cannot be downloaded legally. A ROM marked `hle` in the manifest is left
+out of these runs — `bios.gba` checks for the exact opcodes Nintendo's
+BIOS leaves on the bus.
+
 ## Adding a ROM
 
 Only ROMs whose licence allows it — homebrew test suites, never

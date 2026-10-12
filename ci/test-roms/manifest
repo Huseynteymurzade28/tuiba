@@ -1,11 +1,19 @@
 # Test ROMs run headlessly in CI by ci/test-roms/run.sh.
 #
 # source <name> <licence> <url prefix, pinned to a commit>
-# rom    <source> <path> <sha256> <frames> <expected frame hash>  [# note]
+# bios   <name> <licence> <url, pinned to a commit> <sha256>
+# rom    <source> <path> <sha256> <frames> <expected frame hash> [hle]  [# note]
+#
+# A `bios` line (before the ROMs) names a BIOS image that every ROM also
+# runs on, expecting the same frame; `hle` marks a ROM that only passes
+# on the built-in replacement.
 #
 # The frame hash is the `frame=` value `tuiba ROM --frames N` prints: a
 # hash of the final frame. For suites that report on screen, it is the
 # hash of their "passed" screen; for demos, of a frame checked by eye.
+
+# Cult-of-GBA's replacement BIOS, written from scratch.
+bios cult-of-gba MIT https://raw.githubusercontent.com/Cult-of-GBA/BIOS/a30e9a96df083628b650724b7d4d7112b4070b98/bios.bin 61af6e8c2db6cf24aa6924e8133f6a50833158fca33ff08ea5e11e1a06e132f2
 
 source jsmolka MIT https://raw.githubusercontent.com/jsmolka/gba-tests/a7113b67e63f83a9b321696ddd7042ccfad6c881
 
@@ -19,7 +27,8 @@ rom jsmolka save/none.gba         edb34ba6590d070c8a50cf0f3566b1e3cc679377b97822
 rom jsmolka save/sram.gba         a37ad99c31e3f805eb05a00e498b65bd78e6f43a0a139cd695bea1f88229af2c 120 df196d48edea3565
 rom jsmolka save/flash64.gba      7e2aa32e943aedde88bd750eadcdbf55152d3a1ec61385011b7f15cd85b07c02 120 df196d48edea3565
 rom jsmolka save/flash128.gba     9ac50e51d3ce4209dbdf85e472e70c067d5827e9af1bb3e707f6bd9059d5f0c6 120 df196d48edea3565
-rom jsmolka bios/bios.gba         9d7b369fa1aa661ff03692b3d79c6f644b623d72983d0fc890e6d87a0409a3c9 120 df196d48edea3565
+# Expects the opcodes Nintendo's BIOS leaves on the bus; Cult-of-GBA's differ.
+rom jsmolka bios/bios.gba         9d7b369fa1aa661ff03692b3d79c6f644b623d72983d0fc890e6d87a0409a3c9 120 df196d48edea3565 hle
 
 # Demos: no verdict of their own; the hash pins a frame that matched
 # the source when checked.

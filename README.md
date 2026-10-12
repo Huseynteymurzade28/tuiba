@@ -49,7 +49,7 @@ volume).
 | Sound    | All four PSG channels and both direct-sound FIFOs, mixed at 32 kHz and played through the default audio device |
 | Saves    | SRAM, 64/128 KiB flash and serial EEPROM, auto-detected from the ROM; `.sav` written as you play              |
 | Clock    | The cartridge real-time clock (S-3511 over GPIO) some games use for day and night, reading your local time     |
-| BIOS     | Runs without a BIOS image: `IntrWait`, `Div`, `Sqrt`, `ArcTan2`, `CpuSet`, LZ77/RL/`BitUnPack`, affine helpers are emulated in software |
+| BIOS     | Runs without a BIOS image: `IntrWait`, `Div`, `Sqrt`, `ArcTan2`, `CpuSet`, LZ77/RL/`BitUnPack`, affine helpers are emulated in software; or boots your own dump, logo and all |
 | Input    | Keyboard with exact key releases on terminals that support the Kitty keyboard protocol; gamepads, hot-pluggable; bindings in a config file |
 | Frontend | IPS/UPS/BPS patches applied on load; cheats (raw, GameShark, Action Replay, CodeBreaker) from libretro `.cht` files; library with folders, filter, sort and last-played memory; pixels over the Kitty, Sixel or iTerm2 protocol, or half-blocks; pause, frame step, fast-forward, rewind and screenshots; headless debug mode |
 
@@ -81,7 +81,8 @@ contains no proprietary code:
 
 - **No BIOS.** The GBA's system ROM is not included, downloaded or
   linked. The BIOS calls that games make are emulated in software from
-  public documentation.
+  public documentation. You can run a BIOS dumped from your own console
+  instead; it is never copied into save states.
 - **No games.** No ROMs are included or linked; you bring your own
   cartridges. Testing uses freely distributed homebrew and small
   hand-assembled programs in the test suite.
@@ -233,6 +234,21 @@ shows them the way that LCD did: darker and less saturated, using the
 approximation higan and ares use. It applies to every renderer and is
 remembered until you quit; screenshots keep the game's own colours.
 
+tuiba does not need the GBA's BIOS, and none comes with it: the system
+calls games make are emulated in software. If you have dumped the BIOS
+from your own console, name it `gba_bios.bin` and put it in the config
+directory (`~/.config/tuiba/`, or `%APPDATA%\tuiba` on Windows), or
+pass `--bios FILE`. Games then boot through the real logo and chime and
+every system call runs on the real thing. `--skip-intro` starts the game
+straight away while keeping the BIOS for system calls, and `--no-bios`
+goes back to the built-in replacement for one run. The image is 16 KiB;
+the console's and the Nintendo DS's dumps are recognised, and anything
+else (a replacement BIOS, say) runs with a note in the status bar.
+
+The BIOS is never written into save states, which get shared around.
+A state saved while a BIOS was running needs one to be loaded back;
+states from the built-in replacement load either way.
+
 If tuiba ever crashes, the message and a backtrace are appended to
 `crash.log` in the same state directory; please attach that to a bug
 report.
@@ -323,7 +339,8 @@ It runs the given number of frames with scripted input, prints CPU state,
 throughput and a hash of the final frame, and can dump the final frame as
 a PNG and the sound as a WAV file. A cartridge clock starts at
 2000-01-01 00:00:00 (or `--clock 2026-09-25T21:00:00`) and advances with
-the emulated frames, so runs are reproducible.
+the emulated frames, so runs are reproducible. The BIOS options work
+here too, so a ROM can be compared between `--no-bios` and `--bios`.
 
 ## Building
 
