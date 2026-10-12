@@ -7,6 +7,7 @@ use std::fmt;
 use std::path::PathBuf;
 
 use chrono::NaiveDateTime;
+use tuiba_core::Boot;
 
 use crate::graphics::Renderer;
 use crate::input::GbaKey;
@@ -30,6 +31,13 @@ Debug options (headless, no terminal UI; need a ROM path):
   --clock DATETIME      what a cartridge's real-time clock reads on the first
                         frame, as YYYY-MM-DDTHH:MM:SS (default 2000-01-01
                         00:00:00); it advances with the emulated frames
+
+BIOS options (for the interactive and headless modes alike):
+  --bios FILE           run the BIOS image FILE, dumped from your own console
+                        (default: gba_bios.bin in the config directory, if
+                        it is there; otherwise a built-in replacement)
+  --no-bios             use the built-in replacement even if a BIOS is set up
+  --skip-intro          with a BIOS, start the game without the boot logo
 
 Display and sound options:
   --renderer NAME       how to draw the game screen: auto (default: an image
@@ -119,6 +127,22 @@ pub struct Args {
     pub fast_speed: FastSpeed,
     /// Start with LCD colour correction on.
     pub lcd_colours: bool,
+    /// Which BIOS image to run.
+    pub bios: BiosChoice,
+    /// Where a machine with a BIOS image starts.
+    pub boot: Boot,
+}
+
+/// Which BIOS image to run.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub enum BiosChoice {
+    /// The one in the config directory, if there is one.
+    #[default]
+    Default,
+    /// The one at this path.
+    File(PathBuf),
+    /// None: the built-in replacement.
+    Builtin,
 }
 
 /// Headless (non-interactive) run configuration.
@@ -204,6 +228,8 @@ impl Args {
         let mut stats = false;
         let mut lcd_colours = false;
         let mut fast_speed = FastSpeed::Max;
+        let mut bios = BiosChoice::Default;
+        let mut boot = Boot::Intro;
 
         while let Some(arg) = args.next() {
             let mut value = |flag: &str| {
@@ -223,6 +249,9 @@ impl Args {
                     let v = value("--renderer")?;
                     renderer = v.parse().map_err(|()| bad("--renderer", &v))?;
                 }
+                "--bios" => bios = BiosChoice::File(PathBuf::from(value("--bios")?)),
+                "--no-bios" => bios = BiosChoice::Builtin,
+                "--skip-intro" => boot = Boot::Skip,
                 "--mute" => mute = true,
                 "--stats" => stats = true,
                 "--color-correction" => lcd_colours = true,
@@ -279,6 +308,8 @@ impl Args {
             stats,
             fast_speed,
             lcd_colours,
+            bios,
+            boot,
         })
     }
 }
@@ -344,8 +375,17 @@ mod tests {
                 stats: false,
                 fast_speed: FastSpeed::Max,
                 lcd_colours: false,
+                bios: BiosChoice::Default,
+                boot: Boot::Intro,
             }
         );
+        assert_eq!(
+            parse(&["--bios", "gba.bin"]).unwrap().bios,
+            BiosChoice::File(PathBuf::from("gba.bin"))
+        );
+        assert_eq!(parse(&["--no-bios"]).unwrap().bios, BiosChoice::Builtin);
+        assert!(parse(&["--bios"]).is_err());
+        assert_eq!(parse(&["--skip-intro"]).unwrap().boot, Boot::Skip);
         assert_eq!(
             parse(&["--no-graphics"]).unwrap().renderer,
             Renderer::HalfBlocks

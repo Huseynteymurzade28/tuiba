@@ -2,6 +2,7 @@
 
 mod audio;
 mod bindings;
+mod bios;
 mod cheats;
 mod cli;
 mod clock;
@@ -46,7 +47,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Borders, Clear, Padding, Paragraph};
 use ratatui::{Frame, Terminal};
 use tuiba_core::patch::Format;
-use tuiba_core::{Cartridge, Framebuffer, Gba, Snapshot};
+use tuiba_core::{Boot, Cartridge, Framebuffer, Gba, Snapshot};
 
 use crate::audio::AudioOutput;
 use crate::bindings::{Action, Bindings, Input};
@@ -76,6 +77,10 @@ enum AppError {
     /// Terminal I/O failed.
     #[error("terminal error: {0}")]
     Io(#[from] std::io::Error),
+
+    /// The BIOS image could not be used.
+    #[error(transparent)]
+    Bios(#[from] bios::BiosError),
 
     /// The patch next to the ROM could not be applied.
     #[error("{name}: {err}")]
@@ -346,8 +351,9 @@ impl App {
         {
             audio.flush();
         }
-        if let Some(snapshot) = self.rewind.step_back(&self.gba.bus.cartridge) {
-            self.gba.restore(&snapshot);
+        if let Some(snapshot) = self.rewind.step_back(&self.gba.bus.cartridge)
+            && self.gba.restore(&snapshot).is_ok()
+        {
             self.fps_frames += 1;
         }
         self.update_fps(now);
@@ -557,7 +563,10 @@ impl App {
 
     /// Puts a state back and tells the player it happened.
     fn restore(&mut self, snapshot: &Snapshot, now: Instant, notice: String) {
-        self.gba.restore(snapshot);
+        if let Err(err) = self.gba.restore(snapshot) {
+            self.state_notice = Some((err.to_string(), now));
+            return;
+        }
         if let Ok(audio) = &self.audio {
             audio.flush();
         }
@@ -981,6 +990,7 @@ enum GameExit {
 
 fn run() -> Result<(), AppError> {
     let args = cli::Args::parse(std::env::args().skip(1))?;
+    let firmware = Firmware::choose(&args)?;
 
     // Headless runs read the save (so the game boots past its checks) but
     // never write it: a debugging session must not clobber real progress.
@@ -991,7 +1001,7 @@ fn run() -> Result<(), AppError> {
             .expect("parser requires a ROM for headless flags");
         let location =
             Location::from_arg(rom.to_path_buf()).map_err(tuiba_core::GbaError::RomIo)?;
-        let (mut gba, _) = load_gba(&location)?;
+        let (mut gba, _) = load_gba(&location, &firmware)?;
         return Ok(headless::run(&mut gba, config)?);
     }
 
@@ -1031,6 +1041,7 @@ fn run() -> Result<(), AppError> {
         lcd_colours: Cell::new(args.lcd_colours),
         fast_speed: Cell::new(args.fast_speed),
         bindings,
+        firmware,
     };
     if let Some(rom) = direct_rom {
         return play(terminal, &rom, &session, &mut gamepads).map(|_| ());
@@ -1059,6 +1070,38 @@ struct Session {
     /// Fast-forward limit, as last set in a game.
     fast_speed: Cell<FastSpeed>,
     bindings: Bindings,
+    /// The BIOS every game boots with.
+    firmware: Firmware,
+}
+
+/// The BIOS every game in this run boots with, and how.
+struct Firmware {
+    /// The image, or `None` for the core's built-in replacement.
+    bios: Option<bios::Bios>,
+    /// Where a machine with an image starts.
+    boot: Boot,
+}
+
+impl Firmware {
+    fn choose(args: &cli::Args) -> Result<Self, bios::BiosError> {
+        let bios = match &args.bios {
+            cli::BiosChoice::Default => bios::find(None)?,
+            cli::BiosChoice::File(path) => bios::find(Some(path))?,
+            cli::BiosChoice::Builtin => None,
+        };
+        Ok(Self {
+            bios,
+            boot: args.boot,
+        })
+    }
+
+    /// Builds a machine around `cartridge`.
+    fn boot(&self, cartridge: Cartridge) -> Result<Gba, tuiba_core::GbaError> {
+        match &self.bios {
+            Some(bios) => Gba::with_bios(cartridge, &bios.image, self.boot),
+            None => Ok(Gba::new(cartridge)),
+        }
+    }
 }
 
 /// After a game hands control back, Esc and q are ignored until this
@@ -1183,7 +1226,7 @@ fn crash_log_hint() -> String {
 
 /// Loads a cartridge and its save file, applying the patch next to it
 /// if there is one. Returns the patch's path along with the machine.
-fn load_gba(location: &Location) -> Result<(Gba, Option<PathBuf>), AppError> {
+fn load_gba(location: &Location, firmware: &Firmware) -> Result<(Gba, Option<PathBuf>), AppError> {
     let rom = &location.path;
     let mut image = location.read().map_err(tuiba_core::GbaError::RomIo)?;
     let patch = find_patch(rom);
@@ -1197,17 +1240,29 @@ fn load_gba(location: &Location) -> Result<(Gba, Option<PathBuf>), AppError> {
         let bytes = std::fs::read(path).map_err(|e| failed(tuiba_core::GbaError::RomIo(e)))?;
         image = tuiba_core::patch::apply(&image, &bytes).map_err(failed)?;
     }
-    let mut gba = Gba::new(Cartridge::from_bytes(image)?);
+    let mut gba = firmware.boot(Cartridge::from_bytes(image)?)?;
     if let Ok(data) = std::fs::read(rom.with_extension("sav")) {
         gba.load_save_data(&data);
     }
     Ok((gba, patch))
 }
 
-/// What the status bar says as a game starts: the patch it was played
-/// with and the cheats that are on, if any.
-fn start_notice(patch: Option<&Path>, cheats: &CheatFile) -> Option<(String, Instant)> {
+/// What the status bar says as a game starts: a BIOS image we do not
+/// recognise, the patch the game was played with and the cheats that
+/// are on, if any.
+fn start_notice(
+    patch: Option<&Path>,
+    cheats: &CheatFile,
+    firmware: &Firmware,
+) -> Option<(String, Instant)> {
     let mut parts = Vec::new();
+    if firmware
+        .bios
+        .as_ref()
+        .is_some_and(|b| b.kind == bios::Kind::Unknown)
+    {
+        parts.push("BIOS not recognised, running it anyway".to_string());
+    }
     if let Some(patch) = patch {
         let name = patch.file_name().unwrap_or_default().to_string_lossy();
         parts.push(format!("patched with {name}"));
@@ -1241,7 +1296,7 @@ fn play(
     session: &Session,
     gamepads: &mut Gamepads,
 ) -> Result<GameExit, AppError> {
-    let (gba, patch) = load_gba(location)?;
+    let (gba, patch) = load_gba(location, &session.firmware)?;
     let rom = &location.path;
     let header_title = gba.bus.cartridge.header().title.trim().to_string();
     let title = if library::is_placeholder_title(&header_title) {
@@ -1299,7 +1354,7 @@ fn play(
         held_state: None,
         panel: None,
         panel_opened: None,
-        state_notice: start_notice(patch.as_deref(), &cheats),
+        state_notice: start_notice(patch.as_deref(), &cheats, &session.firmware),
         cheats,
     };
     let result = std::panic::catch_unwind(AssertUnwindSafe(|| {
@@ -1556,6 +1611,11 @@ fn main() -> ExitCode {
             ExitCode::SUCCESS
         }
         Err(AppError::Args(err)) => {
+            eprintln!("error: {err}");
+            ExitCode::FAILURE
+        }
+        // A bad image is a setup mistake, not something to log.
+        Err(AppError::Bios(err)) => {
             eprintln!("error: {err}");
             ExitCode::FAILURE
         }

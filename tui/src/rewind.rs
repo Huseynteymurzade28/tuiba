@@ -313,7 +313,7 @@ mod tests {
         // ones before it, newest first.
         for &frame in seen.iter().rev().skip(1) {
             let snapshot = rewind.step_back(&cart).expect("a capture");
-            gba.restore(&snapshot);
+            gba.restore(&snapshot).unwrap();
             assert_eq!(
                 gba.bus.io.read16(tuiba_core::memory::io::reg::KEYINPUT),
                 frame

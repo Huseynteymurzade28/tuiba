@@ -279,7 +279,7 @@ fn le32(bytes: &[u8], at: usize) -> u32 {
 }
 
 /// CRC-32 (IEEE), as zip stores it.
-fn crc32(data: &[u8]) -> u32 {
+pub fn crc32(data: &[u8]) -> u32 {
     const TABLE: [u32; 256] = {
         let mut table = [0; 256];
         let mut i = 0;
