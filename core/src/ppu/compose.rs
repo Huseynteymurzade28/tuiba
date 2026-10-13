@@ -117,57 +117,26 @@ pub fn compose_line(
     out: &mut [u16; SCREEN_WIDTH],
 ) {
     let dispcnt = io.read16(reg::DISPCNT);
-    let win0_on = dispcnt & (1 << 13) != 0;
-    let win1_on = dispcnt & (1 << 14) != 0;
-    let objwin_on = dispcnt & (1 << 15) != 0 && obj_enabled;
-    let any_window = win0_on || win1_on || objwin_on;
-
-    let win0 = if win0_on {
-        window_range(io, reg::WIN0H, reg::WIN0V, y)
-    } else {
-        None
-    };
-    let win1 = if win1_on {
-        window_range(io, reg::WIN1H, reg::WIN1V, y)
-    } else {
-        None
-    };
-    let winin = io.read16(reg::WININ);
-    let winout = io.read16(reg::WINOUT);
-    let (mask0, mask1) = (
-        WindowMask::from_bits(winin),
-        WindowMask::from_bits(winin >> 8),
-    );
-    let (mask_out, mask_obj) = (
-        WindowMask::from_bits(winout),
-        WindowMask::from_bits(winout >> 8),
-    );
-
+    let masks = window_masks(io, dispcnt, y, obj_enabled, obj);
     let blend = Blend::read(io);
 
-    for (x, px) in out.iter_mut().enumerate() {
-        let mask = if !any_window {
-            WindowMask::ALL
-        } else if win0.is_some_and(|(x1, x2)| x >= x1 && x < x2) {
-            mask0
-        } else if win1.is_some_and(|(x1, x2)| x >= x1 && x < x2) {
-            mask1
-        } else if objwin_on && obj.window[x] {
-            mask_obj
-        } else {
-            mask_out
-        };
+    // Visible backgrounds front to back: by priority, ties to the
+    // lower-numbered layer.
+    let mut order = [(0u8, 0usize); 4];
+    let mut count = 0;
+    for bg in 0..4 {
+        if bg_enabled[bg] {
+            order[count] = (bg_priority[bg], bg);
+            count += 1;
+        }
+    }
+    let order = &mut order[..count];
+    order.sort_unstable();
 
-        let (top, second, semi) = select_layers(
-            x,
-            mask,
-            bg_lines,
-            bg_enabled,
-            bg_priority,
-            obj_enabled,
-            obj,
-            backdrop,
-        );
+    for (x, px) in out.iter_mut().enumerate() {
+        let mask = masks[x];
+        let (top, second, semi) =
+            select_layers(x, mask, bg_lines, order, obj_enabled, obj, backdrop);
 
         let (color, layer) = top;
         let first_target = blend.first & (1 << layer) != 0;
@@ -190,15 +159,54 @@ pub fn compose_line(
     }
 }
 
+/// Resolves the windows of line `y` once, so the pixel loop only looks
+/// a mask up. WIN0 beats WIN1 beats the OBJ window beats outside.
+fn window_masks(
+    io: &IoRegisters,
+    dispcnt: u16,
+    y: usize,
+    obj_enabled: bool,
+    obj: &ObjLine,
+) -> [WindowMask; SCREEN_WIDTH] {
+    let win0_on = dispcnt & (1 << 13) != 0;
+    let win1_on = dispcnt & (1 << 14) != 0;
+    let objwin_on = dispcnt & (1 << 15) != 0 && obj_enabled;
+    if !(win0_on || win1_on || objwin_on) {
+        return [WindowMask::ALL; SCREEN_WIDTH];
+    }
+
+    let winin = io.read16(reg::WININ);
+    let winout = io.read16(reg::WINOUT);
+    let mut masks = [WindowMask::from_bits(winout); SCREEN_WIDTH];
+    if objwin_on {
+        let mask_obj = WindowMask::from_bits(winout >> 8);
+        for (mask, &inside) in masks.iter_mut().zip(&obj.window) {
+            if inside {
+                *mask = mask_obj;
+            }
+        }
+    }
+    let ranges = [
+        (win1_on, reg::WIN1H, reg::WIN1V, winin >> 8),
+        (win0_on, reg::WIN0H, reg::WIN0V, winin),
+    ];
+    for (on, h, v, bits) in ranges {
+        if let Some((x1, x2)) = on.then(|| window_range(io, h, v, y)).flatten() {
+            // x1 can lie past the screen edge, where x2 is clamped to it.
+            masks[x1.min(x2)..x2].fill(WindowMask::from_bits(bits));
+        }
+    }
+    masks
+}
+
 /// Picks the two topmost visible pixels at `x` as `(colour, layer id)`,
-/// plus whether the top one is a semi-transparent sprite.
-#[allow(clippy::too_many_arguments)]
+/// plus whether the top one is a semi-transparent sprite. `order` lists
+/// the enabled backgrounds front to back as `(priority, layer)`.
 fn select_layers(
     x: usize,
     mask: WindowMask,
     bg_lines: &[[u16; SCREEN_WIDTH]; 4],
-    bg_enabled: [bool; 4],
-    bg_priority: [u8; 4],
+    order: &[(u8, usize)],
     obj_enabled: bool,
     obj: &ObjLine,
     backdrop: u16,
@@ -206,37 +214,25 @@ fn select_layers(
     let mut top = (backdrop, BACKDROP);
     let mut second = (backdrop, BACKDROP);
     let mut top_priority = 4u8;
+    let mut second_priority = 4u8;
 
-    // Backgrounds by priority, ties to the lower-numbered layer.
-    let mut best_bg: Option<(u16, usize, u8)> = None;
-    let mut second_bg: Option<(u16, usize, u8)> = None;
-    for bg in 0..4 {
-        if !bg_enabled[bg] || !mask.allows(bg) {
+    let mut found = false;
+    for &(priority, bg) in order {
+        if !mask.allows(bg) {
             continue;
         }
         let c = bg_lines[bg][x];
         if c == TRANSPARENT {
             continue;
         }
-        let candidate = (c, bg, bg_priority[bg]);
-        match best_bg {
-            Some(best) if candidate.2 >= best.2 => {
-                if second_bg.is_none_or(|s| candidate.2 < s.2) {
-                    second_bg = Some(candidate);
-                }
-            }
-            _ => {
-                second_bg = best_bg;
-                best_bg = Some(candidate);
-            }
+        if found {
+            second = (c, bg);
+            second_priority = priority;
+            break;
         }
-    }
-    if let Some((c, bg, p)) = best_bg {
         top = (c, bg);
-        top_priority = p;
-        if let Some((c2, bg2, _)) = second_bg {
-            second = (c2, bg2);
-        }
+        top_priority = priority;
+        found = true;
     }
 
     let mut semi = false;
@@ -245,16 +241,11 @@ fn select_layers(
             second = top;
             top = (obj.colors[x], OBJ);
             semi = obj.semi_transparent[x];
-        } else if second.1 == BACKDROP || obj.priorities[x] <= best_bg_second_priority(second_bg) {
+        } else if second.1 == BACKDROP || obj.priorities[x] <= second_priority {
             second = (obj.colors[x], OBJ);
         }
     }
     (top, second, semi)
-}
-
-/// Priority of the second-best background, or "worse than anything".
-fn best_bg_second_priority(second: Option<(u16, usize, u8)>) -> u8 {
-    second.map_or(4, |s| s.2)
 }
 
 #[cfg(test)]
@@ -346,6 +337,43 @@ mod tests {
         // Outside the vertical range the window does not apply.
         io.write16(reg::WIN0V, 0x141E); // y 20..30
         assert_eq!(compose(&io, &ObjLine::default(), [0; 4])[15], 0x001F);
+    }
+
+    #[test]
+    fn window_starting_past_the_edge_covers_nothing() {
+        let mut io = IoRegisters::new();
+        io.write16(reg::DISPCNT, 1 << 13);
+        io.write16(reg::WIN0H, 0xFA00); // x1 = 250, x2 wraps to the edge
+        io.write16(reg::WIN0V, 0x00A0);
+        io.write16(reg::WININ, 0b0000_0010);
+        io.write16(reg::WINOUT, 0b0000_0001);
+        let out = compose(&io, &ObjLine::default(), [0; 4]);
+        assert!(out.iter().all(|&c| c == 0x001F));
+    }
+
+    #[test]
+    fn second_target_is_the_next_layer_by_priority() {
+        let mut l = [[TRANSPARENT; SCREEN_WIDTH]; 4];
+        l[0].fill(0x001F); // red, priority 1
+        l[1].fill(0x03E0); // green, priority 1
+        l[2].fill(0x7C00); // blue, priority 0: on top
+        let mut io = IoRegisters::new();
+        // BG2 first target; BG0 and BG1 second targets; alpha 16/16.
+        io.write16(reg::BLDCNT, 0b100 | (1 << 6) | (0b011 << 8));
+        io.write16(reg::BLDALPHA, 16 | (16 << 8));
+        let mut out = [0; SCREEN_WIDTH];
+        compose_line(
+            &io,
+            0,
+            &l,
+            [true, true, true, false],
+            [1, 1, 0, 0],
+            false,
+            &ObjLine::default(),
+            0,
+            &mut out,
+        );
+        assert_eq!(out[0], 0x7C00 | 0x001F, "blue + red: BG0 wins the tie");
     }
 
     #[test]

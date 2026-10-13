@@ -126,29 +126,6 @@ fn tile_pixel_8bpp(
     }
 }
 
-/// Colour of pixel `(px, py)` inside 4bpp tile `tile` using `palette`.
-#[inline]
-fn tile_pixel_4bpp(
-    video: &VideoMemory,
-    char_base: usize,
-    tile: usize,
-    palette: usize,
-    px: usize,
-    py: usize,
-) -> u16 {
-    let offset = char_base + tile * 32 + py * 4 + px / 2;
-    if offset >= BG_VRAM_END {
-        return TRANSPARENT;
-    }
-    let byte = video.vram[offset];
-    let index = if px & 1 == 0 { byte & 0xF } else { byte >> 4 };
-    if index == 0 {
-        TRANSPARENT
-    } else {
-        bg_palette(video, palette * 16 + usize::from(index))
-    }
-}
-
 /// Renders line `y` of text background `bg` into `out`.
 pub fn render_text(
     io: &IoRegisters,
@@ -177,28 +154,76 @@ pub fn render_text(
     };
     let map_row = cnt.screen_base + (ty & 31) * 64;
 
-    for (x, px_out) in out.iter_mut().enumerate() {
+    // One map entry covers eight pixels: decode a tile row at a time and
+    // copy the part of it that lands on screen.
+    let mut x = 0;
+    while x < SCREEN_WIDTH {
         let xx = (x + hofs) & (width - 1);
         let block = row_block + usize::from(xx >= 256);
         let entry_addr = map_row + block * SCREEN_BLOCK + (xx & 255) / 8 * 2;
         let entry = u16::from_le_bytes([video.vram[entry_addr], video.vram[entry_addr + 1]]);
 
         let tile = usize::from(entry & 0x3FF);
-        let mut px = xx & 7;
-        let mut py = py_base;
+        let py = if entry & (1 << 11) != 0 {
+            7 - py_base
+        } else {
+            py_base
+        };
+        let mut row = if cnt.color_256 {
+            tile_row_8bpp(video, cnt.char_base, tile, py)
+        } else {
+            tile_row_4bpp(video, cnt.char_base, tile, usize::from(entry >> 12), py)
+        };
         if entry & (1 << 10) != 0 {
-            px = 7 - px;
-        }
-        if entry & (1 << 11) != 0 {
-            py = 7 - py;
+            row.reverse();
         }
 
-        *px_out = if cnt.color_256 {
-            tile_pixel_8bpp(video, cnt.char_base, tile, px, py)
-        } else {
-            tile_pixel_4bpp(video, cnt.char_base, tile, usize::from(entry >> 12), px, py)
-        };
+        let first = xx & 7;
+        let count = (8 - first).min(SCREEN_WIDTH - x);
+        out[x..x + count].copy_from_slice(&row[first..first + count]);
+        x += count;
     }
+}
+
+/// Row `py` of 8bpp tile `tile`, `TRANSPARENT` where empty.
+#[inline]
+fn tile_row_8bpp(video: &VideoMemory, char_base: usize, tile: usize, py: usize) -> [u16; 8] {
+    let offset = char_base + tile * 64 + py * 8;
+    // Rows are 8-byte aligned, so a row is either wholly inside the
+    // background area or wholly past it.
+    if offset >= BG_VRAM_END {
+        return [TRANSPARENT; 8];
+    }
+    let bytes = &video.vram[offset..offset + 8];
+    std::array::from_fn(|px| match bytes[px] {
+        0 => TRANSPARENT,
+        index => bg_palette(video, usize::from(index)),
+    })
+}
+
+/// Row `py` of 4bpp tile `tile` using `palette`, `TRANSPARENT` where empty.
+#[inline]
+fn tile_row_4bpp(
+    video: &VideoMemory,
+    char_base: usize,
+    tile: usize,
+    palette: usize,
+    py: usize,
+) -> [u16; 8] {
+    let offset = char_base + tile * 32 + py * 4;
+    if offset >= BG_VRAM_END {
+        return [TRANSPARENT; 8];
+    }
+    let bytes = &video.vram[offset..offset + 4];
+    std::array::from_fn(|px| {
+        let byte = bytes[px / 2];
+        let index = if px & 1 == 0 { byte & 0xF } else { byte >> 4 };
+        if index == 0 {
+            TRANSPARENT
+        } else {
+            bg_palette(video, palette * 16 + usize::from(index))
+        }
+    })
 }
 
 /// The affine parameters of BG2 or BG3.
