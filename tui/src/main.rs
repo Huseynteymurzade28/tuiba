@@ -15,6 +15,7 @@ mod input;
 mod library;
 mod picker;
 mod png;
+mod profile;
 mod rewind;
 mod savestate;
 mod screen;

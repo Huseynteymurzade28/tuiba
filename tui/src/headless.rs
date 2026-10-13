@@ -12,6 +12,7 @@ use tuiba_core::memory::io::{KEYINPUT_ALL_RELEASED, reg};
 use tuiba_core::{Gba, Memory, SCREEN_HEIGHT, SCREEN_WIDTH};
 
 use crate::cli::{Disasm, Headless, KeyHold};
+use crate::profile::Profile;
 use crate::{clock, png, screenshot};
 
 /// One GBA frame, 280 896 cycles at 16.78 MHz, in microseconds.
@@ -29,11 +30,17 @@ pub fn run(gba: &mut Gba, config: &Headless) -> io::Result<()> {
         .clock
         .or_else(|| clock::parse(DEFAULT_CLOCK))
         .expect("the default clock parses");
+    let profile_from = config.profile.map(|n| config.frames.saturating_sub(n));
+    let mut profile = Profile::default();
     for frame in 0..config.frames {
         let elapsed = chrono::TimeDelta::microseconds(i64::from(frame) * FRAME_MICROS);
         gba.set_clock(clock::from_chrono(clock_start + elapsed));
         gba.set_keyinput(keyinput_at(&config.keys, frame));
-        gba.run_frame();
+        if profile_from.is_some_and(|from| frame >= from) {
+            profile.run_frame(gba);
+        } else {
+            gba.run_frame();
+        }
         if config.wav.is_some() {
             audio.extend_from_slice(gba.audio());
         }
@@ -55,6 +62,9 @@ pub fn run(gba: &mut Gba, config: &Headless) -> io::Result<()> {
     let mut stdout = io::stdout().lock();
     for range in &config.disasm {
         write_disasm(&mut stdout, &gba.bus, *range)?;
+    }
+    if profile_from.is_some() {
+        profile.write(&mut stdout, &gba.bus)?;
     }
     drop(stdout);
 

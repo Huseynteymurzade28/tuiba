@@ -350,6 +350,10 @@ be read once it is there:
 tuiba rom.gba --frames 60 --disasm arm:0x080000c0..0x08000100 --disasm 0x03000000+0x40
 ```
 
+`--profile N` shows where the CPU spends the last N frames of the run:
+how much of the time it was running at all, and the twenty busiest
+addresses with their instruction and the return address in `lr`.
+
 ## Building
 
 ```sh

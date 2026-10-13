@@ -31,6 +31,9 @@ Debug options (headless, no terminal UI; need a ROM path):
   --clock DATETIME      what a cartridge's real-time clock reads on the first
                         frame, as YYYY-MM-DDTHH:MM:SS (default 2000-01-01
                         00:00:00); it advances with the emulated frames
+  --profile N           count where the CPU spends its cycles over the last N
+                        frames and list the busiest addresses with their
+                        instruction and return address (implies --frames N)
   --disasm [arm:|thumb:]START..END
                         after the run, disassemble memory from START to END
                         (hex; START+LENGTH works too) as THUMB, or as ARM
@@ -166,6 +169,8 @@ pub struct Headless {
     /// [`headless::DEFAULT_CLOCK`](crate::headless::DEFAULT_CLOCK), so
     /// runs are reproducible either way.
     pub clock: Option<NaiveDateTime>,
+    /// How many of the last frames to profile, if any.
+    pub profile: Option<u32>,
     /// Memory ranges to disassemble after the run.
     pub disasm: Vec<Disasm>,
 }
@@ -270,6 +275,7 @@ impl Args {
         let mut keys = Vec::new();
         let mut clock = None;
         let mut disasm = Vec::new();
+        let mut profile = None;
         let mut renderer = Renderer::Auto;
         let mut mute = false;
         let mut volume = 100;
@@ -280,53 +286,36 @@ impl Args {
         let mut boot = Boot::Intro;
 
         while let Some(arg) = args.next() {
-            let mut value = |flag: &str| {
+            let mut value = |flag: &'static str| {
                 args.next()
+                    .map(|v| (flag, v))
                     .ok_or_else(|| ArgError::MissingValue(flag.into()))
             };
             match arg.as_str() {
                 "-h" | "--help" => return Err(ArgError::Help),
-                "--frames" => {
-                    let v = value("--frames")?;
-                    frames = Some(v.parse().map_err(|_| bad("--frames", &v))?);
-                }
-                "--screenshot" => screenshot = Some(PathBuf::from(value("--screenshot")?)),
-                "--wav" => wav = Some(PathBuf::from(value("--wav")?)),
+                "--frames" => frames = Some(parsed(value("--frames"), |v| v.parse().ok())?),
+                "--screenshot" => screenshot = Some(PathBuf::from(value("--screenshot")?.1)),
+                "--wav" => wav = Some(PathBuf::from(value("--wav")?.1)),
                 "--no-graphics" => renderer = Renderer::HalfBlocks,
-                "--renderer" => {
-                    let v = value("--renderer")?;
-                    renderer = v.parse().map_err(|()| bad("--renderer", &v))?;
-                }
-                "--bios" => bios = BiosChoice::File(PathBuf::from(value("--bios")?)),
+                "--renderer" => renderer = parsed(value("--renderer"), |v| v.parse().ok())?,
+                "--bios" => bios = BiosChoice::File(PathBuf::from(value("--bios")?.1)),
                 "--no-bios" => bios = BiosChoice::Builtin,
                 "--skip-intro" => boot = Boot::Skip,
                 "--mute" => mute = true,
                 "--stats" => stats = true,
                 "--color-correction" => lcd_colours = true,
-                "--fast-speed" => {
-                    let v = value("--fast-speed")?;
-                    fast_speed = FastSpeed::parse(&v).ok_or_else(|| bad("--fast-speed", &v))?;
-                }
+                "--fast-speed" => fast_speed = parsed(value("--fast-speed"), FastSpeed::parse)?,
                 "--volume" => {
-                    let v = value("--volume")?;
-                    volume = v
-                        .parse()
-                        .ok()
-                        .filter(|&n| n <= 100)
-                        .ok_or_else(|| bad("--volume", &v))?;
+                    volume = parsed(value("--volume"), |v| v.parse().ok().filter(|&n| n <= 100))?;
                 }
-                "--clock" => {
-                    let v = value("--clock")?;
-                    clock = Some(crate::clock::parse(&v).ok_or_else(|| bad("--clock", &v))?);
+                "--clock" => clock = Some(parsed(value("--clock"), crate::clock::parse)?),
+                "--profile" => {
+                    profile = Some(parsed(value("--profile"), |v| {
+                        v.parse().ok().filter(|&n| n > 0)
+                    })?);
                 }
-                "--disasm" => {
-                    let v = value("--disasm")?;
-                    disasm.push(Disasm::parse(&v).ok_or_else(|| bad("--disasm", &v))?);
-                }
-                "--key" => {
-                    let v = value("--key")?;
-                    keys.push(parse_key_hold(&v).ok_or_else(|| bad("--key", &v))?);
-                }
+                "--disasm" => disasm.push(parsed(value("--disasm"), Disasm::parse)?),
+                "--key" => keys.push(parsed(value("--key"), parse_key_hold)?),
                 flag if flag.starts_with('-') && flag.len() > 1 => {
                     return Err(ArgError::Unknown(arg));
                 }
@@ -339,7 +328,8 @@ impl Args {
             || screenshot.is_some()
             || wav.is_some()
             || !keys.is_empty()
-            || clock.is_some();
+            || clock.is_some()
+            || profile.is_some();
         let debug = runs || !disasm.is_empty();
         if debug && rom.is_none() {
             return Err(ArgError::MissingRom);
@@ -347,11 +337,12 @@ impl Args {
         let headless = debug.then(|| Headless {
             // A screenshot with no frame count means "the first frame";
             // a disassembly alone looks at the machine as it boots.
-            frames: frames.unwrap_or(u32::from(runs)),
+            frames: frames.or(profile).unwrap_or(u32::from(runs)),
             screenshot,
             wav,
             keys,
             clock,
+            profile,
             disasm,
         });
         Ok(Self {
@@ -367,6 +358,15 @@ impl Args {
             boot,
         })
     }
+}
+
+/// Parses a flag's value, or names the flag and value that failed.
+fn parsed<T>(
+    value: Result<(&str, String), ArgError>,
+    parse: impl FnOnce(&str) -> Option<T>,
+) -> Result<T, ArgError> {
+    let (flag, v) = value?;
+    parse(&v).ok_or_else(|| bad(flag, &v))
 }
 
 fn bad(flag: &str, value: &str) -> ArgError {
@@ -522,6 +522,20 @@ mod tests {
     fn screenshot_alone_runs_one_frame() {
         let args = parse(&["--screenshot", "x.png", "game.gba"]).unwrap();
         assert_eq!(args.headless.unwrap().frames, 1);
+    }
+
+    #[test]
+    fn profile_window() {
+        let alone = parse(&["game.gba", "--profile", "30"]).unwrap();
+        let alone = alone.headless.unwrap();
+        assert_eq!((alone.frames, alone.profile), (30, Some(30)));
+        let tail = parse(&["game.gba", "--frames", "600", "--profile", "60"]).unwrap();
+        let tail = tail.headless.unwrap();
+        assert_eq!((tail.frames, tail.profile), (600, Some(60)));
+        assert!(matches!(
+            parse(&["game.gba", "--profile", "0"]),
+            Err(ArgError::BadValue { .. })
+        ));
     }
 
     #[test]

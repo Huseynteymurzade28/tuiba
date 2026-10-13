@@ -11,6 +11,10 @@ All notable changes to tuiba. The format follows
   memory after a headless run. `tuiba-core` has the disassembler as
   `cpu::disasm::{arm, thumb}`; it decodes through the CPU's own decoder,
   so it shows what the emulator runs. (#22)
+- `--profile N` counts where the CPU spends its cycles over the last N
+  frames of a headless run: how much of the time it ran at all, and the
+  busiest addresses with their instruction and most common return
+  address. (#22)
 
 ## [0.14.0] – 2026-10-13
 
