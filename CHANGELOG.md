@@ -6,12 +6,21 @@ All notable changes to tuiba. The format follows
 
 ## [Unreleased]
 
+## [0.14.0] – 2026-10-13
+
+A faster picture, and an empty link port.
+
 ### Added
 - The link port answers as an empty one instead of plain memory: an
   internally clocked transfer finishes with all ones and the serial
   interrupt, multiplayer mode reports a lone child, and `RCNT` powers
   up in general-purpose mode. Games that probe for a link cable on
   boot see none. (#25)
+
+### Changed
+- Faster scanline rendering: text backgrounds are drawn a tile row at a
+  time and windows are resolved once per line. Headless speed on the
+  homebrew test set is up 12–28 %, with identical frames. (#7)
 
 ## [0.13.0] – 2026-10-12
 
@@ -290,6 +299,7 @@ First release: ARM7TDMI, memory map with DMA and timers, PPU modes 0–5
 with sprites, windows and blending, HLE BIOS, SRAM/flash/EEPROM saves,
 Kitty graphics and half-block renderers, library screen, headless mode.
 
+[0.14.0]: https://github.com/Huseynteymurzade28/tuiba/compare/v0.13.0...v0.14.0
 [0.13.0]: https://github.com/Huseynteymurzade28/tuiba/compare/v0.12.0...v0.13.0
 [0.12.0]: https://github.com/Huseynteymurzade28/tuiba/compare/v0.11.0...v0.12.0
 [0.11.0]: https://github.com/Huseynteymurzade28/tuiba/compare/v0.10.0...v0.11.0
