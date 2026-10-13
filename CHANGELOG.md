@@ -6,6 +6,12 @@ All notable changes to tuiba. The format follows
 
 ## [Unreleased]
 
+### Added
+- `--disasm [arm:|thumb:]START..END` (or `START+LENGTH`) disassembles
+  memory after a headless run. `tuiba-core` has the disassembler as
+  `cpu::disasm::{arm, thumb}`; it decodes through the CPU's own decoder,
+  so it shows what the emulator runs. (#22)
+
 ## [0.14.0] – 2026-10-13
 
 A faster picture, and an empty link port.

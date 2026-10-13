@@ -31,6 +31,11 @@ Debug options (headless, no terminal UI; need a ROM path):
   --clock DATETIME      what a cartridge's real-time clock reads on the first
                         frame, as YYYY-MM-DDTHH:MM:SS (default 2000-01-01
                         00:00:00); it advances with the emulated frames
+  --disasm [arm:|thumb:]START..END
+                        after the run, disassemble memory from START to END
+                        (hex; START+LENGTH works too) as THUMB, or as ARM
+                        with arm:; without other options no frames run;
+                        may be given several times
 
 BIOS options (for the interactive and headless modes alike):
   --bios FILE           run the BIOS image FILE, dumped from your own console
@@ -161,6 +166,48 @@ pub struct Headless {
     /// [`headless::DEFAULT_CLOCK`](crate::headless::DEFAULT_CLOCK), so
     /// runs are reproducible either way.
     pub clock: Option<NaiveDateTime>,
+    /// Memory ranges to disassemble after the run.
+    pub disasm: Vec<Disasm>,
+}
+
+/// A memory range to disassemble.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Disasm {
+    /// THUMB rather than ARM code.
+    pub thumb: bool,
+    /// First address.
+    pub start: u32,
+    /// First address past the range.
+    pub end: u32,
+}
+
+impl Disasm {
+    /// Parses `[arm:|thumb:]START..END` or `START+LENGTH`, in hex with an
+    /// optional `0x`.
+    fn parse(spec: &str) -> Option<Self> {
+        let (thumb, range) = match spec.split_once(':') {
+            Some(("arm", range)) => (false, range),
+            Some(("thumb", range)) => (true, range),
+            Some(_) => return None,
+            None => (true, spec),
+        };
+        let hex = |text: &str| {
+            let text = text.trim();
+            let digits = text
+                .strip_prefix("0x")
+                .or_else(|| text.strip_prefix("0X"))
+                .unwrap_or(text);
+            u32::from_str_radix(digits, 16).ok()
+        };
+        let (start, end) = if let Some((start, end)) = range.split_once("..") {
+            (hex(start)?, hex(end)?)
+        } else {
+            let (start, length) = range.split_once('+')?;
+            let start = hex(start)?;
+            (start, start.checked_add(hex(length)?)?)
+        };
+        (start < end).then_some(Self { thumb, start, end })
+    }
 }
 
 /// A button held over a half-open range of frames.
@@ -222,6 +269,7 @@ impl Args {
         let mut wav = None;
         let mut keys = Vec::new();
         let mut clock = None;
+        let mut disasm = Vec::new();
         let mut renderer = Renderer::Auto;
         let mut mute = false;
         let mut volume = 100;
@@ -271,6 +319,10 @@ impl Args {
                     let v = value("--clock")?;
                     clock = Some(crate::clock::parse(&v).ok_or_else(|| bad("--clock", &v))?);
                 }
+                "--disasm" => {
+                    let v = value("--disasm")?;
+                    disasm.push(Disasm::parse(&v).ok_or_else(|| bad("--disasm", &v))?);
+                }
                 "--key" => {
                     let v = value("--key")?;
                     keys.push(parse_key_hold(&v).ok_or_else(|| bad("--key", &v))?);
@@ -283,21 +335,24 @@ impl Args {
             }
         }
 
-        let debug = frames.is_some()
+        let runs = frames.is_some()
             || screenshot.is_some()
             || wav.is_some()
             || !keys.is_empty()
             || clock.is_some();
+        let debug = runs || !disasm.is_empty();
         if debug && rom.is_none() {
             return Err(ArgError::MissingRom);
         }
         let headless = debug.then(|| Headless {
-            // A screenshot with no frame count means "the first frame".
-            frames: frames.unwrap_or(1),
+            // A screenshot with no frame count means "the first frame";
+            // a disassembly alone looks at the machine as it boots.
+            frames: frames.unwrap_or(u32::from(runs)),
             screenshot,
             wav,
             keys,
             clock,
+            disasm,
         });
         Ok(Self {
             rom,
@@ -467,6 +522,46 @@ mod tests {
     fn screenshot_alone_runs_one_frame() {
         let args = parse(&["--screenshot", "x.png", "game.gba"]).unwrap();
         assert_eq!(args.headless.unwrap().frames, 1);
+    }
+
+    #[test]
+    fn disasm_ranges() {
+        let args = parse(&[
+            "game.gba",
+            "--disasm",
+            "arm:0x08000000..0x08000010",
+            "--disasm",
+            "80000c0+40",
+        ])
+        .unwrap();
+        let headless = args.headless.unwrap();
+        assert_eq!(headless.frames, 0, "a disassembly alone runs nothing");
+        assert_eq!(
+            headless.disasm,
+            [
+                Disasm {
+                    thumb: false,
+                    start: 0x0800_0000,
+                    end: 0x0800_0010
+                },
+                Disasm {
+                    thumb: true,
+                    start: 0x0800_00C0,
+                    end: 0x0800_0100
+                },
+            ]
+        );
+        let with_frames = parse(&["game.gba", "--frames", "60", "--disasm", "3000000+10"]);
+        assert_eq!(with_frames.unwrap().headless.unwrap().frames, 60);
+        for spec in ["x:0..4", "10..10", "zz..20", "ffffffff+2", "100"] {
+            assert!(
+                matches!(
+                    parse(&["game.gba", "--disasm", spec]),
+                    Err(ArgError::BadValue { .. })
+                ),
+                "{spec}"
+            );
+        }
     }
 
     #[test]

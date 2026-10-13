@@ -7,10 +7,11 @@ use std::io::{self, BufWriter, Write};
 use std::time::Instant;
 
 use tuiba_core::apu::SAMPLE_RATE;
+use tuiba_core::cpu::disasm;
 use tuiba_core::memory::io::{KEYINPUT_ALL_RELEASED, reg};
-use tuiba_core::{Gba, SCREEN_HEIGHT, SCREEN_WIDTH};
+use tuiba_core::{Gba, Memory, SCREEN_HEIGHT, SCREEN_WIDTH};
 
-use crate::cli::{Headless, KeyHold};
+use crate::cli::{Disasm, Headless, KeyHold};
 use crate::{clock, png, screenshot};
 
 /// One GBA frame, 280 896 cycles at 16.78 MHz, in microseconds.
@@ -51,6 +52,12 @@ pub fn run(gba: &mut Gba, config: &Headless) -> io::Result<()> {
         png::write_rgb(file, SCREEN_WIDTH as u32, SCREEN_HEIGHT as u32, &rgb)?;
     }
 
+    let mut stdout = io::stdout().lock();
+    for range in &config.disasm {
+        write_disasm(&mut stdout, &gba.bus, *range)?;
+    }
+    drop(stdout);
+
     let fps = f64::from(config.frames) / elapsed.as_secs_f64().max(f64::EPSILON);
     let swi = gba
         .last_unsupported_swi
@@ -66,6 +73,37 @@ pub fn run(gba: &mut Gba, config: &Headless) -> io::Result<()> {
         gba.bus.io.read16(reg::DISPCNT),
         frame_hash(gba.framebuffer().pixels()),
     );
+    Ok(())
+}
+
+/// Writes one line per instruction in `range`: address, encoding, text.
+fn write_disasm(mut out: impl Write, memory: &impl Memory, range: Disasm) -> io::Result<()> {
+    let mut address = range.start & if range.thumb { !1 } else { !3 };
+    while address < range.end {
+        if range.thumb {
+            let half = memory.read16(address);
+            let next = memory.read16(address.wrapping_add(2));
+            let (text, size) = disasm::thumb(address, half, next);
+            let encoding = if size == 4 {
+                format!("{half:04x} {next:04x}")
+            } else {
+                format!("{half:04x}")
+            };
+            writeln!(out, "{address:08x}  {encoding:<9}  {text}")?;
+            address = address.wrapping_add(size);
+        } else {
+            let word = memory.read32(address);
+            writeln!(
+                out,
+                "{address:08x}  {word:08x}   {}",
+                disasm::arm(address, word)
+            )?;
+            address = address.wrapping_add(4);
+        }
+        if address == 0 {
+            break;
+        }
+    }
     Ok(())
 }
 
@@ -119,6 +157,30 @@ fn keyinput_at(holds: &[KeyHold], frame: u32) -> u16 {
 mod tests {
     use super::*;
     use crate::input::GbaKey;
+
+    #[test]
+    fn disassembly_lists_each_instruction() {
+        let mut rom = vec![0u8; 0x200];
+        rom[0x100..0x108].copy_from_slice(&[
+            0x01, 0x20, // movs r0, #1
+            0x00, 0xF0, 0x00, 0xF8, // bl +4
+            0x70, 0x47, // bx lr
+        ]);
+        let gba = Gba::new(tuiba_core::Cartridge::from_bytes(rom).unwrap());
+        let mut out = Vec::new();
+        let range = Disasm {
+            thumb: true,
+            start: 0x0800_0100,
+            end: 0x0800_0108,
+        };
+        write_disasm(&mut out, &gba.bus, range).unwrap();
+        assert_eq!(
+            String::from_utf8(out).unwrap(),
+            "08000100  2001       movs r0, #1\n\
+             08000102  f000 f800  bl 0x08000106\n\
+             08000106  4770       bx lr\n"
+        );
+    }
 
     #[test]
     fn frame_hash_is_fnv1a() {

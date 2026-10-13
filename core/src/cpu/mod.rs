@@ -16,6 +16,7 @@
 
 pub mod alu;
 pub mod arm;
+pub mod disasm;
 pub mod load;
 pub mod registers;
 pub mod thumb;

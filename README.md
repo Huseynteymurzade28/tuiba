@@ -342,6 +342,14 @@ a PNG and the sound as a WAV file. A cartridge clock starts at
 the emulated frames, so runs are reproducible. The BIOS options work
 here too, so a ROM can be compared between `--no-bios` and `--bios`.
 
+`--disasm` lists the code in a memory range after the run, as THUMB or,
+with an `arm:` prefix, as ARM — so code a game copies to work RAM can
+be read once it is there:
+
+```sh
+tuiba rom.gba --frames 60 --disasm arm:0x080000c0..0x08000100 --disasm 0x03000000+0x40
+```
+
 ## Building
 
 ```sh
