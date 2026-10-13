@@ -17,6 +17,7 @@ use crate::memory::backup::Backup;
 use crate::memory::cartridge::Cartridge;
 use crate::memory::gpio::Gpio;
 use crate::memory::io::{IoRegisters, reg};
+use crate::memory::io_trace::IoTrace;
 use crate::memory::journal::{self, Journal, Target};
 use crate::memory::video::VideoMemory;
 use crate::memory::wait::WaitStates;
@@ -149,6 +150,9 @@ pub struct Bus {
     /// between lines, so never part of a save state.
     #[serde(skip)]
     pub journal: Journal,
+    /// Writes to watched I/O registers, when debugging asks for them.
+    #[serde(skip)]
+    pub io_trace: Option<Box<IoTrace>>,
     /// Access costs, decoded from `WAITCNT`.
     pub wait: WaitStates,
     /// Cycles spent on accesses since the last [`Memory::take_access_cycles`].
@@ -186,6 +190,7 @@ impl Bus {
             gpio: Gpio::default(),
             latches: Cell::new(OpenBus::default()),
             journal: Journal::default(),
+            io_trace: None,
             wait: WaitStates::default(),
             access_cycles: Cell::new(0),
             next_sequential: Cell::new(u32::MAX),
@@ -230,7 +235,10 @@ impl Bus {
 
     /// Re-decodes the timing table after an I/O write that may have
     /// touched `WAITCNT`.
-    fn after_io_write(&mut self, offset: u32, width: u32) {
+    fn after_io_write(&mut self, offset: u32, width: u32, value: u32) {
+        if let Some(trace) = &mut self.io_trace {
+            trace.record(offset, width, value);
+        }
         if offset < reg::WAITCNT + 2 && offset + width > reg::WAITCNT {
             self.wait = WaitStates::from_waitcnt(self.io.read16(reg::WAITCNT));
         }
@@ -525,7 +533,7 @@ impl Memory for Bus {
             Some(MemoryRegion::Iwram) => self.iwram[off as usize & (IWRAM_SIZE - 1)] = value,
             Some(MemoryRegion::Io) => {
                 self.io.write8(off, value);
-                self.after_io_write(off, 1);
+                self.after_io_write(off, 1, u32::from(value));
             }
             Some(MemoryRegion::Palette) => {
                 let index = VideoMemory::palette_index(off) & !1;
@@ -563,7 +571,7 @@ impl Memory for Bus {
             }
             Some(MemoryRegion::Io) => {
                 self.io.write16(off, value);
-                self.after_io_write(off, 2);
+                self.after_io_write(off, 2, u32::from(value));
             }
             Some(MemoryRegion::Palette) => {
                 set16(
@@ -606,7 +614,7 @@ impl Memory for Bus {
             }
             Some(MemoryRegion::Io) => {
                 self.io.write32(off, value);
-                self.after_io_write(off, 4);
+                self.after_io_write(off, 4, value);
             }
             Some(MemoryRegion::Palette) => {
                 set32(

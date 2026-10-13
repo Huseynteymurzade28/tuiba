@@ -4,6 +4,7 @@
 //! ROM path plus a handful of debugging flags.
 
 use std::fmt;
+use std::ops::Range;
 use std::path::PathBuf;
 
 use chrono::NaiveDateTime;
@@ -34,6 +35,11 @@ Debug options (headless, no terminal UI; need a ROM path):
   --profile N           count where the CPU spends its cycles over the last N
                         frames and list the busiest addresses with their
                         instruction and return address (implies --frames N)
+  --trace-io LIST       log every write to the I/O registers in LIST, with
+                        frame, scanline, cycle and the writing instruction
+                        or DMA channel; LIST is comma-separated register
+                        names (DISPCNT, IME, ...), groups (lcd, sound, dma,
+                        timers, serial, irq, all) or hex offsets
   --disasm [arm:|thumb:]START..END
                         after the run, disassemble memory from START to END
                         (hex; START+LENGTH works too) as THUMB, or as ARM
@@ -171,6 +177,8 @@ pub struct Headless {
     pub clock: Option<NaiveDateTime>,
     /// How many of the last frames to profile, if any.
     pub profile: Option<u32>,
+    /// I/O byte ranges whose writes are logged.
+    pub trace_io: Vec<Range<u32>>,
     /// Memory ranges to disassemble after the run.
     pub disasm: Vec<Disasm>,
 }
@@ -276,6 +284,7 @@ impl Args {
         let mut clock = None;
         let mut disasm = Vec::new();
         let mut profile = None;
+        let mut trace_io = Vec::new();
         let mut renderer = Renderer::Auto;
         let mut mute = false;
         let mut volume = 100;
@@ -314,6 +323,9 @@ impl Args {
                         v.parse().ok().filter(|&n| n > 0)
                     })?);
                 }
+                "--trace-io" => {
+                    trace_io.extend(parsed(value("--trace-io"), crate::trace::parse_watch)?);
+                }
                 "--disasm" => disasm.push(parsed(value("--disasm"), Disasm::parse)?),
                 "--key" => keys.push(parsed(value("--key"), parse_key_hold)?),
                 flag if flag.starts_with('-') && flag.len() > 1 => {
@@ -329,7 +341,8 @@ impl Args {
             || wav.is_some()
             || !keys.is_empty()
             || clock.is_some()
-            || profile.is_some();
+            || profile.is_some()
+            || !trace_io.is_empty();
         let debug = runs || !disasm.is_empty();
         if debug && rom.is_none() {
             return Err(ArgError::MissingRom);
@@ -343,6 +356,7 @@ impl Args {
             keys,
             clock,
             profile,
+            trace_io,
             disasm,
         });
         Ok(Self {
@@ -522,6 +536,21 @@ mod tests {
     fn screenshot_alone_runs_one_frame() {
         let args = parse(&["--screenshot", "x.png", "game.gba"]).unwrap();
         assert_eq!(args.headless.unwrap().frames, 1);
+    }
+
+    #[test]
+    fn trace_io_lists_accumulate() {
+        let args = parse(&["game.gba", "--trace-io", "IME", "--trace-io", "dispcnt,0x4"]).unwrap();
+        let headless = args.headless.unwrap();
+        assert_eq!(
+            headless.trace_io,
+            [0x208..0x20A, 0x000..0x002, 0x004..0x006]
+        );
+        assert_eq!(headless.frames, 1);
+        assert!(matches!(
+            parse(&["game.gba", "--trace-io", "BOGUS"]),
+            Err(ArgError::BadValue { .. })
+        ));
     }
 
     #[test]

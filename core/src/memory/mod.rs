@@ -27,6 +27,7 @@ pub mod dma;
 pub mod eeprom;
 pub mod gpio;
 pub mod io;
+pub mod io_trace;
 pub mod journal;
 pub mod sio;
 pub mod timers;

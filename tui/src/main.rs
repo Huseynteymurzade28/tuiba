@@ -23,6 +23,7 @@ mod screenshot;
 mod states;
 mod stats;
 mod theme;
+mod trace;
 mod wordmark;
 mod zip;
 

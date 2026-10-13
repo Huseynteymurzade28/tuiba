@@ -129,6 +129,12 @@ impl Ppu {
         !self.in_hblank && usize::from(self.vcount) < SCREEN_HEIGHT
     }
 
+    /// Cycle within the current scanline, 0 to 1231.
+    #[must_use]
+    pub fn line_cycle(&self) -> u32 {
+        self.line_cycle
+    }
+
     /// The pixel of the current line being drawn `cycles` from now,
     /// [`SCREEN_WIDTH`] once the visible part is over.
     #[must_use]

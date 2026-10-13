@@ -353,6 +353,9 @@ tuiba rom.gba --frames 60 --disasm arm:0x080000c0..0x08000100 --disasm 0x0300000
 `--profile N` shows where the CPU spends the last N frames of the run:
 how much of the time it was running at all, and the twenty busiest
 addresses with their instruction and the return address in `lr`.
+`--trace-io DISPCNT,IME,dma` logs each write to those registers as it
+happens: frame, scanline, cycle, value, and the instruction or DMA
+channel behind it.
 
 ## Building
 

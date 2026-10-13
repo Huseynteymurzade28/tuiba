@@ -15,6 +15,11 @@ All notable changes to tuiba. The format follows
   frames of a headless run: how much of the time it ran at all, and the
   busiest addresses with their instruction and most common return
   address. (#22)
+- `--trace-io LIST` logs every write to the chosen I/O registers during
+  a headless run, with frame, scanline, cycle and the instruction or DMA
+  channel that made it. LIST takes register names, groups (`lcd`,
+  `sound`, `dma`, `timers`, `serial`, `irq`, `all`) and hex offsets.
+  `tuiba-core`: `Gba::trace_io` and `Gba::take_io_writes`. (#22)
 
 ## [0.14.0] – 2026-10-13
 

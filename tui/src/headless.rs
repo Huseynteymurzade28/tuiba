@@ -13,7 +13,7 @@ use tuiba_core::{Gba, Memory, SCREEN_HEIGHT, SCREEN_WIDTH};
 
 use crate::cli::{Disasm, Headless, KeyHold};
 use crate::profile::Profile;
-use crate::{clock, png, screenshot};
+use crate::{clock, png, screenshot, trace};
 
 /// One GBA frame, 280 896 cycles at 16.78 MHz, in microseconds.
 const FRAME_MICROS: i64 = 16_743;
@@ -32,6 +32,9 @@ pub fn run(gba: &mut Gba, config: &Headless) -> io::Result<()> {
         .expect("the default clock parses");
     let profile_from = config.profile.map(|n| config.frames.saturating_sub(n));
     let mut profile = Profile::default();
+    if !config.trace_io.is_empty() {
+        gba.trace_io(config.trace_io.iter().cloned());
+    }
     for frame in 0..config.frames {
         let elapsed = chrono::TimeDelta::microseconds(i64::from(frame) * FRAME_MICROS);
         gba.set_clock(clock::from_chrono(clock_start + elapsed));
@@ -43,6 +46,9 @@ pub fn run(gba: &mut Gba, config: &Headless) -> io::Result<()> {
         }
         if config.wav.is_some() {
             audio.extend_from_slice(gba.audio());
+        }
+        if !config.trace_io.is_empty() {
+            trace::write_log(io::stdout().lock(), frame, &gba.take_io_writes())?;
         }
         gba.clear_audio();
     }

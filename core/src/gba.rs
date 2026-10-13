@@ -1,10 +1,13 @@
 //! The whole system: CPU, bus and PPU wired together.
 
+use std::ops::Range;
+
 use crate::bios::{self, Outcome};
 use crate::cpu::Cpu;
 use crate::error::Result;
 use crate::memory::dma::{self, Timing};
 use crate::memory::io::reg;
+use crate::memory::io_trace::{IoTrace, IoWrite, Writer};
 use crate::memory::timers::Timers;
 use crate::memory::{Bus, Cartridge, DateTime, Memory, OpenBus};
 use crate::ppu::{CYCLES_PER_LINE, Framebuffer, Ppu};
@@ -161,6 +164,22 @@ impl Gba {
         self.bus.io.apu.clear_samples();
     }
 
+    /// Starts logging writes to the I/O byte offsets in `ranges`
+    /// (`0x000..0x400`); collect them with [`Gba::take_io_writes`].
+    pub fn trace_io(&mut self, ranges: impl IntoIterator<Item = Range<u32>>) {
+        self.bus.io_trace = Some(Box::new(IoTrace::new(ranges)));
+    }
+
+    /// The traced I/O writes since the last call, oldest first; empty if
+    /// [`Gba::trace_io`] was never called.
+    pub fn take_io_writes(&mut self) -> Vec<IoWrite> {
+        self.bus
+            .io_trace
+            .as_mut()
+            .map(|t| t.take())
+            .unwrap_or_default()
+    }
+
     /// Runs the system until the PPU finishes a frame (enters VBlank).
     pub fn run_frame(&mut self) {
         loop {
@@ -179,6 +198,7 @@ impl Gba {
         let cycles = if self.cpu.halted {
             HALT_STEP.min(CYCLES_PER_LINE)
         } else {
+            let pc = self.cpu.next_pc();
             let cycles = self.cpu.step(&mut self.bus);
             if let Some(number) = self.cpu.take_swi() {
                 self.service_swi(number);
@@ -186,6 +206,7 @@ impl Gba {
             if std::mem::take(&mut self.bus.io.halt_requested) {
                 self.cpu.halted = true;
             }
+            self.stamp_io_writes(Writer::Cpu(pc));
             cycles
         };
         // The instruction's writes count from its last cycle.
@@ -274,6 +295,7 @@ impl Gba {
             }
             self.bus.journal.enable(self.ppu.drawing());
             transfer.unit(&mut self.bus);
+            self.stamp_io_writes(Writer::Dma(n as u8));
             let cycles = self.bus.take_access_cycles();
             self.bus.journal.mark(self.ppu.dot_after(cycles));
             frame |= self.advance(cycles);
@@ -284,6 +306,17 @@ impl Gba {
             self.bus.io.request_interrupt(irq);
         }
         frame
+    }
+
+    /// Attributes the I/O writes just traced, if any, to `writer` at the
+    /// current beam position (where the instruction or unit began: the
+    /// PPU has not been advanced past it yet).
+    fn stamp_io_writes(&mut self, writer: Writer) {
+        if let Some(trace) = &mut self.bus.io_trace
+            && trace.has_unstamped()
+        {
+            trace.stamp(writer, self.ppu.vcount(), self.ppu.line_cycle());
+        }
     }
 
     /// EEPROM chips cannot tell their own size; the length of the DMA that
@@ -371,6 +404,49 @@ mod tests {
 
     fn gba_with(code: &[u32]) -> Gba {
         Gba::new(cartridge_with(code))
+    }
+
+    #[test]
+    fn traced_io_writes_name_the_instruction() {
+        let mut gba = gba_with(&[
+            0xE3A0_0301, // mov r0, #0x4000000
+            0xE3A0_1003, // mov r1, #3
+            0xE1C0_10B0, // strh r1, [r0]        ; DISPCNT
+            0xE1C0_10B4, // strh r1, [r0, #4]    ; DISPSTAT, not watched
+            0xEAFF_FFFE, // b .
+        ]);
+        gba.trace_io(Some(0x000..0x002));
+        gba.run_frame();
+        let writes = gba.take_io_writes();
+        assert_eq!(writes.len(), 1, "{writes:?}");
+        let write = writes[0];
+        assert_eq!((write.offset, write.width, write.value), (0, 2, 3));
+        assert_eq!(write.writer, Writer::Cpu(0x0800_0008));
+        assert_eq!(gba.take_io_writes(), []);
+    }
+
+    #[test]
+    fn traced_io_writes_by_dma_name_the_channel() {
+        let mut gba = gba_with(&[
+            0xE3A0_0301, // mov r0, #0x4000000
+            0xE280_00D4, // add r0, r0, #0xd4   ; DMA3SAD
+            0xE3A0_1302, // mov r1, #0x8000000
+            0xE580_1000, // str r1, [r0]
+            0xE3A0_1301, // mov r1, #0x4000000  ; to DISPCNT
+            0xE580_1004, // str r1, [r0, #4]
+            0xE3A0_1106, // mov r1, #0x80000001 ; one halfword, now
+            0xE580_1008, // str r1, [r0, #8]
+            0xEAFF_FFFE, // b .
+        ]);
+        gba.trace_io(Some(0x000..0x002));
+        gba.run_frame();
+        let writes = gba.take_io_writes();
+        assert_eq!(writes.len(), 1, "{writes:?}");
+        // The first halfword of the ROM: the low half of `mov r0, ...`.
+        assert_eq!(
+            (writes[0].value, writes[0].writer),
+            (0x0301, Writer::Dma(3))
+        );
     }
 
     /// A BIOS image whose every exception vector branches to itself.
