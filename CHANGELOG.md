@@ -6,6 +6,11 @@ All notable changes to tuiba. The format follows
 
 ## [Unreleased]
 
+### Fixed
+- A headless run whose output is cut short (`| head`) now stops quietly
+  instead of reporting a broken pipe as an error and writing it to the
+  crash log.
+
 ## [0.15.0] – 2026-10-19
 
 Tools for looking inside a running game.

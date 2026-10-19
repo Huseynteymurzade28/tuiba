@@ -1004,7 +1004,12 @@ fn run() -> Result<(), AppError> {
         let location =
             Location::from_arg(rom.to_path_buf()).map_err(tuiba_core::GbaError::RomIo)?;
         let (mut gba, _) = load_gba(&location, &firmware)?;
-        return Ok(headless::run(&mut gba, config)?);
+        return match headless::run(&mut gba, config) {
+            // A reader that has seen enough (`| head`) closed the pipe:
+            // that ends the run, it is not a failure.
+            Err(err) if err.kind() == std::io::ErrorKind::BrokenPipe => Ok(()),
+            result => Ok(result?),
+        };
     }
 
     // A ROM plays directly; a folder (or nothing) opens the library.

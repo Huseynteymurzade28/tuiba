@@ -72,14 +72,14 @@ pub fn run(gba: &mut Gba, config: &Headless) -> io::Result<()> {
     if profile_from.is_some() {
         profile.write(&mut stdout, &gba.bus)?;
     }
-    drop(stdout);
 
     let fps = f64::from(config.frames) / elapsed.as_secs_f64().max(f64::EPSILON);
     let swi = gba
         .last_unsupported_swi
         .map(|n| format!(" unsupported_swi={n:#04x}"))
         .unwrap_or_default();
-    println!(
+    writeln!(
+        stdout,
         "frames={} time={:.2}s ({fps:.0} fps) pc={:#010x} mode={:?}{} dispcnt={:#06x} frame={:016x}{swi}",
         config.frames,
         elapsed.as_secs_f64(),
@@ -88,8 +88,7 @@ pub fn run(gba: &mut Gba, config: &Headless) -> io::Result<()> {
         if gba.cpu.halted { " halted" } else { "" },
         gba.bus.io.read16(reg::DISPCNT),
         frame_hash(gba.framebuffer().pixels()),
-    );
-    Ok(())
+    )
 }
 
 /// Writes one line per instruction in `range`: address, encoding, text.
