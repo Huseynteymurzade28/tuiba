@@ -6,6 +6,8 @@ All notable changes to tuiba. The format follows
 
 ## [Unreleased]
 
+## [0.15.1] – 2026-10-19
+
 ### Fixed
 - A headless run whose output is cut short (`| head`) now stops quietly
   instead of reporting a broken pipe as an error and writing it to the
@@ -323,6 +325,7 @@ First release: ARM7TDMI, memory map with DMA and timers, PPU modes 0–5
 with sprites, windows and blending, HLE BIOS, SRAM/flash/EEPROM saves,
 Kitty graphics and half-block renderers, library screen, headless mode.
 
+[0.15.1]: https://github.com/Huseynteymurzade28/tuiba/compare/v0.15.0...v0.15.1
 [0.15.0]: https://github.com/Huseynteymurzade28/tuiba/compare/v0.14.0...v0.15.0
 [0.14.0]: https://github.com/Huseynteymurzade28/tuiba/compare/v0.13.0...v0.14.0
 [0.13.0]: https://github.com/Huseynteymurzade28/tuiba/compare/v0.12.0...v0.13.0
