@@ -104,6 +104,8 @@ enum AppError {
 struct TerminalGuard {
     terminal: ratatui::DefaultTerminal,
     release_events: bool,
+    /// Whether we pushed Kitty keyboard flags that must be popped.
+    enhanced: bool,
 }
 
 impl TerminalGuard {
@@ -117,8 +119,8 @@ impl TerminalGuard {
         // press of Esc arrives as two indistinguishable events.
         // Terminals that lack the protocol ignore the request and we
         // fall back to timeout-based releases.
-        let release_events = crossterm::terminal::supports_keyboard_enhancement().unwrap_or(false);
-        if release_events {
+        let enhanced = crossterm::terminal::supports_keyboard_enhancement().unwrap_or(false);
+        if enhanced {
             let _ = execute!(
                 stdout(),
                 PushKeyboardEnhancementFlags(
@@ -127,16 +129,22 @@ impl TerminalGuard {
                 )
             );
         }
+        // A Windows console reports every key-up, protocol or not, and
+        // crossterm passes them on: there a key is held until its release
+        // arrives, not until a timeout cuts it off before the first
+        // auto-repeat.
+        let release_events = enhanced || cfg!(windows);
         Ok(Self {
             terminal,
             release_events,
+            enhanced,
         })
     }
 }
 
 impl Drop for TerminalGuard {
     fn drop(&mut self) {
-        if self.release_events {
+        if self.enhanced {
             let _ = execute!(stdout(), PopKeyboardEnhancementFlags);
         }
         // Raw mode first: it has more side effects than the alternate
@@ -1038,6 +1046,7 @@ fn run() -> Result<(), AppError> {
     let TerminalGuard {
         terminal,
         release_events,
+        ..
     } = &mut guard;
     let session = Session {
         release_events: *release_events,
