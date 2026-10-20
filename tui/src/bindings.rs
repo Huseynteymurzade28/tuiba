@@ -59,6 +59,8 @@ pub enum Action {
     States,
     /// Open the cheat panel.
     Cheats,
+    /// Open the debugger.
+    Debugger,
     /// Save the frame on screen as a PNG.
     Screenshot,
     /// Show performance figures in the status bar.
@@ -73,7 +75,7 @@ pub enum Action {
 
 impl Action {
     /// Every action, in the order the help overlay and the file use.
-    pub const ALL: [Self; 27] = [
+    pub const ALL: [Self; 28] = [
         Self::Button(GbaKey::Up),
         Self::Button(GbaKey::Down),
         Self::Button(GbaKey::Left),
@@ -96,6 +98,7 @@ impl Action {
         Self::LoadState,
         Self::States,
         Self::Cheats,
+        Self::Debugger,
         Self::Screenshot,
         Self::Stats,
         Self::LcdColours,
@@ -129,6 +132,7 @@ impl Action {
             Self::LoadState => "load",
             Self::States => "states",
             Self::Cheats => "cheats",
+            Self::Debugger => "debugger",
             Self::Screenshot => "screenshot",
             Self::Stats => "stats",
             Self::LcdColours => "lcd",
@@ -163,6 +167,7 @@ impl Action {
             Self::LoadState => "load state",
             Self::States => "save-state panel",
             Self::Cheats => "cheats",
+            Self::Debugger => "debugger",
             Self::Screenshot => "screenshot",
             Self::Stats => "performance figures",
             Self::LcdColours => "LCD colours",
@@ -270,6 +275,7 @@ impl Bindings {
         bind(&mut b, Action::LoadState, &[KeyCode::F(8)]);
         bind(&mut b, Action::States, &[KeyCode::F(2)]);
         bind(&mut b, Action::Cheats, &[KeyCode::F(6)]);
+        bind(&mut b, Action::Debugger, &[KeyCode::F(7)]);
         bind(&mut b, Action::Screenshot, &[KeyCode::F(12)]);
         bind(&mut b, Action::Stats, &[KeyCode::F(3)]);
         bind(&mut b, Action::LcdColours, &[Char('c')]);

@@ -6,6 +6,11 @@ All notable changes to tuiba. The format follows
 
 ## [Unreleased]
 
+### Added
+- A debugger panel on `F7`: registers, flags, the PPU's position and
+  the code around the PC of the paused game, beside the game screen,
+  with stepping by instruction, scanline or frame. (#82)
+
 ## [0.15.2] – 2026-10-20
 
 ### Fixed

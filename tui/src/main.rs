@@ -8,6 +8,7 @@ mod cli;
 mod clock;
 mod colour;
 mod crashlog;
+mod debugger;
 mod gamepad;
 mod graphics;
 mod headless;
@@ -55,6 +56,7 @@ use crate::audio::AudioOutput;
 use crate::bindings::{Action, Bindings, Input};
 use crate::cheats::{CheatFile, CheatsPanel};
 use crate::cli::FastSpeed;
+use crate::debugger::DebuggerPanel;
 use crate::gamepad::{Gamepads, PadButton, PadNotice, PadSet, PadStyle};
 use crate::graphics::{Graphics, Renderer};
 use crate::input::{GbaKey, Hold, Keypad};
@@ -287,6 +289,7 @@ fn panel_pad_key(own: Option<KeyCode>, opener: bool, open_for: Duration) -> Opti
 enum Panel {
     States(StatesPanel),
     Cheats(CheatsPanel),
+    Debugger(DebuggerPanel),
 }
 
 /// How long "state saved" and friends stay in the status bar.
@@ -400,6 +403,9 @@ impl App {
                 let style = self.pad_style.unwrap_or(PadStyle::Generic);
                 let (own, opener) = match &self.panel {
                     Some(Panel::Cheats(_)) => (CheatsPanel::pad_key(button, style), Action::Cheats),
+                    Some(Panel::Debugger(_)) => {
+                        (DebuggerPanel::pad_key(button, style), Action::Debugger)
+                    }
                     _ => (StatesPanel::pad_key(button, style), Action::States),
                 };
                 if let Some(key) = panel_pad_key(own, action == Some(opener), open_for) {
@@ -444,6 +450,7 @@ impl App {
             Action::LoadState => self.load_state(now),
             Action::States => self.open_panel(now),
             Action::Cheats => self.open_cheats(now),
+            Action::Debugger => self.open_debugger(now),
             Action::Screenshot => self.screenshot(now),
             Action::FastSpeed => {
                 self.fast_speed = self.fast_speed.next();
@@ -624,9 +631,38 @@ impl App {
         self.reset_fps(now);
     }
 
+    /// Opens the debugger. The game screen moves aside for it, so the
+    /// image goes first and comes back in its new place.
+    fn open_debugger(&mut self, now: Instant) {
+        self.panel = Some(Panel::Debugger(DebuggerPanel::open()));
+        self.panel_opened = Some(now);
+        self.reset_fps(now);
+        self.hide_image();
+    }
+
+    /// Takes the pixel image off the screen, for a layout change that
+    /// moves the game screen. Failing that is cosmetic: the next draw
+    /// paints over it.
+    fn hide_image(&mut self) {
+        if let Some(graphics) = &mut self.graphics {
+            let _ = graphics.hide();
+        }
+    }
+
     /// Handles one key while a panel is up, and acts on what it asks for.
     fn handle_panel_key(&mut self, key: crossterm::event::KeyEvent, now: Instant) {
         match &mut self.panel {
+            Some(Panel::Debugger(panel)) => {
+                // The key that opened it closes it too.
+                let opener = key.kind == KeyEventKind::Press
+                    && self.bindings.action(key.code) == Some(Action::Debugger);
+                match panel.handle(key) {
+                    _ if opener => self.close_debugger(),
+                    Some(debugger::Action::Close) => self.close_debugger(),
+                    Some(debugger::Action::Step(step)) => self.debug_step(step),
+                    None => {}
+                }
+            }
             Some(Panel::States(_)) => self.handle_states_key(key, now),
             Some(Panel::Cheats(panel)) => match panel.handle(key, self.cheats.entries().len()) {
                 Some(cheats::Action::Toggle(index)) => self.toggle_cheat(index, now),
@@ -635,6 +671,19 @@ impl App {
             },
             None => {}
         }
+    }
+
+    /// Runs the machine by one debugger step. A finished frame is kept
+    /// for rewinding, as a frame stepped with `.` is.
+    fn debug_step(&mut self, step: debugger::Step) {
+        if debugger::run(&mut self.gba, step) {
+            self.rewind.frame(&self.gba);
+        }
+    }
+
+    fn close_debugger(&mut self) {
+        self.panel = None;
+        self.hide_image();
     }
 
     /// Turns a cheat on or off and says so.
@@ -742,6 +791,8 @@ impl App {
             format!("  ⏸ states  (slot {})", self.slot + 1)
         } else if let Some(Panel::Cheats(_)) = self.panel {
             "  ⏸ cheats".to_string()
+        } else if let Some(Panel::Debugger(_)) = self.panel {
+            "  ⏸ debugger".to_string()
         } else if self.leave_armed.is_some_and(|t| now < t + LEAVE_WINDOW) {
             "  esc again to leave".to_string()
         } else if self.bound_leave.is_some_and(|t| now < t + LEAVE_WINDOW) {
@@ -864,12 +915,16 @@ impl App {
     }
 
     fn draw(&mut self, frame: &mut Frame) {
-        let [screen_area, status_area] =
+        let [main_area, status_area] =
             Layout::vertical([Constraint::Fill(1), Constraint::Length(1)]).areas(frame.area());
+        let (screen_area, debugger_area) = match self.panel {
+            Some(Panel::Debugger(_)) => DebuggerPanel::split(main_area),
+            _ => (main_area, Rect::default()),
+        };
         self.screen_area = screen_area;
 
         frame.render_widget(Block::default().style(theme::text()), screen_area);
-        let size_hint = if self.graphics.is_some() {
+        let size_hint = if self.graphics.is_some() || screen_area.width == 0 {
             // The image is overlaid after the frame is flushed; the cells
             // underneath stay blank.
             String::new()
@@ -900,6 +955,9 @@ impl App {
             self.draw_help(frame, screen_area);
         }
         match &mut self.panel {
+            Some(Panel::Debugger(panel)) => {
+                panel.draw(frame, debugger_area, &self.gba, self.pad_style);
+            }
             Some(Panel::States(panel)) => panel.draw(frame, screen_area, self.pad_style),
             Some(Panel::Cheats(panel)) => {
                 panel.draw(frame, screen_area, &self.cheats, self.pad_style);
@@ -1560,7 +1618,9 @@ fn event_loop(
             app.flush_save();
             next_autosave = now + AUTOSAVE_INTERVAL;
         }
-        let overlay = app.help || app.panel.is_some();
+        // The debugger sits beside the screen rather than over it.
+        let overlay =
+            app.help || app.panel.is_some() && !matches!(app.panel, Some(Panel::Debugger(_)));
         let draw_start = Instant::now();
         if overlay && let Some(graphics) = &mut app.graphics {
             // The image would sit on top of the overlay (or, painted into
