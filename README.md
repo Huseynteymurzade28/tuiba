@@ -233,7 +233,11 @@ on a terminal narrower than 100 columns): the CPU's registers and
 flags, where the PPU is in the frame, and the code around the next
 instruction. `i` runs one instruction, `l` up to the next scanline and
 `f` up to the end of the frame, so you can watch what each step draws.
-`Esc` or `F7` lets the game carry on.
+`Tab` switches the lower half between the code and a memory view;
+`↑` `↓` and `PgUp` `PgDn` scroll either one, and `g` jumps to an
+address — in hex, or a register's name (`g sp`, `g r4`). In the memory
+view, the bytes the last step changed stand out. `Home` puts the code
+back on the next instruction. `Esc` or `F7` lets the game carry on.
 
 GBA games were coloured for the console's dim, low-contrast LCD, so on
 a modern screen they can look garish. `C` (or `--color-correction`)

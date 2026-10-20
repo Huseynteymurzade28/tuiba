@@ -44,32 +44,141 @@ pub enum Action {
     Close,
 }
 
-/// The debugger over a paused game. It has no state of its own yet:
-/// everything it shows is read from the machine on each draw.
-pub struct DebuggerPanel;
+/// Which view fills the lower half of the panel.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum View {
+    Code,
+    Memory,
+}
 
-// Methods rather than functions: the memory view and breakpoints will
-// keep their state here.
-#[allow(clippy::unused_self)]
+/// Bytes per row of the memory view.
+const MEMORY_ROW: u32 = 8;
+
+/// Where IWRAM starts: the memory view opens there, on the game's
+/// variables and stacks.
+const IWRAM: u32 = 0x0300_0000;
+
+/// The debugger over a paused game. It keeps only where its views are
+/// looking; everything it shows is read from the machine on each draw.
+pub struct DebuggerPanel {
+    view: View,
+    /// First address of the code view; `None` follows the PC.
+    code_at: Option<u32>,
+    /// First address of the memory view.
+    memory_at: u32,
+    /// The address being typed after `g`.
+    prompt: Option<String>,
+    /// Why the last address typed was refused.
+    error: Option<&'static str>,
+    /// Rows the lower view had at the last draw, for paging.
+    rows: u32,
+    /// The memory view's bytes before the last step, to mark what the
+    /// step changed, and the address they start at.
+    before: Vec<u8>,
+    before_at: u32,
+}
+
 impl DebuggerPanel {
     #[must_use]
     pub const fn open() -> Self {
-        Self
+        Self {
+            view: View::Code,
+            code_at: None,
+            memory_at: IWRAM,
+            prompt: None,
+            error: None,
+            rows: 16,
+            before: Vec::new(),
+            before_at: 0,
+        }
     }
 
-    /// Turns the panel's keys into an [`Action`]. Everything else is
-    /// swallowed: the game must not see the keyboard while this is up.
-    pub fn handle(&mut self, key: KeyEvent) -> Option<Action> {
+    /// Turns the panel's keys into an [`Action`], and moves its views.
+    /// Everything else is swallowed: the game must not see the keyboard
+    /// while this is up. `gba` resolves register names typed after `g`.
+    pub fn handle(&mut self, key: KeyEvent, gba: &Gba) -> Option<Action> {
         if !matches!(key.kind, KeyEventKind::Press | KeyEventKind::Repeat) {
             return None;
         }
-        match key.code {
-            KeyCode::Char('i' | 's') | KeyCode::Enter => Some(Action::Step(Step::Instruction)),
-            KeyCode::Char('l') => Some(Action::Step(Step::Line)),
-            KeyCode::Char('f' | '.') => Some(Action::Step(Step::Frame)),
-            KeyCode::Esc => Some(Action::Close),
-            _ => None,
+        self.error = None;
+        if let Some(text) = &mut self.prompt {
+            match key.code {
+                KeyCode::Char(c) if c.is_ascii_alphanumeric() && text.len() < 10 => {
+                    text.push(c.to_ascii_lowercase());
+                }
+                KeyCode::Backspace => {
+                    text.pop();
+                }
+                KeyCode::Enter => {
+                    let text = self.prompt.take().unwrap_or_default();
+                    match address(&text, gba) {
+                        Some(at) => self.go_to(at, gba),
+                        None => self.error = Some("not an address or register"),
+                    }
+                }
+                KeyCode::Esc => self.prompt = None,
+                _ => {}
+            }
+            return None;
         }
+        let page = self.rows.max(1);
+        match key.code {
+            KeyCode::Char('i' | 's') | KeyCode::Enter => {
+                return Some(self.step(Step::Instruction, gba));
+            }
+            KeyCode::Char('l') => return Some(self.step(Step::Line, gba)),
+            KeyCode::Char('f' | '.') => return Some(self.step(Step::Frame, gba)),
+            KeyCode::Esc => return Some(Action::Close),
+            KeyCode::Tab => {
+                self.view = match self.view {
+                    View::Code => View::Memory,
+                    View::Memory => View::Code,
+                };
+            }
+            KeyCode::Char('g') => self.prompt = Some(String::new()),
+            KeyCode::Up | KeyCode::Char('k') => self.scroll(-1, gba),
+            KeyCode::Down | KeyCode::Char('j') => self.scroll(1, gba),
+            KeyCode::PageUp => self.scroll(-i64::from(page), gba),
+            KeyCode::PageDown => self.scroll(i64::from(page), gba),
+            KeyCode::Home if self.view == View::Code => self.code_at = None,
+            _ => {}
+        }
+        None
+    }
+
+    /// A step, with the memory view's bytes kept from before it.
+    fn step(&mut self, step: Step, gba: &Gba) -> Action {
+        let length = self.rows.max(1) * MEMORY_ROW;
+        self.before = (0..length)
+            .map(|n| gba.bus.read8(self.memory_at.wrapping_add(n)))
+            .collect();
+        self.before_at = self.memory_at;
+        // A step moves the PC: the code view goes back to following it.
+        self.code_at = None;
+        Action::Step(step)
+    }
+
+    /// Points the current view at `at`.
+    fn go_to(&mut self, at: u32, gba: &Gba) {
+        match self.view {
+            View::Code => self.code_at = Some(at & !(instruction_size(gba) - 1)),
+            View::Memory => self.memory_at = at & !(MEMORY_ROW - 1),
+        }
+    }
+
+    /// Moves the current view by `rows` rows.
+    fn scroll(&mut self, rows: i64, gba: &Gba) {
+        let (at, row) = match self.view {
+            View::Code => (
+                self.code_at.get_or_insert(code_start(gba, self.rows)),
+                instruction_size(gba),
+            ),
+            View::Memory => (&mut self.memory_at, MEMORY_ROW),
+        };
+        // Two's complement: a negative offset wraps the right way.
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        let offset = (rows * i64::from(row)) as u32;
+        *at = at.wrapping_add(offset);
     }
 
     /// The key a pad button stands for in the panel: the pad's confirm
@@ -101,7 +210,7 @@ impl DebuggerPanel {
 
     /// Draws the panel into `area`. With `pad`, the footer names that
     /// pad's buttons instead of keys.
-    pub fn draw(&self, frame: &mut Frame, area: Rect, gba: &Gba, pad: Option<PadStyle>) {
+    pub fn draw(&mut self, frame: &mut Frame, area: Rect, gba: &Gba, pad: Option<PadStyle>) {
         frame.render_widget(Clear, area);
         let cpsr = gba.cpu.regs.cpsr;
         let state = if cpsr.thumb() { "THUMB" } else { "ARM" };
@@ -115,7 +224,7 @@ impl DebuggerPanel {
             .style(theme::text().bg(theme::SURFACE));
         let inside = block.inner(area);
         frame.render_widget(block, area);
-        let [registers, status, _, code, footer] = Layout::vertical([
+        let [registers, status, heading, lower, footer] = Layout::vertical([
             Constraint::Length(8),
             Constraint::Length(2),
             Constraint::Length(1),
@@ -126,10 +235,120 @@ impl DebuggerPanel {
 
         frame.render_widget(Paragraph::new(register_lines(gba)), registers);
         frame.render_widget(Paragraph::new(status_lines(gba)), status);
-        let rows = usize::from(code.height);
-        frame.render_widget(Paragraph::new(code_lines(gba, rows)), code);
-        frame.render_widget(footer_line(pad), footer);
+        self.rows = u32::from(lower.height);
+        let rows = usize::from(lower.height);
+        let (heading_text, lines) = match self.view {
+            View::Code => {
+                let start = self.code_at.unwrap_or_else(|| code_start(gba, self.rows));
+                let place = if self.code_at.is_some() {
+                    format!("at {start:08x}  (home: back to pc)")
+                } else {
+                    "following pc".to_owned()
+                };
+                (format!("code · {place}"), code_lines(gba, start, rows))
+            }
+            View::Memory => {
+                let before = (self.before_at == self.memory_at).then_some(self.before.as_slice());
+                (
+                    format!("memory · {} {:08x}", region(self.memory_at), self.memory_at),
+                    memory_lines(gba, self.memory_at, rows, before),
+                )
+            }
+        };
+        frame.render_widget(
+            Paragraph::new(Line::styled(heading_text, theme::accent())),
+            heading,
+        );
+        frame.render_widget(Paragraph::new(lines), lower);
+        let footer_widget = match (&self.prompt, self.error) {
+            (Some(text), _) => prompt_line(text, self.view),
+            (None, Some(error)) => {
+                Paragraph::new(Line::styled(error, Style::default().fg(theme::WARN)))
+                    .alignment(Alignment::Center)
+            }
+            (None, None) => footer_line(pad, self.view),
+        };
+        frame.render_widget(footer_widget, footer);
     }
+}
+
+fn instruction_size(gba: &Gba) -> u32 {
+    if gba.cpu.thumb() { 2 } else { 4 }
+}
+
+/// Where the code view starts when it follows the PC: a third of
+/// `rows` above it, so what led to it shows as well as what follows.
+fn code_start(gba: &Gba, rows: u32) -> u32 {
+    gba.cpu
+        .next_pc()
+        .wrapping_sub(rows / 3 * instruction_size(gba))
+}
+
+/// What `g` was given: a register name, or a hexadecimal address with
+/// or without `0x`.
+fn address(text: &str, gba: &Gba) -> Option<u32> {
+    if let Some(n) = REGISTER_NAMES.iter().position(|&name| name == text) {
+        return Some(if n == 15 {
+            gba.cpu.next_pc()
+        } else {
+            gba.cpu.regs.get(n)
+        });
+    }
+    let digits = text.strip_prefix("0x").unwrap_or(text);
+    if digits.is_empty() {
+        return None;
+    }
+    u32::from_str_radix(digits, 16).ok()
+}
+
+/// The name of the memory area `address` is in.
+fn region(address: u32) -> &'static str {
+    match address >> 24 {
+        0x00 => "BIOS",
+        0x02 => "EWRAM",
+        0x03 => "IWRAM",
+        0x04 => "I/O",
+        0x05 => "palette",
+        0x06 => "VRAM",
+        0x07 => "OAM",
+        0x08..=0x0D => "ROM",
+        0x0E | 0x0F => "SRAM",
+        _ => "unmapped",
+    }
+}
+
+/// `rows` rows of eight bytes from `start`: address, hex and the bytes
+/// as text. Bytes that differ from `before` (what the same rows held
+/// before the last step) stand out.
+fn memory_lines(gba: &Gba, start: u32, rows: usize, before: Option<&[u8]>) -> Vec<Line<'static>> {
+    (0..rows)
+        .map(|row| {
+            #[allow(clippy::cast_possible_truncation)] // a screen has few rows
+            let at = start.wrapping_add(row as u32 * MEMORY_ROW);
+            let mut spans = vec![Span::styled(format!("{at:08x}  "), theme::hint())];
+            let mut text = String::with_capacity(MEMORY_ROW as usize);
+            for n in 0..MEMORY_ROW {
+                let byte = gba.bus.read8(at.wrapping_add(n));
+                let index = row * MEMORY_ROW as usize + n as usize;
+                let changed = before
+                    .and_then(|b| b.get(index))
+                    .is_some_and(|&old| old != byte);
+                let style = if changed {
+                    Style::default().fg(theme::WARN).bold()
+                } else {
+                    theme::text()
+                };
+                spans.push(Span::styled(format!("{byte:02x} "), style));
+                text.push(if byte.is_ascii_graphic() || byte == b' ' {
+                    char::from(byte)
+                } else {
+                    '.'
+                });
+            }
+            spans.push(Span::styled(format!(" {text}"), theme::hint()));
+            Line::from(spans)
+        })
+        .collect()
 }
 
 /// Runs `gba` by `step`, without input, sound or cheats: the machine
@@ -256,14 +475,11 @@ fn flag_spans(cpsr: Cpsr) -> Vec<Span<'static>> {
         .collect()
 }
 
-/// `rows` lines of code with the next instruction a third of the way
-/// down, so what led to it shows as well as what follows.
-fn code_lines(gba: &Gba, rows: usize) -> Vec<Line<'static>> {
+/// `rows` lines of code from `start`, the next instruction marked.
+fn code_lines(gba: &Gba, start: u32, rows: usize) -> Vec<Line<'static>> {
     let pc = gba.cpu.next_pc();
     let thumb = gba.cpu.thumb();
-    let size = if thumb { 2 } else { 4 };
-    let before = u32::try_from(rows / 3).unwrap_or(0);
-    let mut address = pc.wrapping_sub(before * size);
+    let mut address = start;
     let mut lines = Vec::with_capacity(rows);
     while lines.len() < rows {
         let (text, encoding, mut length) = if thumb {
@@ -302,29 +518,47 @@ fn code_lines(gba: &Gba, rows: usize) -> Vec<Line<'static>> {
     lines
 }
 
-fn footer_line(pad: Option<PadStyle>) -> Paragraph<'static> {
-    let style = pad.unwrap_or(PadStyle::Generic);
-    let (step, close, line, frame) = if pad.is_some() {
-        (
-            style.label(style.confirm()),
-            style.label(style.back()),
-            style.label(PadButton::R1),
-            style.label(PadButton::L1),
-        )
+fn footer_line(pad: Option<PadStyle>, view: View) -> Paragraph<'static> {
+    let other = match view {
+        View::Code => "memory",
+        View::Memory => "code",
+    };
+    let hints: Vec<(String, &str)> = if let Some(style) = pad {
+        vec![
+            (style.label(style.confirm()).to_owned(), "instr"),
+            (style.label(PadButton::R1).to_owned(), "line"),
+            (style.label(PadButton::L1).to_owned(), "frame"),
+            (style.label(style.back()).to_owned(), "close"),
+        ]
     } else {
-        ("i", "esc", "l", "f")
+        vec![
+            ("i l f".to_owned(), "step"),
+            ("tab".to_owned(), other),
+            ("g".to_owned(), "go to"),
+            ("esc".to_owned(), "close"),
+        ]
     };
     let mut spans = Vec::new();
-    for (key, label) in [
-        (step, "instruction"),
-        (line, "line"),
-        (frame, "frame"),
-        (close, "close"),
-    ] {
+    for (key, label) in hints {
         spans.push(Span::styled(format!(" {key} "), theme::key()));
         spans.push(Span::styled(format!("{label}  "), theme::hint()));
     }
     Paragraph::new(Line::from(spans)).alignment(Alignment::Center)
+}
+
+/// The `g` prompt: what has been typed, and what it accepts.
+fn prompt_line(text: &str, view: View) -> Paragraph<'static> {
+    let what = match view {
+        View::Code => "code",
+        View::Memory => "memory",
+    };
+    Paragraph::new(Line::from(vec![
+        Span::styled(format!("{what} at "), theme::hint()),
+        Span::styled(format!("{text}▏"), theme::text()),
+        Span::styled("  hex or r0–pc · ", theme::hint()),
+        Span::styled(" ⏎ ", theme::key()),
+        Span::styled(" esc ", theme::key()),
+    ]))
 }
 
 #[cfg(test)]
@@ -372,7 +606,7 @@ mod tests {
     fn the_code_view_puts_the_pc_a_third_down() {
         let mut gba = gba();
         run(&mut gba, Step::Instruction);
-        let lines = code_lines(&gba, 6);
+        let lines = code_lines(&gba, code_start(&gba, 6), 6);
         assert_eq!(lines.len(), 6);
         let text = |n: usize| {
             lines[n]
@@ -384,6 +618,88 @@ mod tests {
         assert!(text(2).starts_with("▶ 08000004"), "{}", text(2));
         assert!(text(2).contains("add r0, r0, #1"), "{}", text(2));
         assert!(text(1).contains("mov r0, #1"), "{}", text(1));
+    }
+
+    fn press(panel: &mut DebuggerPanel, gba: &Gba, code: KeyCode) -> Option<Action> {
+        panel.handle(KeyEvent::from(code), gba)
+    }
+
+    fn text(line: &Line) -> String {
+        line.spans.iter().map(|s| s.content.as_ref()).collect()
+    }
+
+    #[test]
+    fn go_to_takes_hex_or_a_register() {
+        let mut gba = gba();
+        run(&mut gba, Step::Instruction);
+        assert_eq!(address("3000010", &gba), Some(0x0300_0010));
+        assert_eq!(address("0x6000000", &gba), Some(0x0600_0000));
+        assert_eq!(address("r0", &gba), Some(1));
+        assert_eq!(address("pc", &gba), Some(0x0800_0004));
+        assert_eq!(address("", &gba), None);
+        assert_eq!(address("0x", &gba), None);
+        assert_eq!(address("r16", &gba), None);
+        assert_eq!(address("123456789", &gba), None);
+    }
+
+    #[test]
+    fn the_prompt_moves_the_memory_view() {
+        let gba = gba();
+        let mut panel = DebuggerPanel::open();
+        press(&mut panel, &gba, KeyCode::Tab);
+        press(&mut panel, &gba, KeyCode::Char('g'));
+        for c in "600000c".chars() {
+            assert_eq!(
+                press(&mut panel, &gba, KeyCode::Char(c)),
+                None,
+                "typing is not a step"
+            );
+        }
+        press(&mut panel, &gba, KeyCode::Enter);
+        assert_eq!(panel.memory_at, 0x0600_0008, "rounded down to a row");
+        press(&mut panel, &gba, KeyCode::Char('g'));
+        press(&mut panel, &gba, KeyCode::Char('x'));
+        press(&mut panel, &gba, KeyCode::Enter);
+        assert!(panel.error.is_some());
+        assert_eq!(panel.memory_at, 0x0600_0008);
+        press(&mut panel, &gba, KeyCode::Up);
+        assert_eq!(panel.memory_at, 0x0600_0000);
+    }
+
+    #[test]
+    fn scrolling_the_code_stops_following_until_a_step() {
+        let gba = gba();
+        let mut panel = DebuggerPanel::open();
+        press(&mut panel, &gba, KeyCode::Down);
+        assert_eq!(panel.code_at, Some(code_start(&gba, panel.rows) + 4));
+        press(&mut panel, &gba, KeyCode::Home);
+        assert_eq!(panel.code_at, None);
+        press(&mut panel, &gba, KeyCode::Down);
+        assert_eq!(
+            press(&mut panel, &gba, KeyCode::Char('i')),
+            Some(Action::Step(Step::Instruction))
+        );
+        assert_eq!(panel.code_at, None);
+    }
+
+    #[test]
+    fn the_memory_view_marks_what_a_step_changed() {
+        let mut gba = gba();
+        gba.bus.write8(0x0300_0001, 0x41);
+        let before = vec![0u8; 16];
+        let lines = memory_lines(&gba, 0x0300_0000, 2, Some(&before));
+        assert_eq!(
+            text(&lines[0]),
+            "03000000  00 41 00 00 00 00 00 00  .A......"
+        );
+        let marked: Vec<_> = lines[0].spans[1..9]
+            .iter()
+            .map(|s| s.style.fg == Some(theme::WARN))
+            .collect();
+        assert_eq!(
+            marked,
+            [false, true, false, false, false, false, false, false]
+        );
     }
 
     #[test]

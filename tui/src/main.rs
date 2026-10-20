@@ -656,7 +656,7 @@ impl App {
                 // The key that opened it closes it too.
                 let opener = key.kind == KeyEventKind::Press
                     && self.bindings.action(key.code) == Some(Action::Debugger);
-                match panel.handle(key) {
+                match panel.handle(key, &self.gba) {
                     _ if opener => self.close_debugger(),
                     Some(debugger::Action::Close) => self.close_debugger(),
                     Some(debugger::Action::Step(step)) => self.debug_step(step),

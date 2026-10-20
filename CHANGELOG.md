@@ -10,6 +10,9 @@ All notable changes to tuiba. The format follows
 - A debugger panel on `F7`: registers, flags, the PPU's position and
   the code around the PC of the paused game, beside the game screen,
   with stepping by instruction, scanline or frame. (#82)
+- The debugger's memory view (`Tab`): eight bytes a row with their
+  text, the bytes the last step changed marked; `g` jumps the code or
+  memory view to an address or a register's value. (#82)
 
 ## [0.15.2] – 2026-10-20
 
