@@ -6,6 +6,18 @@ All notable changes to tuiba. The format follows
 
 ## [Unreleased]
 
+## [0.15.2] – 2026-10-20
+
+### Fixed
+- On Windows a held key stays held until it is let go. Windows consoles
+  report every key release, but tuiba treated them like terminals that
+  report none and let a held key drop after half a second, before the
+  first auto-repeat — a brief stutter when holding a direction. (#24)
+
+### Changed
+- CI now runs the real terminal interface on Linux, macOS and Windows
+  (ConPTY), driving the library, a game, the keypad and the way out. (#24)
+
 ## [0.15.1] – 2026-10-19
 
 ### Fixed
@@ -325,6 +337,7 @@ First release: ARM7TDMI, memory map with DMA and timers, PPU modes 0–5
 with sprites, windows and blending, HLE BIOS, SRAM/flash/EEPROM saves,
 Kitty graphics and half-block renderers, library screen, headless mode.
 
+[0.15.2]: https://github.com/Huseynteymurzade28/tuiba/compare/v0.15.1...v0.15.2
 [0.15.1]: https://github.com/Huseynteymurzade28/tuiba/compare/v0.15.0...v0.15.1
 [0.15.0]: https://github.com/Huseynteymurzade28/tuiba/compare/v0.14.0...v0.15.0
 [0.14.0]: https://github.com/Huseynteymurzade28/tuiba/compare/v0.13.0...v0.14.0
