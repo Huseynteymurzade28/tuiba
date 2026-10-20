@@ -194,6 +194,32 @@ class Session:
         self.term.write(keys)
 
 
+# Windows virtual-key code, scan code and character of the keys we press.
+WIN32_KEYS = {
+    b"\r": (0x0D, 0x1C, 13),
+    b"\x1b": (0x1B, 0x01, 27),
+    b"q": (0x51, 0x10, ord("q")),
+    b"y": (0x59, 0x15, ord("y")),
+    b"z": (0x5A, 0x2C, ord("z")),
+}
+
+
+def win32_key(key, down):
+    """A key-down or key-up in win32-input-mode, the way Windows Terminal
+    hands keys to a ConPTY. Plain text through a ConPTY becomes a key-down
+    and key-up in the same instant, and a lone `\x1b` is ambiguous."""
+    vk, sc, ch = WIN32_KEYS[key]
+    return f"\x1b[{vk};{sc};{ch};{int(down)};0;1_".encode()
+
+
+def press(s, key):
+    """Types `key` once: a down and an up."""
+    if os.name == "nt":
+        s.send(win32_key(key, True) + win32_key(key, False))
+    else:
+        s.send(key)
+
+
 def environment(root):
     env = {
         k: v
@@ -232,18 +258,16 @@ def library_run(binary, root):
 
     m = s.mark()
     time.sleep(0.5)
-    s.send(b"\r")
+    press(s, b"\r")
     s.expect("game screen drawn red", lambda d: any(map(is_red, colours(d))), m)
 
     m = s.mark()
     if os.name == "nt":
-        # Plain text through a ConPTY becomes a key-down and key-up in the
-        # same instant. Windows Terminal talks win32-input-mode to it
-        # instead, one sequence per key-down and key-up: hold Z like that.
-        s.send(b"\x1b[90;44;122;1;0;1_")
+        # Real key-up events: hold Z down, then let go.
+        s.send(win32_key(b"z", True))
         s.expect("A (z) held turns the screen green", lambda d: any(map(is_green, colours(d))), m)
         time.sleep(1.0)
-        s.send(b"\x1b[90;44;122;0;0;1_")
+        s.send(win32_key(b"z", False))
     else:
         # Without release events a key counts as held for a while after
         # each press; keep pressing, like a key's auto-repeat would.
@@ -257,17 +281,17 @@ def library_run(binary, root):
     m = s.mark()
     # Well past the gap that tells two presses from one press reported
     # twice, even when a slow debug build handles both in one batch.
-    s.send(b"\x1b")
+    press(s, b"\x1b")
     time.sleep(1.0)
-    s.send(b"\x1b")
+    press(s, b"\x1b")
     s.expect("Esc twice returns to the library", lambda d: TITLE in d, m)
 
     # Past the cooldown that keeps a held Esc from reaching the prompt.
     time.sleep(1.0)
     m = s.mark()
-    s.send(b"q")
+    press(s, b"q")
     s.expect("q asks before quitting", lambda d: b"Quit" in d, m)
-    s.send(b"y")
+    press(s, b"y")
     s.exited("y quits")
 
     if os.name != "nt":
