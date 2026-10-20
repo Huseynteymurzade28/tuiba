@@ -13,6 +13,9 @@ All notable changes to tuiba. The format follows
 - The debugger's memory view (`Tab`): eight bytes a row with their
   text, the bytes the last step changed marked; `g` jumps the code or
   memory view to an address or a register's value. (#82)
+- Breakpoints in the debugger (`b`): a game that reaches one stops
+  before the instruction there and opens the debugger; scanline and
+  frame steps stop at them too. (#82)
 
 ## [0.15.2] – 2026-10-20
 

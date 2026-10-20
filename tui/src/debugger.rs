@@ -6,6 +6,11 @@
 //! enough, so a step shows what it drew; on a narrow one it takes the
 //! whole screen. Emulation waits while it is up, like it does for the
 //! other panels: only the steps asked for here run the machine.
+//!
+//! Breakpoints outlive the panel: closing it lets the game run on until
+//! the PC reaches one, which opens the panel again.
+
+use std::collections::BTreeSet;
 
 use crossterm::event::{KeyCode, KeyEvent, KeyEventKind};
 use ratatui::Frame;
@@ -37,11 +42,23 @@ pub enum Step {
     Frame,
 }
 
+/// Addresses where running code stops before executing them.
+pub type Breakpoints = BTreeSet<u32>;
+
 /// What the panel wants done after a key.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Action {
     Step(Step),
+    /// Set a breakpoint here, or clear the one that is.
+    Toggle(u32),
     Close,
+}
+
+/// What `g` or `b` is typing an address for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Prompt {
+    GoTo,
+    Break,
 }
 
 /// Which view fills the lower half of the panel.
@@ -66,8 +83,8 @@ pub struct DebuggerPanel {
     code_at: Option<u32>,
     /// First address of the memory view.
     memory_at: u32,
-    /// The address being typed after `g`.
-    prompt: Option<String>,
+    /// The address being typed after `g` or `b`.
+    prompt: Option<(Prompt, String)>,
     /// Why the last address typed was refused.
     error: Option<&'static str>,
     /// Rows the lower view had at the last draw, for paging.
@@ -95,13 +112,14 @@ impl DebuggerPanel {
 
     /// Turns the panel's keys into an [`Action`], and moves its views.
     /// Everything else is swallowed: the game must not see the keyboard
-    /// while this is up. `gba` resolves register names typed after `g`.
+    /// while this is up. `gba` resolves register names typed after `g`
+    /// or `b`.
     pub fn handle(&mut self, key: KeyEvent, gba: &Gba) -> Option<Action> {
         if !matches!(key.kind, KeyEventKind::Press | KeyEventKind::Repeat) {
             return None;
         }
         self.error = None;
-        if let Some(text) = &mut self.prompt {
+        if let Some((_, text)) = &mut self.prompt {
             match key.code {
                 KeyCode::Char(c) if c.is_ascii_alphanumeric() && text.len() < 10 => {
                     text.push(c.to_ascii_lowercase());
@@ -110,10 +128,19 @@ impl DebuggerPanel {
                     text.pop();
                 }
                 KeyCode::Enter => {
-                    let text = self.prompt.take().unwrap_or_default();
-                    match address(&text, gba) {
-                        Some(at) => self.go_to(at, gba),
-                        None => self.error = Some("not an address or register"),
+                    let (prompt, text) = self.prompt.take()?;
+                    // An empty `b` means the instruction about to run.
+                    let at = if prompt == Prompt::Break && text.is_empty() {
+                        Some(gba.cpu.next_pc())
+                    } else {
+                        address(&text, gba)
+                    };
+                    match (prompt, at) {
+                        (Prompt::GoTo, Some(at)) => self.go_to(at, gba),
+                        (Prompt::Break, Some(at)) => {
+                            return Some(Action::Toggle(at & !(instruction_size(gba) - 1)));
+                        }
+                        (_, None) => self.error = Some("not an address or register"),
                     }
                 }
                 KeyCode::Esc => self.prompt = None,
@@ -135,7 +162,8 @@ impl DebuggerPanel {
                     View::Memory => View::Code,
                 };
             }
-            KeyCode::Char('g') => self.prompt = Some(String::new()),
+            KeyCode::Char('g') => self.prompt = Some((Prompt::GoTo, String::new())),
+            KeyCode::Char('b') => self.prompt = Some((Prompt::Break, String::new())),
             KeyCode::Up | KeyCode::Char('k') => self.scroll(-1, gba),
             KeyCode::Down | KeyCode::Char('j') => self.scroll(1, gba),
             KeyCode::PageUp => self.scroll(-i64::from(page), gba),
@@ -208,9 +236,16 @@ impl DebuggerPanel {
         }
     }
 
-    /// Draws the panel into `area`. With `pad`, the footer names that
-    /// pad's buttons instead of keys.
-    pub fn draw(&mut self, frame: &mut Frame, area: Rect, gba: &Gba, pad: Option<PadStyle>) {
+    /// Draws the panel into `area`, the code view marking `breakpoints`.
+    /// With `pad`, the footer names that pad's buttons instead of keys.
+    pub fn draw(
+        &mut self,
+        frame: &mut Frame,
+        area: Rect,
+        gba: &Gba,
+        breakpoints: &Breakpoints,
+        pad: Option<PadStyle>,
+    ) {
         frame.render_widget(Clear, area);
         let cpsr = gba.cpu.regs.cpsr;
         let state = if cpsr.thumb() { "THUMB" } else { "ARM" };
@@ -229,7 +264,7 @@ impl DebuggerPanel {
             Constraint::Length(2),
             Constraint::Length(1),
             Constraint::Fill(1),
-            Constraint::Length(1),
+            Constraint::Length(2),
         ])
         .areas(inside);
 
@@ -245,7 +280,15 @@ impl DebuggerPanel {
                 } else {
                     "following pc".to_owned()
                 };
-                (format!("code · {place}"), code_lines(gba, start, rows))
+                let marks = match breakpoints.len() {
+                    0 => String::new(),
+                    1 => " · ● 1 breakpoint".to_owned(),
+                    n => format!(" · ● {n} breakpoints"),
+                };
+                (
+                    format!("code · {place}{marks}"),
+                    code_lines(gba, start, rows, breakpoints),
+                )
             }
             View::Memory => {
                 let before = (self.before_at == self.memory_at).then_some(self.before.as_slice());
@@ -261,7 +304,7 @@ impl DebuggerPanel {
         );
         frame.render_widget(Paragraph::new(lines), lower);
         let footer_widget = match (&self.prompt, self.error) {
-            (Some(text), _) => prompt_line(text, self.view),
+            (Some((prompt, text)), _) => prompt_line(*prompt, text, self.view),
             (None, Some(error)) => {
                 Paragraph::new(Line::styled(error, Style::default().fg(theme::WARN)))
                     .alignment(Alignment::Center)
@@ -284,7 +327,7 @@ fn code_start(gba: &Gba, rows: u32) -> u32 {
         .wrapping_sub(rows / 3 * instruction_size(gba))
 }
 
-/// What `g` was given: a register name, or a hexadecimal address with
+/// What `g` or `b` was given: a register name, or a hexadecimal address with
 /// or without `0x`.
 fn address(text: &str, gba: &Gba) -> Option<u32> {
     if let Some(n) = REGISTER_NAMES.iter().position(|&name| name == text) {
@@ -351,31 +394,68 @@ fn memory_lines(gba: &Gba, start: u32, rows: usize, before: Option<&[u8]>) -> Ve
         .collect()
 }
 
+/// How a run ended.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Ran {
+    /// A frame was finished on the way.
+    pub frame: bool,
+    /// The PC reached a breakpoint, and the instruction there has not
+    /// run.
+    pub breakpoint: bool,
+}
+
 /// Runs `gba` by `step`, without input, sound or cheats: the machine
-/// alone. Returns whether a frame was finished on the way.
-pub fn run(gba: &mut Gba, step: Step) -> bool {
-    let mut finished = false;
-    match step {
-        Step::Instruction => loop {
-            let halted = gba.cpu.halted;
-            finished |= gba.step();
-            if !halted || finished {
-                break;
-            }
-        },
-        Step::Line => {
-            let line = gba.ppu.vcount();
-            while gba.ppu.vcount() == line {
-                finished |= gba.step();
-            }
+/// alone. The instruction at the PC always runs, breakpoint or not, so
+/// a step from one moves on; after it, reaching a breakpoint ends the
+/// run early.
+pub fn run(gba: &mut Gba, step: Step, breakpoints: &Breakpoints) -> Ran {
+    let ran = advance(gba, step, breakpoints);
+    gba.clear_audio();
+    ran
+}
+
+/// Runs `gba` to the end of the frame like [`Gba::run_frame`], but
+/// stops early at a breakpoint. `resume` lets the instruction at the PC
+/// run even if it has one: the game is carrying on from it.
+pub fn run_frame(gba: &mut Gba, breakpoints: &Breakpoints, resume: bool) -> Ran {
+    if resume {
+        advance(gba, Step::Frame, breakpoints)
+    } else if hit(gba, breakpoints) {
+        Ran {
+            frame: false,
+            breakpoint: true,
         }
-        Step::Frame => {
-            while !gba.step() {}
-            finished = true;
+    } else {
+        advance(gba, Step::Frame, breakpoints)
+    }
+}
+
+/// Whether the instruction about to run has a breakpoint. A halted CPU
+/// is about to run nothing.
+fn hit(gba: &Gba, breakpoints: &Breakpoints) -> bool {
+    !gba.cpu.halted && breakpoints.contains(&gba.cpu.next_pc())
+}
+
+fn advance(gba: &mut Gba, step: Step, breakpoints: &Breakpoints) -> Ran {
+    let line = gba.ppu.vcount();
+    let mut ran = Ran::default();
+    loop {
+        let halted = gba.cpu.halted;
+        ran.frame |= gba.step();
+        let done = match step {
+            // A halted CPU runs until it executes an instruction.
+            Step::Instruction => !halted || ran.frame,
+            Step::Line => gba.ppu.vcount() != line,
+            Step::Frame => ran.frame,
+        };
+        if done {
+            return ran;
+        }
+        if hit(gba, breakpoints) {
+            ran.breakpoint = true;
+            return ran;
         }
     }
-    gba.clear_audio();
-    finished
 }
 
 fn mode_name(mode: Option<Mode>) -> &'static str {
@@ -475,8 +555,9 @@ fn flag_spans(cpsr: Cpsr) -> Vec<Span<'static>> {
         .collect()
 }
 
-/// `rows` lines of code from `start`, the next instruction marked.
-fn code_lines(gba: &Gba, start: u32, rows: usize) -> Vec<Line<'static>> {
+/// `rows` lines of code from `start`, the next instruction and the
+/// breakpoints marked.
+fn code_lines(gba: &Gba, start: u32, rows: usize, breakpoints: &Breakpoints) -> Vec<Line<'static>> {
     let pc = gba.cpu.next_pc();
     let thumb = gba.cpu.thumb();
     let mut address = start;
@@ -502,13 +583,19 @@ fn code_lines(gba: &Gba, start: u32, rows: usize) -> Vec<Line<'static>> {
             length = pc - address;
         }
         let current = address == pc;
-        let (marker, style) = if current {
-            ("▶ ", theme::accent().bold())
+        let style = if current {
+            theme::accent().bold()
         } else {
-            ("  ", theme::text())
+            theme::text()
+        };
+        let stop = if breakpoints.contains(&address) {
+            "●"
+        } else {
+            " "
         };
         lines.push(Line::from(vec![
-            Span::styled(marker, theme::accent()),
+            Span::styled(stop, Style::default().fg(theme::WARN)),
+            Span::styled(if current { "▶ " } else { "  " }, theme::accent()),
             Span::styled(format!("{address:08x}  "), theme::hint()),
             Span::styled(format!("{encoding:<10}"), theme::hint()),
             Span::styled(text, style),
@@ -523,42 +610,60 @@ fn footer_line(pad: Option<PadStyle>, view: View) -> Paragraph<'static> {
         View::Code => "memory",
         View::Memory => "code",
     };
-    let hints: Vec<(String, &str)> = if let Some(style) = pad {
-        vec![
+    let rows: Vec<Vec<(String, &str)>> = if let Some(style) = pad {
+        vec![vec![
             (style.label(style.confirm()).to_owned(), "instr"),
             (style.label(PadButton::R1).to_owned(), "line"),
             (style.label(PadButton::L1).to_owned(), "frame"),
-            (style.label(style.back()).to_owned(), "close"),
-        ]
+            (style.label(style.back()).to_owned(), "run"),
+        ]]
     } else {
         vec![
-            ("i l f".to_owned(), "step"),
-            ("tab".to_owned(), other),
-            ("g".to_owned(), "go to"),
-            ("esc".to_owned(), "close"),
+            vec![
+                ("i".to_owned(), "instruction"),
+                ("l".to_owned(), "line"),
+                ("f".to_owned(), "frame"),
+                ("esc".to_owned(), "run"),
+            ],
+            vec![
+                ("b".to_owned(), "breakpoint"),
+                ("g".to_owned(), "go to"),
+                ("tab".to_owned(), other),
+            ],
         ]
     };
-    let mut spans = Vec::new();
-    for (key, label) in hints {
-        spans.push(Span::styled(format!(" {key} "), theme::key()));
-        spans.push(Span::styled(format!("{label}  "), theme::hint()));
-    }
-    Paragraph::new(Line::from(spans)).alignment(Alignment::Center)
+    let lines: Vec<Line> = rows
+        .into_iter()
+        .map(|row| {
+            let mut spans = Vec::new();
+            for (key, label) in row {
+                spans.push(Span::styled(format!(" {key} "), theme::key()));
+                spans.push(Span::styled(format!("{label}  "), theme::hint()));
+            }
+            Line::from(spans)
+        })
+        .collect();
+    Paragraph::new(lines).alignment(Alignment::Center)
 }
 
-/// The `g` prompt: what has been typed, and what it accepts.
-fn prompt_line(text: &str, view: View) -> Paragraph<'static> {
-    let what = match view {
-        View::Code => "code",
-        View::Memory => "memory",
+/// The `g` or `b` prompt: what has been typed, and what it accepts.
+fn prompt_line(prompt: Prompt, text: &str, view: View) -> Paragraph<'static> {
+    let (what, accepts) = match (prompt, view) {
+        (Prompt::GoTo, View::Code) => ("code at", "hex or r0–pc"),
+        (Prompt::GoTo, View::Memory) => ("memory at", "hex or r0–pc"),
+        (Prompt::Break, _) => ("breakpoint at", "hex, r0–pc, or ⏎ for pc"),
     };
-    Paragraph::new(Line::from(vec![
-        Span::styled(format!("{what} at "), theme::hint()),
-        Span::styled(format!("{text}▏"), theme::text()),
-        Span::styled("  hex or r0–pc · ", theme::hint()),
-        Span::styled(" ⏎ ", theme::key()),
-        Span::styled(" esc ", theme::key()),
-    ]))
+    Paragraph::new(vec![
+        Line::from(vec![
+            Span::styled(format!("{what} "), theme::hint()),
+            Span::styled(format!("{text}▏"), theme::text()),
+        ]),
+        Line::from(vec![
+            Span::styled(format!("{accepts}  "), theme::hint()),
+            Span::styled(" ⏎ ", theme::key()),
+            Span::styled(" esc ", theme::key()),
+        ]),
+    ])
 }
 
 #[cfg(test)]
@@ -580,10 +685,10 @@ mod tests {
     fn an_instruction_step_runs_one_instruction() {
         let mut gba = gba();
         assert_eq!(gba.cpu.next_pc(), 0x0800_0000);
-        run(&mut gba, Step::Instruction);
+        run(&mut gba, Step::Instruction, &Breakpoints::new());
         assert_eq!(gba.cpu.next_pc(), 0x0800_0004);
         assert_eq!(gba.cpu.regs.get(0), 1);
-        run(&mut gba, Step::Instruction);
+        run(&mut gba, Step::Instruction, &Breakpoints::new());
         assert_eq!(gba.cpu.regs.get(0), 2);
     }
 
@@ -591,22 +696,22 @@ mod tests {
     fn a_line_step_moves_to_the_next_scanline() {
         let mut gba = gba();
         let line = gba.ppu.vcount();
-        run(&mut gba, Step::Line);
+        run(&mut gba, Step::Line, &Breakpoints::new());
         assert_eq!(gba.ppu.vcount(), (line + 1) % 228);
     }
 
     #[test]
     fn a_frame_step_ends_at_vblank() {
         let mut gba = gba();
-        assert!(run(&mut gba, Step::Frame));
+        assert!(run(&mut gba, Step::Frame, &Breakpoints::new()).frame);
         assert_eq!(gba.ppu.vcount(), 160);
     }
 
     #[test]
     fn the_code_view_puts_the_pc_a_third_down() {
         let mut gba = gba();
-        run(&mut gba, Step::Instruction);
-        let lines = code_lines(&gba, code_start(&gba, 6), 6);
+        run(&mut gba, Step::Instruction, &Breakpoints::new());
+        let lines = code_lines(&gba, code_start(&gba, 6), 6, &Breakpoints::new());
         assert_eq!(lines.len(), 6);
         let text = |n: usize| {
             lines[n]
@@ -615,7 +720,7 @@ mod tests {
                 .map(|s| s.content.as_ref())
                 .collect::<String>()
         };
-        assert!(text(2).starts_with("▶ 08000004"), "{}", text(2));
+        assert!(text(2).starts_with(" ▶ 08000004"), "{}", text(2));
         assert!(text(2).contains("add r0, r0, #1"), "{}", text(2));
         assert!(text(1).contains("mov r0, #1"), "{}", text(1));
     }
@@ -631,7 +736,7 @@ mod tests {
     #[test]
     fn go_to_takes_hex_or_a_register() {
         let mut gba = gba();
-        run(&mut gba, Step::Instruction);
+        run(&mut gba, Step::Instruction, &Breakpoints::new());
         assert_eq!(address("3000010", &gba), Some(0x0300_0010));
         assert_eq!(address("0x6000000", &gba), Some(0x0600_0000));
         assert_eq!(address("r0", &gba), Some(1));
@@ -699,6 +804,79 @@ mod tests {
         assert_eq!(
             marked,
             [false, true, false, false, false, false, false, false]
+        );
+    }
+
+    #[test]
+    fn a_frame_stops_at_a_breakpoint_and_resumes_past_it() {
+        let mut gba = gba();
+        let breakpoints = Breakpoints::from([0x0800_0004]);
+        let ran = run_frame(&mut gba, &breakpoints, false);
+        assert_eq!(
+            ran,
+            Ran {
+                frame: false,
+                breakpoint: true
+            }
+        );
+        assert_eq!(gba.cpu.next_pc(), 0x0800_0004);
+        assert_eq!(gba.cpu.regs.get(0), 1, "the instruction there has not run");
+        // Standing on it, a frame that is not resuming stops at once.
+        assert!(run_frame(&mut gba, &breakpoints, false).breakpoint);
+        assert_eq!(gba.cpu.regs.get(0), 1);
+        // Resuming runs it, and the loop comes back round to it.
+        let ran = run_frame(&mut gba, &breakpoints, true);
+        assert!(ran.breakpoint);
+        assert_eq!(
+            gba.cpu.regs.get(0),
+            2,
+            "the add ran, and the branch came back to it"
+        );
+        assert_eq!(gba.cpu.next_pc(), 0x0800_0004);
+    }
+
+    #[test]
+    fn steps_stop_at_breakpoints_but_always_move() {
+        let mut gba = gba();
+        let breakpoints = Breakpoints::from([0x0800_0000, 0x0800_0004]);
+        let ran = run(&mut gba, Step::Frame, &breakpoints);
+        assert!(
+            ran.breakpoint,
+            "the one at the PC is passed, the next one stops it"
+        );
+        assert_eq!(gba.cpu.next_pc(), 0x0800_0004);
+        let ran = run(&mut gba, Step::Instruction, &breakpoints);
+        assert!(!ran.breakpoint, "an instruction step just steps");
+    }
+
+    #[test]
+    fn b_toggles_at_the_pc_or_a_typed_address() {
+        let gba = gba();
+        let mut panel = DebuggerPanel::open();
+        press(&mut panel, &gba, KeyCode::Char('b'));
+        assert_eq!(
+            press(&mut panel, &gba, KeyCode::Enter),
+            Some(Action::Toggle(0x0800_0000))
+        );
+        press(&mut panel, &gba, KeyCode::Char('b'));
+        for c in "8000006".chars() {
+            press(&mut panel, &gba, KeyCode::Char(c));
+        }
+        assert_eq!(
+            press(&mut panel, &gba, KeyCode::Enter),
+            Some(Action::Toggle(0x0800_0004)),
+            "aligned to an ARM instruction"
+        );
+        let lines = code_lines(&gba, 0x0800_0000, 2, &Breakpoints::from([0x0800_0004]));
+        assert!(
+            text(&lines[0]).starts_with(" ▶ 08000000"),
+            "{}",
+            text(&lines[0])
+        );
+        assert!(
+            text(&lines[1]).starts_with("●  08000004"),
+            "{}",
+            text(&lines[1])
         );
     }
 

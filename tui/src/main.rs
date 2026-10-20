@@ -56,7 +56,7 @@ use crate::audio::AudioOutput;
 use crate::bindings::{Action, Bindings, Input};
 use crate::cheats::{CheatFile, CheatsPanel};
 use crate::cli::FastSpeed;
-use crate::debugger::DebuggerPanel;
+use crate::debugger::{Breakpoints, DebuggerPanel};
 use crate::gamepad::{Gamepads, PadButton, PadNotice, PadSet, PadStyle};
 use crate::graphics::{Graphics, Renderer};
 use crate::input::{GbaKey, Hold, Keypad};
@@ -252,6 +252,14 @@ struct App {
     panel_opened: Option<Instant>,
     /// This game's cheats; the enabled ones run before every frame.
     cheats: CheatFile,
+    /// Where the debugger stops running code; kept for the whole game.
+    breakpoints: Breakpoints,
+    /// The game carries on from where the debugger left it: the
+    /// instruction at the PC runs even if it has a breakpoint.
+    resume: bool,
+    /// The debugger as it was last closed, so it opens again looking
+    /// where it was.
+    debugger: Option<DebuggerPanel>,
     /// What the last save/load did (or which pad came or went) and
     /// when, for the status bar.
     state_notice: Option<(String, Instant)>,
@@ -309,13 +317,27 @@ const AUTOSAVE_INTERVAL: Duration = Duration::from_secs(1);
 impl App {
     /// Emulates one frame with the current keypad state.
     fn emulate_frame(&mut self, now: Instant) {
+        // A breakpoint can open the debugger part way through a batch of
+        // frames: the rest of the batch waits with the game.
+        if self.panel.is_some() {
+            return;
+        }
         self.gba.set_keyinput(self.keypad.keyinput(now));
         // The wall clock, not emulated time: a cartridge clock keeps the
         // real date through pauses, fast-forward and rewinds, as the
         // battery-backed chip in a real cartridge would.
         self.gba.set_clock(clock::now());
         self.cheats.apply(&mut self.gba);
-        self.gba.run_frame();
+        if self.breakpoints.is_empty() {
+            self.gba.run_frame();
+        } else {
+            let resume = std::mem::take(&mut self.resume);
+            if debugger::run_frame(&mut self.gba, &self.breakpoints, resume).breakpoint {
+                self.open_debugger(now);
+                let pc = self.gba.cpu.next_pc();
+                self.state_notice = Some((format!("breakpoint at {pc:08x}"), now));
+            }
+        }
         // Fast-forward makes far more sound than real time can play;
         // dropping it whole is less jarring than playing chopped-up bits.
         if let Ok(audio) = &self.audio
@@ -634,7 +656,8 @@ impl App {
     /// Opens the debugger. The game screen moves aside for it, so the
     /// image goes first and comes back in its new place.
     fn open_debugger(&mut self, now: Instant) {
-        self.panel = Some(Panel::Debugger(DebuggerPanel::open()));
+        let panel = self.debugger.take().unwrap_or_else(DebuggerPanel::open);
+        self.panel = Some(Panel::Debugger(panel));
         self.panel_opened = Some(now);
         self.reset_fps(now);
         self.hide_image();
@@ -659,7 +682,15 @@ impl App {
                 match panel.handle(key, &self.gba) {
                     _ if opener => self.close_debugger(),
                     Some(debugger::Action::Close) => self.close_debugger(),
-                    Some(debugger::Action::Step(step)) => self.debug_step(step),
+                    Some(debugger::Action::Step(step)) => self.debug_step(step, now),
+                    Some(debugger::Action::Toggle(at)) => {
+                        let set = self.breakpoints.insert(at);
+                        if !set {
+                            self.breakpoints.remove(&at);
+                        }
+                        let what = if set { "set" } else { "cleared" };
+                        self.state_notice = Some((format!("breakpoint at {at:08x} {what}"), now));
+                    }
                     None => {}
                 }
             }
@@ -675,14 +706,24 @@ impl App {
 
     /// Runs the machine by one debugger step. A finished frame is kept
     /// for rewinding, as a frame stepped with `.` is.
-    fn debug_step(&mut self, step: debugger::Step) {
-        if debugger::run(&mut self.gba, step) {
+    fn debug_step(&mut self, step: debugger::Step, now: Instant) {
+        let ran = debugger::run(&mut self.gba, step, &self.breakpoints);
+        if ran.frame {
             self.rewind.frame(&self.gba);
+        }
+        if ran.breakpoint {
+            let pc = self.gba.cpu.next_pc();
+            self.state_notice = Some((format!("breakpoint at {pc:08x}"), now));
         }
     }
 
+    /// Closes the debugger and lets the game run on from where it is,
+    /// past a breakpoint it may be standing on.
     fn close_debugger(&mut self) {
-        self.panel = None;
+        if let Some(Panel::Debugger(panel)) = self.panel.take() {
+            self.debugger = Some(panel);
+        }
+        self.resume = true;
         self.hide_image();
     }
 
@@ -956,7 +997,13 @@ impl App {
         }
         match &mut self.panel {
             Some(Panel::Debugger(panel)) => {
-                panel.draw(frame, debugger_area, &self.gba, self.pad_style);
+                panel.draw(
+                    frame,
+                    debugger_area,
+                    &self.gba,
+                    &self.breakpoints,
+                    self.pad_style,
+                );
             }
             Some(Panel::States(panel)) => panel.draw(frame, screen_area, self.pad_style),
             Some(Panel::Cheats(panel)) => {
@@ -1430,6 +1477,9 @@ fn play(
         panel_opened: None,
         state_notice: start_notice(patch.as_deref(), &cheats, &session.firmware),
         cheats,
+        breakpoints: Breakpoints::new(),
+        resume: false,
+        debugger: None,
     };
     let result = std::panic::catch_unwind(AssertUnwindSafe(|| {
         // Whatever the pads did in the library is old news, and a button

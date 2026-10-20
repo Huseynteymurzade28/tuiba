@@ -237,7 +237,12 @@ instruction. `i` runs one instruction, `l` up to the next scanline and
 `↑` `↓` and `PgUp` `PgDn` scroll either one, and `g` jumps to an
 address — in hex, or a register's name (`g sp`, `g r4`). In the memory
 view, the bytes the last step changed stand out. `Home` puts the code
-back on the next instruction. `Esc` or `F7` lets the game carry on.
+back on the next instruction. `b` sets a breakpoint, or clears it, at
+an address or register typed the same way — `⏎` alone takes the next
+instruction. `Esc` or `F7` lets the game carry on, and when it reaches
+a breakpoint it stops there and the debugger opens again; the line and
+frame steps stop at breakpoints too. Breakpoints last until you leave
+the game.
 
 GBA games were coloured for the console's dim, low-contrast LCD, so on
 a modern screen they can look garish. `C` (or `--color-correction`)
