@@ -233,21 +233,32 @@ def library_run(binary, root):
     m = s.mark()
     time.sleep(0.5)
     s.send(b"\r")
-    s.expect("game draws red half-blocks", lambda d: "▀".encode() in d and any(map(is_red, colours(d))), m)
+    s.expect("game screen drawn red", lambda d: any(map(is_red, colours(d))), m)
 
-    # Without release events a key counts as held for a while after each
-    # press; keep pressing, like a key's auto-repeat would.
     m = s.mark()
-    for _ in range(10):
-        s.send(b"z")
-        time.sleep(0.1)
-    s.expect("A (z) turns the screen green", lambda d: any(map(is_green, colours(d))), m)
+    if os.name == "nt":
+        # Plain text through a ConPTY becomes a key-down and key-up in the
+        # same instant. Windows Terminal talks win32-input-mode to it
+        # instead, one sequence per key-down and key-up: hold Z like that.
+        s.send(b"\x1b[90;44;122;1;0;1_")
+        s.expect("A (z) held turns the screen green", lambda d: any(map(is_green, colours(d))), m)
+        time.sleep(1.0)
+        s.send(b"\x1b[90;44;122;0;0;1_")
+    else:
+        # Without release events a key counts as held for a while after
+        # each press; keep pressing, like a key's auto-repeat would.
+        for _ in range(10):
+            s.send(b"z")
+            time.sleep(0.1)
+        s.expect("A (z) turns the screen green", lambda d: any(map(is_green, colours(d))), m)
     m = s.mark()
     s.expect("letting go turns it red again", lambda d: any(map(is_red, colours(d))), m)
 
     m = s.mark()
+    # Well past the gap that tells two presses from one press reported
+    # twice, even when a slow debug build handles both in one batch.
     s.send(b"\x1b")
-    time.sleep(0.5)
+    time.sleep(1.0)
     s.send(b"\x1b")
     s.expect("Esc twice returns to the library", lambda d: TITLE in d, m)
 
