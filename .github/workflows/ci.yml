@@ -39,6 +39,9 @@ jobs:
           open("smoke.gba", "wb").write(rom)'
           cargo run -p tuiba -- smoke.gba --frames 5 --screenshot smoke.png
           test -s smoke.png
+      - name: Terminal smoke run
+        # The real TUI in a pty: library, drawing, keys, exit.
+        run: python3 ci/tty-smoke/smoke.py target/debug/tuiba
 
   test-roms:
     name: test ROMs
@@ -81,3 +84,13 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: cargo build --workspace --all-targets
       - run: cargo test --workspace
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install pywinpty (ConPTY from Python)
+        if: runner.os == 'Windows'
+        run: pip install pywinpty
+      - name: Terminal smoke run
+        # The real TUI in a pty (ConPTY on Windows, the layer Windows
+        # Terminal sits on): library, drawing, keys, config paths, exit.
+        run: python ci/tty-smoke/smoke.py target/debug/tuiba${{ runner.os == 'Windows' && '.exe' || '' }}
