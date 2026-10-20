@@ -7,3 +7,4 @@
 /packaging/aur/pkg
 /packaging/aur/*.pkg.tar.*
 /packaging/aur/*.tar.gz
+__pycache__/
