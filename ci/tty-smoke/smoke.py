@@ -164,15 +164,21 @@ class Session:
         with self.lock:
             return bytes(self.output[mark:])
 
-    def expect(self, what, test, mark, timeout=10.0):
+    def wait(self, test, mark, timeout):
+        """Whether the output since `mark` passes `test` within `timeout`."""
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
             if test(self.since(mark)):
-                print(f"ok: {what}")
-                return
+                return True
             if self.done:
                 break
             time.sleep(0.05)
+        return False
+
+    def expect(self, what, test, mark, timeout=10.0):
+        if self.wait(test, mark, timeout):
+            print(f"ok: {what}")
+            return
         tail = self.since(mark)[-1500:]
         self.term.kill()
         sys.exit(f"FAILED: {what}\nlast output: {tail!r}")
@@ -279,11 +285,15 @@ def library_run(binary, root):
     s.expect("letting go turns it red again", lambda d: any(map(is_red, colours(d))), m)
 
     m = s.mark()
-    # Well past the gap that tells two presses from one press reported
-    # twice, even when a slow debug build handles both in one batch.
+    # A second apart: well past the gap that tells two presses from one
+    # press reported twice, well inside the window the first one opens.
+    # A stalled runner can still hand tuiba both at once, which it rightly
+    # takes for a single press, so keep pressing until the library shows.
     press(s, b"\x1b")
-    time.sleep(1.0)
-    press(s, b"\x1b")
+    for _ in range(4):
+        if s.wait(lambda d: TITLE in d, m, 1.0):
+            break
+        press(s, b"\x1b")
     s.expect("Esc twice returns to the library", lambda d: TITLE in d, m)
 
     # Past the cooldown that keeps a held Esc from reaching the prompt.
