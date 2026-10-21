@@ -161,18 +161,11 @@ cartridges that never save and in the middle of a boss fight alike.
 `F2` opens the panel: four slots, each showing the frame it was taken
 on and how long ago that was, with the game paused behind it.
 
-```
-╭ SAVE STATES ──────────────────────────────────────────╮
-│ ╭ 1 ─────────────────────╮   ┏▸ 2 ━━━━━━━━━━━━━━━━━━━┓ │
-│ │      (the frame it     │   ┃     (…and this one)   ┃ │
-│ │       was taken on)    │   ┃                       ┃ │
-│ ╰ 4 minutes ago ─────────╯   ┗ just now ━━━━━━━━━━━━━┛ │
-│ ╭ 3 ─────────────────────╮   ╭ 4 ─────────────────────╮ │
-│ │         empty          │   │         empty          │ │
-│ ╰ empty ─────────────────╯   ╰ empty ─────────────────╯ │
-│           ⏎ load   s overwrite   x delete   esc close   │
-╰─────────────────────────────────────────────────────────╯
-```
+<p align="center">
+  <img src="https://raw.githubusercontent.com/Huseynteymurzade28/tuiba/master/docs/states.png" alt="The save-state panel over a paused game: two slots with dungeon thumbnails, one with the title screen, one empty" width="800">
+  <br>
+  <sub>The save-state panel, opened with <code>F2</code>. Game: <a href="https://gauauu.itch.io/anguna">Anguna</a>.</sub>
+</p>
 
 States are written to `~/.local/state/tuiba/states/` (or
 `$XDG_STATE_HOME`, or `%LOCALAPPDATA%\tuiba\states` on Windows) under
@@ -243,6 +236,12 @@ instruction. `Esc` or `F7` lets the game carry on, and when it reaches
 a breakpoint it stops there and the debugger opens again; the line and
 frame steps stop at breakpoints too. Breakpoints last until you leave
 the game.
+
+<p align="center">
+  <img src="https://raw.githubusercontent.com/Huseynteymurzade28/tuiba/master/docs/debug.png" alt="The debugger beside the paused game: registers, flags, PPU position and the disassembly around the program counter" width="800">
+  <br>
+  <sub>The debugger, opened with <code>F7</code>, stopped in the middle of a frame.</sub>
+</p>
 
 GBA games were coloured for the console's dim, low-contrast LCD, so on
 a modern screen they can look garish. `C` (or `--color-correction`)
