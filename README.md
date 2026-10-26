@@ -272,7 +272,7 @@ report.
 
 | Library                          | In a game                                    |
 | -------------------------------- | -------------------------------------------- |
-| `↑` `↓` / `j` `k` — select       | `A` `B` `L` `R` — the buttons of the same name |
+| `↑` `↓` / `j` `k` — select       | `X` `Z` `A` `S` — A, B, L, R (also `B` `L` `R`) |
 | `⏎` — play                       | arrows — D-pad                               |
 | `/` — filter by title, file or code | `Enter` — Start                           |
 | `s` — sort: title, file, last played, size | `Space` or `Backspace` — Select    |

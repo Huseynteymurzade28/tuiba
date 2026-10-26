@@ -6,6 +6,12 @@ All notable changes to tuiba. The format follows
 
 ## [Unreleased]
 
+### Changed
+- The default keys for the buttons follow mGBA and most emulators,
+  all within reach of one hand: `X` = A, `Z` = B, `A` = L, `S` = R.
+  `B`, `L` and `R` still work too; a `keys` file brings back the old
+  layout (`a = a z`). (#93)
+
 ### Fixed
 - On terminals that cannot report key releases (no Kitty keyboard
   protocol), a tapped key no longer stays held for half a second: it

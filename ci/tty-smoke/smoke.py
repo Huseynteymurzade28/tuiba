@@ -206,7 +206,7 @@ WIN32_KEYS = {
     b"\x1b": (0x1B, 0x01, 27),
     b"q": (0x51, 0x10, ord("q")),
     b"y": (0x59, 0x15, ord("y")),
-    b"z": (0x5A, 0x2C, ord("z")),
+    b"x": (0x58, 0x2D, ord("x")),
 }
 
 
@@ -269,18 +269,18 @@ def library_run(binary, root):
 
     m = s.mark()
     if os.name == "nt":
-        # Real key-up events: hold Z down, then let go.
-        s.send(win32_key(b"z", True))
-        s.expect("A (z) held turns the screen green", lambda d: any(map(is_green, colours(d))), m)
+        # Real key-up events: hold X down, then let go.
+        s.send(win32_key(b"x", True))
+        s.expect("A (x) held turns the screen green", lambda d: any(map(is_green, colours(d))), m)
         time.sleep(1.0)
-        s.send(win32_key(b"z", False))
+        s.send(win32_key(b"x", False))
     else:
         # Without release events a key counts as held for a while after
         # each press; keep pressing, like a key's auto-repeat would.
         for _ in range(10):
-            s.send(b"z")
+            s.send(b"x")
             time.sleep(0.1)
-        s.expect("A (z) turns the screen green", lambda d: any(map(is_green, colours(d))), m)
+        s.expect("A (x) turns the screen green", lambda d: any(map(is_green, colours(d))), m)
     m = s.mark()
     s.expect("letting go turns it red again", lambda d: any(map(is_red, colours(d))), m)
 

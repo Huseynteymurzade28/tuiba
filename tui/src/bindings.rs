@@ -225,9 +225,10 @@ impl Default for Bindings {
 }
 
 impl Bindings {
-    /// The built-in bindings: buttons on the keys of the same name,
-    /// arrows for the D-pad, `Enter` = Start, `Space` / `Backspace` /
-    /// right Shift = Select, `Z`/`X` doubling as A/B, `P` pause, `.` step,
+    /// The built-in bindings: `X` / `Z` / `A` / `S` for A / B / L / R
+    /// (B, L and R also on the keys of their names), arrows for the
+    /// D-pad, `Enter` = Start, `Space` / `Backspace` /
+    /// right Shift = Select, `P` pause, `.` step,
     /// `Tab` / `F` fast-forward, `F4` its speed limit, `W` rewind, `M` mute, `-` / `=` / `+` volume, `F3` performance figures, `F6` cheats and `F12`
     /// screenshot. On a pad, the buttons sit
     /// where a GBA has them — A east, B south, the shoulders on L1/R1 —
@@ -249,10 +250,12 @@ impl Bindings {
         bind(&mut b, Action::Button(GbaKey::Down), &[KeyCode::Down]);
         bind(&mut b, Action::Button(GbaKey::Left), &[KeyCode::Left]);
         bind(&mut b, Action::Button(GbaKey::Right), &[KeyCode::Right]);
-        bind(&mut b, Action::Button(GbaKey::A), &[Char('a'), Char('z')]);
-        bind(&mut b, Action::Button(GbaKey::B), &[Char('b'), Char('x')]);
-        bind(&mut b, Action::Button(GbaKey::L), &[Char('l')]);
-        bind(&mut b, Action::Button(GbaKey::R), &[Char('r')]);
+        // Laid out as in mGBA and most emulators, the four in reach of
+        // one hand; B, L and R also stay on the keys of their names.
+        bind(&mut b, Action::Button(GbaKey::A), &[Char('x')]);
+        bind(&mut b, Action::Button(GbaKey::B), &[Char('z'), Char('b')]);
+        bind(&mut b, Action::Button(GbaKey::L), &[Char('a'), Char('l')]);
+        bind(&mut b, Action::Button(GbaKey::R), &[Char('s'), Char('r')]);
         bind(&mut b, Action::Button(GbaKey::Start), &[KeyCode::Enter]);
         bind(
             &mut b,
@@ -536,7 +539,7 @@ mod tests {
             assert!(!b.keys_for(action).is_empty(), "{action:?} has no key");
         }
         assert_eq!(
-            b.action(KeyCode::Char('Z')),
+            b.action(KeyCode::Char('X')),
             Some(Action::Button(GbaKey::A))
         );
         assert_eq!(
@@ -561,7 +564,7 @@ mod tests {
             b.action(KeyCode::Char('j')),
             Some(Action::Button(GbaKey::A))
         );
-        assert_eq!(b.action(KeyCode::Char('a')), None, "old key released");
+        assert_eq!(b.action(KeyCode::Char('x')), None, "old key released");
         assert_eq!(
             b.keys_for(Action::Button(GbaKey::B)),
             ["k", "u", "pad:south"]
@@ -581,12 +584,12 @@ mod tests {
 
     #[test]
     fn a_key_belongs_to_one_action() {
-        let (b, _) = Bindings::parse("l = a\n");
+        let (b, _) = Bindings::parse("l = z\n");
         assert_eq!(
-            b.action(KeyCode::Char('a')),
+            b.action(KeyCode::Char('z')),
             Some(Action::Button(GbaKey::L))
         );
-        assert_eq!(b.keys_for(Action::Button(GbaKey::A)), ["z", "pad:east"]);
+        assert_eq!(b.keys_for(Action::Button(GbaKey::B)), ["b", "pad:south"]);
     }
 
     #[test]
@@ -624,7 +627,7 @@ mod tests {
         assert_eq!(b.pad_action(PadButton::East), None, "old button released");
         assert_eq!(
             b.keys_for(Action::Button(GbaKey::A)),
-            ["a", "z", "pad:west"],
+            ["x", "pad:west"],
             "a pad-only line keeps the keys"
         );
         assert_eq!(
