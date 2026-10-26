@@ -6,6 +6,14 @@ All notable changes to tuiba. The format follows
 
 ## [Unreleased]
 
+### Fixed
+- On terminals that cannot report key releases (no Kitty keyboard
+  protocol), a tapped key no longer stays held for half a second: it
+  now counts as held for 150 ms after its last event, so taps and
+  letting go of a held key no longer overshoot. Holding a key reads as
+  a short press, a pause until the terminal's auto-repeat starts, then
+  a steady hold. (#92)
+
 ## [0.16.0] – 2026-10-20
 
 A debugger in the terminal.

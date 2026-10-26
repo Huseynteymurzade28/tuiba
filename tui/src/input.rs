@@ -20,9 +20,16 @@ use crossterm::event::KeyEventKind;
 use tuiba_core::memory::io::KEYINPUT_ALL_RELEASED;
 
 /// How long a key stays "held" after its last event when the terminal
-/// cannot report releases. Long enough to bridge auto-repeat gaps (typical
-/// initial delay 250–500 ms), short enough that taps feel responsive.
-pub const HOLD_TIMEOUT: Duration = Duration::from_millis(500);
+/// cannot report releases.
+///
+/// This is also how long a tap lasts and how late letting go of a held key
+/// is noticed, so it is kept short: 150 ms is nine frames, plenty for a
+/// game polling once a frame, and well above the 25–40 ms between
+/// auto-repeats. It does not bridge the initial repeat delay (250–660 ms
+/// depending on the desktop), so holding a key reads as a short press, a
+/// gap, then a steady hold; the older 500 ms bridged only some of those
+/// delays and made every tap move half a second's worth.
+pub const HOLD_TIMEOUT: Duration = Duration::from_millis(150);
 
 /// GBA buttons, numbered by their `KEYINPUT` bit.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -192,15 +199,10 @@ mod tests {
         assert!(pad.is_pressed(GbaKey::Start, t0 + HOLD_TIMEOUT / 2));
         assert!(!pad.is_pressed(GbaKey::Start, t0 + HOLD_TIMEOUT));
         // Auto-repeat refreshes the hold.
-        pad.handle(
-            GbaKey::Start,
-            KeyEventKind::Repeat,
-            t0 + Duration::from_millis(499),
-        );
-        assert!(pad.is_pressed(
-            GbaKey::Start,
-            t0 + HOLD_TIMEOUT + Duration::from_millis(100)
-        ));
+        let repeat = t0 + HOLD_TIMEOUT.saturating_sub(Duration::from_millis(1));
+        pad.handle(GbaKey::Start, KeyEventKind::Repeat, repeat);
+        assert!(pad.is_pressed(GbaKey::Start, t0 + HOLD_TIMEOUT));
+        assert!(!pad.is_pressed(GbaKey::Start, repeat + HOLD_TIMEOUT));
     }
 
     #[test]
