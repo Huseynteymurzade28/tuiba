@@ -67,6 +67,22 @@ Tested with freely distributed homebrew:
 | Aereven Advance (jam build)  | Plays                                                                 |
 | Heartwrench Advance          | Plays, SRAM saves                                                     |
 | Pliko                        | Plays                                                                 |
+| Butano Fighter               | Plays (built from the [Butano](https://github.com/GValiente/butano) sources) |
+| Varooom 3D                   | Plays, races in its software-rendered 3D                              |
+| BeatBeast (jam build)        | Plays, 32 MiB cartridge                                               |
+| uCity Advance                | Plays, scenarios load and the city runs                               |
+
+<p align="center">
+  <img src="https://raw.githubusercontent.com/Huseynteymurzade28/tuiba/master/docs/games.png" alt="Six homebrew games running in tuiba: a dungeon in Anguna, Butano Fighter's top-down shooting, Varooom 3D's title and a race, BeatBeast's rhythm tutorial and a city in uCity Advance" width="800">
+  <br>
+  <sub>Frames from tuiba's headless mode, at 2×.
+  <a href="https://gauauu.itch.io/anguna">Anguna</a> © Nathan Tolbert and Chris Hildenbrand (MIT) ·
+  <a href="https://github.com/GValiente/butano/tree/master/games/butano-fighter">Butano Fighter</a> and
+  <a href="https://github.com/GValiente/butano/tree/master/games/varooom-3d">Varooom 3D</a> by GValiente and contributors (code zlib; art CC0 and CC BY-NC-SA 4.0) ·
+  <a href="https://github.com/afska/beat-beast">BeatBeast</a> by afska and team (code MIT; art under the CC licences in its release) ·
+  <a href="https://github.com/AntonioND/ucity-advance">uCity Advance</a> by Antonio Niño Díaz (code GPL-3.0; art CC BY-NC-SA 4.0).
+  The screenshots carry the games' own licences.</sub>
+</p>
 
 No ROMs are needed to build or test the project. CI additionally runs
 freely licensed test ROMs ([jsmolka/gba-tests](https://github.com/jsmolka/gba-tests):
@@ -165,9 +181,9 @@ cartridges that never save and in the middle of a boss fight alike.
 on and how long ago that was, with the game paused behind it.
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/Huseynteymurzade28/tuiba/master/docs/states.png" alt="The save-state panel over a paused game: two slots with dungeon thumbnails, one with the title screen, one empty" width="800">
+  <img src="https://raw.githubusercontent.com/Huseynteymurzade28/tuiba/master/docs/states.png" alt="The save-state panel over a paused race: slots with a race, the course select and the title screen, one empty" width="800">
   <br>
-  <sub>The save-state panel, opened with <code>F2</code>. Game: <a href="https://gauauu.itch.io/anguna">Anguna</a>.</sub>
+  <sub>The save-state panel, opened with <code>F2</code>. Game: <a href="https://github.com/GValiente/butano/tree/master/games/varooom-3d">Varooom 3D</a> (CC BY-NC-SA 4.0).</sub>
 </p>
 
 States are written to `~/.local/state/tuiba/states/` (or
@@ -241,9 +257,9 @@ frame steps stop at breakpoints too. Breakpoints last until you leave
 the game.
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/Huseynteymurzade28/tuiba/master/docs/debug.png" alt="The debugger beside the paused game: registers, flags, PPU position and the disassembly around the program counter" width="800">
+  <img src="https://raw.githubusercontent.com/Huseynteymurzade28/tuiba/master/docs/debug.png" alt="The debugger beside a paused race: registers, flags, PPU position and the disassembly of the game's interrupt handler" width="800">
   <br>
-  <sub>The debugger, opened with <code>F7</code>, stopped in the middle of a frame.</sub>
+  <sub>The debugger, opened with <code>F7</code>, stopped in the game's interrupt handler in the middle of a frame. Game: <a href="https://github.com/GValiente/butano/tree/master/games/varooom-3d">Varooom 3D</a>.</sub>
 </p>
 
 GBA games were coloured for the console's dim, low-contrast LCD, so on
