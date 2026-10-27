@@ -6,6 +6,9 @@ All notable changes to tuiba. The format follows
 
 ## [Unreleased]
 
+### Added
+- `tuiba --version` (or `-V`) prints the version.
+
 ### Changed
 - The default keys for the buttons follow mGBA and most emulators,
   all within reach of one hand: `X` = A, `Z` = B, `A` = L, `S` = R.

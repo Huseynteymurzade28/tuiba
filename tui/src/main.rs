@@ -1736,6 +1736,10 @@ fn main() -> ExitCode {
             println!("{}", cli::USAGE);
             ExitCode::SUCCESS
         }
+        Err(AppError::Args(err @ cli::ArgError::Version)) => {
+            println!("{err}");
+            ExitCode::SUCCESS
+        }
         Err(AppError::Args(err)) => {
             eprintln!("error: {err}");
             ExitCode::FAILURE

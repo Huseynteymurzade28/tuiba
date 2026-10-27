@@ -68,6 +68,7 @@ Display and sound options:
                         the status bar (F3 toggles it in a game)
   --color-correction    show colours as the GBA's LCD does: darker, less
                         saturated (C toggles it in a game)
+  -V, --version         show the version
   -h, --help            show this help";
 
 /// How fast fast-forward runs.
@@ -239,6 +240,8 @@ pub struct KeyHold {
 pub enum ArgError {
     /// `--help` was requested; not really an error.
     Help,
+    /// `--version` was requested; not really an error either.
+    Version,
     /// A headless flag was given without a ROM path.
     MissingRom,
     /// A flag that needs a value was given without one.
@@ -258,6 +261,7 @@ impl fmt::Display for ArgError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Help => f.write_str(USAGE),
+            Self::Version => write!(f, "tuiba {}", env!("CARGO_PKG_VERSION")),
             Self::MissingRom => write!(f, "headless options need a ROM path\n\n{USAGE}"),
             Self::MissingValue(flag) => write!(f, "{flag} needs a value\n\n{USAGE}"),
             Self::BadValue { flag, value } => write!(f, "invalid value for {flag}: {value:?}"),
@@ -302,6 +306,7 @@ impl Args {
             };
             match arg.as_str() {
                 "-h" | "--help" => return Err(ArgError::Help),
+                "-V" | "--version" => return Err(ArgError::Version),
                 "--frames" => frames = Some(parsed(value("--frames"), |v| v.parse().ok())?),
                 "--screenshot" => screenshot = Some(PathBuf::from(value("--screenshot")?.1)),
                 "--wav" => wav = Some(PathBuf::from(value("--wav")?.1)),
@@ -611,6 +616,7 @@ mod tests {
     fn errors() {
         assert_eq!(parse(&["--frames", "1"]), Err(ArgError::MissingRom));
         assert_eq!(parse(&["--help"]), Err(ArgError::Help));
+        assert_eq!(parse(&["-V"]), Err(ArgError::Version));
         assert_eq!(
             parse(&["game.gba", "--frames"]),
             Err(ArgError::MissingValue("--frames".into()))
