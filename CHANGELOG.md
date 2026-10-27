@@ -8,6 +8,9 @@ All notable changes to tuiba. The format follows
 
 ### Added
 - `tuiba --version` (or `-V`) prints the version.
+- Colour themes: a `theme` file in the config directory picks a preset
+  (`dark`, `light`, or `terminal` for the terminal's own colours) and
+  overrides single colours as `#rrggbb`. (#84, #99)
 - More ways to install: a Homebrew tap, a Scoop bucket and a Nix flake
   (`nix run github:Huseynteymurzade28/tuiba`), listed in the README. (#85)
 

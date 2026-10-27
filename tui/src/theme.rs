@@ -50,7 +50,8 @@ impl Palette {
             bg: Color::Reset,
             surface: Color::DarkGray,
             text: Color::Reset,
-            dim: Color::DarkGray,
+            // Hints are dim text on the surface, so dim must differ from it.
+            dim: Color::Gray,
             accent: Color::Cyan,
             accent_light: Color::LightCyan,
             ok: Color::Green,
@@ -233,5 +234,14 @@ mod tests {
     fn presets_have_expected_backgrounds() {
         assert_eq!(Palette::dark().bg, Color::Rgb(0x12, 0x10, 0x1C));
         assert_eq!(Palette::terminal().bg, Color::Reset);
+    }
+
+    #[test]
+    fn presets_keep_hints_and_selection_readable() {
+        for p in [Palette::dark(), Palette::light(), Palette::terminal()] {
+            assert_ne!(p.dim, p.surface, "{p:?}");
+            assert_ne!(p.text, p.surface, "{p:?}");
+            assert_ne!(p.bg, p.accent, "{p:?}");
+        }
     }
 }
