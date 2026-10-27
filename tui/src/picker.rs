@@ -440,7 +440,7 @@ impl Picker {
     pub fn draw(&mut self, frame: &mut Frame) {
         let area = frame.area();
         frame.render_widget(Clear, area);
-        frame.render_widget(Block::default().style(theme::text()), area);
+        frame.render_widget(Block::default().style(theme::page()), area);
 
         // Breathing room: a row above the header, a column either side.
         let [_, content, footer] = Layout::vertical([

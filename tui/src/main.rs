@@ -853,7 +853,7 @@ impl App {
 
     /// The status bar: what the emulator is doing, and the three keys
     /// that are never rebindable.
-    fn status_line(&self, size_hint: &str) -> Line<'_> {
+    fn status_line(&self, size_hint: &str, width: u16) -> Line<'_> {
         let renderer = self
             .graphics
             .as_ref()
@@ -922,25 +922,29 @@ impl App {
             spans.push(Span::styled(stats.line(self.fps, audio), theme::text()));
             return Line::from(spans);
         }
-        spans.extend([
-            Span::styled(
-                format!(" {} ", self.hint_for(Action::Help, "?")),
-                theme::key(),
-            ),
-            Span::styled("keys  ", theme::hint()),
-            Span::styled(
-                format!(" {} ", self.hint_for(Action::States, "f2")),
-                theme::key(),
-            ),
-            Span::styled("states  ", theme::hint()),
-            Span::styled(
+        let hints = [
+            (format!(" {} ", self.hint_for(Action::Help, "?")), "keys  "),
+            (
                 format!(" {} ×2 ", self.hint_for(Action::Leave, "esc")),
-                theme::key(),
+                "library  ",
             ),
-            Span::styled("library  ", theme::hint()),
-            Span::styled(" ctrl+q ", theme::key()),
-            Span::styled("quit", theme::hint()),
-        ]);
+            (
+                format!(" {} ", self.hint_for(Action::States, "f2")),
+                "states  ",
+            ),
+            (" ctrl+q ".to_string(), "quit"),
+        ];
+        // Whole hints only, most useful first: a narrow terminal loses
+        // the last ones rather than showing half a word.
+        let mut used: usize = spans.iter().map(Span::width).sum();
+        for (key, label) in hints {
+            used += key.chars().count() + label.len();
+            if used > usize::from(width) {
+                break;
+            }
+            spans.push(Span::styled(key, theme::key()));
+            spans.push(Span::styled(label, theme::hint()));
+        }
         Line::from(spans)
     }
 
@@ -966,7 +970,7 @@ impl App {
         };
         self.screen_area = screen_area;
 
-        frame.render_widget(Block::default().style(theme::text()), screen_area);
+        frame.render_widget(Block::default().style(theme::page()), screen_area);
         let size_hint = if self.graphics.is_some() || screen_area.width == 0 {
             // The image is overlaid after the frame is flushed; the cells
             // underneath stay blank.
@@ -989,7 +993,7 @@ impl App {
                 String::new()
             }
         };
-        let status = self.status_line(&size_hint);
+        let status = self.status_line(&size_hint, status_area.width);
         frame.render_widget(
             Paragraph::new(status).style(
                 Style::default()

@@ -273,32 +273,39 @@ fn parse_color(value: &str) -> Option<Color> {
     Some(Color::Rgb(red, green, blue))
 }
 
-/// Plain body text on the page background.
+/// The page itself: what a screen is cleared to before anything is
+/// drawn on it.
 #[must_use]
-pub fn text() -> Style {
+pub fn page() -> Style {
     let p = palette();
     Style::default().fg(p.text).bg(p.bg)
+}
+
+// The text styles below set only a colour, so they read the same on the
+// page and inside a panel's raised surface.
+
+/// Plain body text.
+#[must_use]
+pub fn text() -> Style {
+    Style::default().fg(palette().text)
 }
 
 /// Secondary text.
 #[must_use]
 pub fn dim() -> Style {
-    let p = palette();
-    Style::default().fg(p.dim).bg(p.bg)
+    Style::default().fg(palette().dim)
 }
 
 /// Accent text.
 #[must_use]
 pub fn accent() -> Style {
-    let p = palette();
-    Style::default().fg(p.accent).bg(p.bg)
+    Style::default().fg(palette().accent)
 }
 
 /// Borders and pane titles.
 #[must_use]
 pub fn border() -> Style {
-    let p = palette();
-    Style::default().fg(p.dim).bg(p.bg)
+    Style::default().fg(palette().dim)
 }
 
 /// The selected row of a focused list.

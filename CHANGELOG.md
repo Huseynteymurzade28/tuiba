@@ -16,6 +16,10 @@ All notable changes to tuiba. The format follows
   (`nix run github:Huseynteymurzade28/tuiba`), listed in the README. (#85)
 
 ### Changed
+- Panels (the key list, debugger, cheats and save states) sit on one
+  even background instead of a dark strip behind every line of text.
+- The in-game status bar drops whole hints that do not fit instead of
+  cutting the last one off mid-word.
 - The default keys for the buttons follow mGBA and most emulators,
   all within reach of one hand: `X` = A, `Z` = B, `A` = L, `S` = R.
   `B`, `L` and `R` still work too; a `keys` file brings back the old
