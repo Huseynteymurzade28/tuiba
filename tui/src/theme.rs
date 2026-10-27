@@ -1,6 +1,7 @@
 //! The frontend palette and user-configurable colour themes.
 use std::fs;
-use std::sync::OnceLock;
+use std::io;
+use std::sync::{PoisonError, RwLock};
 
 use ratatui::style::{Color, Modifier, Style};
 
@@ -75,28 +76,86 @@ impl Palette {
     }
 }
 
-static PALETTE: OnceLock<Palette> = OnceLock::new();
+/// The built-in palettes a `theme` file (or `t` in the library) picks from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Preset {
+    Dark,
+    Light,
+    Terminal,
+}
 
-/// The palette loaded once at application startup.
+impl Preset {
+    fn parse(name: &str) -> Option<Self> {
+        match name.to_ascii_lowercase().as_str() {
+            "dark" => Some(Self::Dark),
+            "light" => Some(Self::Light),
+            "terminal" => Some(Self::Terminal),
+            _ => None,
+        }
+    }
+
+    /// The name the `theme` file uses.
+    #[must_use]
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::Dark => "dark",
+            Self::Light => "light",
+            Self::Terminal => "terminal",
+        }
+    }
+
+    const fn next(self) -> Self {
+        match self {
+            Self::Dark => Self::Light,
+            Self::Light => Self::Terminal,
+            Self::Terminal => Self::Dark,
+        }
+    }
+
+    const fn palette(self) -> Palette {
+        match self {
+            Self::Dark => Palette::dark(),
+            Self::Light => Palette::light(),
+            Self::Terminal => Palette::terminal(),
+        }
+    }
+}
+
+/// The preset in use and the file's own colours laid over it, kept so
+/// switching presets keeps those colours just as reloading the file would.
+struct Theme {
+    preset: Preset,
+    overrides: Vec<(String, Color)>,
+    palette: Palette,
+}
+
+static THEME: RwLock<Theme> = RwLock::new(Theme {
+    preset: Preset::Dark,
+    overrides: Vec::new(),
+    palette: Palette::dark(),
+});
+
+/// The palette in use.
 #[must_use]
-pub fn palette() -> &'static Palette {
-    PALETTE.get_or_init(Palette::dark)
+pub fn palette() -> Palette {
+    THEME.read().unwrap_or_else(PoisonError::into_inner).palette
 }
 
 /// Loads the optional `theme` file. Invalid lines are reported but do not stop startup.
 pub fn load() -> Vec<String> {
-    let Some(path) = config_dir().map(|dir| dir.join("theme")) else {
-        let _ = PALETTE.set(Palette::dark());
+    let Some(contents) = config_dir().and_then(|dir| fs::read_to_string(dir.join("theme")).ok())
+    else {
         return Vec::new();
     };
-    let Ok(contents) = fs::read_to_string(path) else {
-        let _ = PALETTE.set(Palette::dark());
-        return Vec::new();
-    };
+    let (theme, problems) = parse(&contents);
+    *THEME.write().unwrap_or_else(PoisonError::into_inner) = theme;
+    problems
+}
 
-    let mut palette = Palette::dark();
+fn parse(contents: &str) -> (Theme, Vec<String>) {
+    let mut preset = Preset::Dark;
+    let mut overrides = Vec::new();
     let mut problems = Vec::new();
-    let mut saw_colour_override = false;
     for (index, raw) in contents.lines().enumerate() {
         let line = raw.trim();
         if line.is_empty() || line.starts_with('#') {
@@ -109,24 +168,21 @@ pub fn load() -> Vec<String> {
         let name = name.trim().to_ascii_uppercase();
         let value = value.trim();
         if name == "PRESET" {
-            if saw_colour_override {
+            let Some(chosen) = Preset::parse(value) else {
+                problems.push(format!(
+                    "theme line {}: unknown preset `{value}`",
+                    index + 1
+                ));
+                continue;
+            };
+            if !overrides.is_empty() {
                 problems.push(format!(
                     "theme line {}: preset resets colour overrides; put preset before colours",
                     index + 1
                 ));
+                overrides.clear();
             }
-            palette = match value.to_ascii_lowercase().as_str() {
-                "dark" => Palette::dark(),
-                "light" => Palette::light(),
-                "terminal" => Palette::terminal(),
-                _ => {
-                    problems.push(format!(
-                        "theme line {}: unknown preset `{value}`",
-                        index + 1
-                    ));
-                    continue;
-                }
-            };
+            preset = chosen;
             continue;
         }
         let Some(color) = parse_color(value) else {
@@ -136,13 +192,74 @@ pub fn load() -> Vec<String> {
             ));
             continue;
         };
-        saw_colour_override = true;
-        if !palette.set(&name, color) {
+        if Palette::dark().set(&name, color) {
+            overrides.push((name, color));
+        } else {
             problems.push(format!("theme line {}: unknown colour `{name}`", index + 1));
         }
     }
-    let _ = PALETTE.set(palette);
-    problems
+    (Theme::new(preset, overrides), problems)
+}
+
+impl Theme {
+    fn new(preset: Preset, overrides: Vec<(String, Color)>) -> Self {
+        let mut palette = preset.palette();
+        for (name, color) in &overrides {
+            palette.set(name, *color);
+        }
+        Self {
+            preset,
+            overrides,
+            palette,
+        }
+    }
+}
+
+/// Switches to the next preset, keeping the file's own colours, and
+/// writes the choice to the `theme` file so it sticks. The new preset
+/// is in use even when saving fails.
+pub fn cycle() -> (Preset, io::Result<()>) {
+    let preset = {
+        let mut theme = THEME.write().unwrap_or_else(PoisonError::into_inner);
+        let overrides = std::mem::take(&mut theme.overrides);
+        *theme = Theme::new(theme.preset.next(), overrides);
+        theme.preset
+    };
+    (preset, save_preset(preset))
+}
+
+fn save_preset(preset: Preset) -> io::Result<()> {
+    let dir = config_dir().ok_or_else(|| io::Error::other("no config directory"))?;
+    let path = dir.join("theme");
+    let contents = match fs::read_to_string(&path) {
+        Ok(contents) => contents,
+        Err(err) if err.kind() == io::ErrorKind::NotFound => String::new(),
+        Err(err) => return Err(err),
+    };
+    fs::create_dir_all(&dir)?;
+    fs::write(path, with_preset(&contents, preset))
+}
+
+/// `contents` with every `preset` line naming `preset`, or one added at
+/// the top: the file then loads exactly as the palette now looks.
+fn with_preset(contents: &str, preset: Preset) -> String {
+    let line = format!("preset = {}", preset.name());
+    let mut found = false;
+    let mut out = String::new();
+    for raw in contents.lines() {
+        let is_preset = raw
+            .split_once('=')
+            .is_some_and(|(name, _)| name.trim().eq_ignore_ascii_case("preset"))
+            && !raw.trim_start().starts_with('#');
+        if is_preset {
+            found = true;
+            out.push_str(&line);
+        } else {
+            out.push_str(raw);
+        }
+        out.push('\n');
+    }
+    if found { out } else { format!("{line}\n{out}") }
 }
 
 fn parse_color(value: &str) -> Option<Color> {
@@ -234,6 +351,41 @@ mod tests {
     fn presets_have_expected_backgrounds() {
         assert_eq!(Palette::dark().bg, Color::Rgb(0x12, 0x10, 0x1C));
         assert_eq!(Palette::terminal().bg, Color::Reset);
+    }
+
+    #[test]
+    fn colours_after_the_preset_survive_switching() {
+        let (theme, problems) = parse("preset = light\nACCENT = #ff0000\n");
+        assert_eq!(problems, Vec::<String>::new());
+        assert_eq!(theme.preset, Preset::Light);
+        assert_eq!(theme.palette.accent, Color::Rgb(0xFF, 0, 0));
+        let next = Theme::new(theme.preset.next(), theme.overrides);
+        assert_eq!(next.preset, Preset::Terminal);
+        assert_eq!(next.palette.accent, Color::Rgb(0xFF, 0, 0));
+        assert_eq!(next.palette.bg, Color::Reset);
+    }
+
+    #[test]
+    fn a_later_preset_drops_earlier_colours() {
+        let (theme, problems) = parse("ACCENT = #ff0000\npreset = dark\n");
+        assert_eq!(problems.len(), 1);
+        assert_eq!(theme.palette.accent, Palette::dark().accent);
+    }
+
+    #[test]
+    fn saving_a_preset_rewrites_or_adds_its_line() {
+        assert_eq!(with_preset("", Preset::Light), "preset = light\n");
+        assert_eq!(
+            with_preset("# mine\nPreset = dark\nOK = #00ff00", Preset::Terminal),
+            "# mine\npreset = terminal\nOK = #00ff00\n"
+        );
+        assert_eq!(
+            with_preset("# preset = dark\nOK = #00ff00\n", Preset::Light),
+            "preset = light\n# preset = dark\nOK = #00ff00\n"
+        );
+        let (theme, _) = parse(&with_preset("OK = #00ff00\n", Preset::Light));
+        assert_eq!(theme.preset, Preset::Light);
+        assert_eq!(theme.palette.ok, Color::Rgb(0, 0xFF, 0));
     }
 
     #[test]

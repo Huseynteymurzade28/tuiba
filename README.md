@@ -291,8 +291,9 @@ WARN = #f0b86c
 ```
 
 Only the colours you specify are overridden. Built-in `light` and `terminal`
-presets are also available. Invalid lines are reported as warnings and do not
-prevent startup.
+presets are also available; `t` in the library switches between the three
+and writes the choice to the `preset` line, keeping your own colours.
+Invalid lines are reported as warnings and do not prevent startup.
 
 ### Keys
 
@@ -306,7 +307,7 @@ prevent startup.
 | `tab` — folder list, `x` removes | `Tab` or `F` (held) — fast-forward, `F4` — its limit |
 |                                  | `W` (held) — rewind                          |
 | `r` — rescan folders             | `M` — mute, `-` / `+` — volume               |
-|                                  | `F5` — save state, `F8` — load it back       |
+| `t` — next colour theme          | `F5` — save state, `F8` — load it back       |
 |                                  | `F2` — the four save-state slots             |
 |                                  | `F6` — cheats                                |
 |                                  | `F7` — debugger                              |

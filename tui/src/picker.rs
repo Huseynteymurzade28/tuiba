@@ -319,6 +319,16 @@ impl Picker {
                 };
             }
             KeyCode::Char('a') => self.mode = Mode::AddFolder(String::new()),
+            KeyCode::Char('t') => {
+                let (preset, saved) = theme::cycle();
+                match saved {
+                    Ok(()) => self.notify(format!("theme: {}", preset.name()), true),
+                    Err(err) => self.notify(
+                        format!("theme: {} (not saved: {err})", preset.name()),
+                        false,
+                    ),
+                }
+            }
             KeyCode::Char('r') => {
                 self.rescan();
                 self.notify(format!("{} cartridges", self.roms.len()), true);
@@ -883,6 +893,7 @@ impl Picker {
                             ("tab", "folders"),
                             ("a", "add folder"),
                             ("r", "rescan"),
+                            ("t", "theme"),
                             ("q", "quit"),
                         ],
                         Focus::Folders => &[
