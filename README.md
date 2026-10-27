@@ -98,6 +98,9 @@ or endorsed by Nintendo.
 | Method                        | Command                                                        |
 | ----------------------------- | -------------------------------------------------------------- |
 | Arch Linux (AUR)              | `yay -S tuiba`                                                 |
+| Homebrew (macOS, Linux)       | `brew install huseynteymurzade28/tap/tuiba`                    |
+| Scoop (Windows)               | `scoop bucket add huseynteymurzade28 https://github.com/Huseynteymurzade28/scoop-bucket` then `scoop install tuiba` |
+| Nix                           | `nix run github:Huseynteymurzade28/tuiba`                      |
 | Prebuilt (Linux, macOS, Windows) | download from [Releases](https://github.com/Huseynteymurzade28/tuiba/releases/latest) |
 | Any platform with Rust        | `cargo install tuiba`                                          |
 | From source                   | `git clone https://github.com/Huseynteymurzade28/tuiba && cd tuiba && cargo install --path tui` |

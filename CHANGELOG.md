@@ -8,6 +8,8 @@ All notable changes to tuiba. The format follows
 
 ### Added
 - `tuiba --version` (or `-V`) prints the version.
+- More ways to install: a Homebrew tap, a Scoop bucket and a Nix flake
+  (`nix run github:Huseynteymurzade28/tuiba`), listed in the README. (#85)
 
 ### Changed
 - The default keys for the buttons follow mGBA and most emulators,
