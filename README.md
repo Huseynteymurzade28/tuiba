@@ -328,7 +328,7 @@ Invalid lines are reported as warnings and do not prevent startup.
 | `tab` — folder list, `x` removes | `Tab` or `F` (held) — fast-forward, `F4` — its limit |
 |                                  | `W` (held) — rewind                          |
 | `r` — rescan folders             | `M` — mute, `-` / `+` — volume               |
-| `t` — next colour theme          | `F5` — save state, `F8` — load it back       |
+| `t` — choose a colour theme      | `F5` — save state, `F8` — load it back       |
 |                                  | `F2` — the four save-state slots             |
 |                                  | `F6` — cheats                                |
 |                                  | `F7` — debugger                              |
