@@ -7,6 +7,7 @@ mod cheats;
 mod cli;
 mod clock;
 mod colour;
+mod cover;
 mod crashlog;
 mod debugger;
 mod gamepad;
@@ -1253,10 +1254,12 @@ fn library_loop(
     let mut quit_keys_muted_until = Instant::now();
     let mut pads = gamepads.held();
     let mut dirty = true;
+    let mut moving = false;
     loop {
-        if dirty {
+        if dirty || picker.animating(moving) {
             terminal.draw(|frame| picker.draw(frame))?;
             dirty = false;
+            moving = picker.animating(false);
         }
         // Pads cannot wake `event::read`, so the terminal is waited on in
         // short slices with the pads read in between.
@@ -1512,6 +1515,12 @@ fn play(
             "save",
             &format!("could not write {}: {err}", app.save_path.display()),
         );
+    }
+    // The frame the game was left on becomes its preview in the library.
+    if matches!(result, Ok(Ok(_)))
+        && let Err(err) = cover::save(&location.shown_path(), app.gba.framebuffer())
+    {
+        crashlog::record("cover", &format!("could not save the preview: {err}"));
     }
     match result {
         Ok(result) => result,

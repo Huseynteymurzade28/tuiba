@@ -15,6 +15,8 @@ pub struct Palette {
     pub dim: Color,
     pub accent: Color,
     pub accent_light: Color,
+    /// Text drawn on the accent, such as the selected row.
+    pub on_accent: Color,
     pub ok: Color,
     pub warn: Color,
 }
@@ -28,6 +30,7 @@ impl Palette {
             dim: Color::Rgb(0x6F, 0x68, 0x88),
             accent: Color::Rgb(0xA8, 0x96, 0xFF),
             accent_light: Color::Rgb(0xC4, 0xB6, 0xFF),
+            on_accent: Color::Rgb(0x12, 0x10, 0x1C),
             ok: Color::Rgb(0x8C, 0xE0, 0xA0),
             warn: Color::Rgb(0xF0, 0xB8, 0x6C),
         }
@@ -41,6 +44,7 @@ impl Palette {
             dim: Color::Rgb(0x68, 0x60, 0x78),
             accent: Color::Rgb(0x63, 0x45, 0xC7),
             accent_light: Color::Rgb(0x82, 0x66, 0xDE),
+            on_accent: Color::Rgb(0xF7, 0xF5, 0xFC),
             ok: Color::Rgb(0x1B, 0x78, 0x3A),
             warn: Color::Rgb(0x9A, 0x54, 0x00),
         }
@@ -55,8 +59,71 @@ impl Palette {
             dim: Color::Gray,
             accent: Color::Cyan,
             accent_light: Color::LightCyan,
+            // The terminal's own foreground may be light or dark; on cyan
+            // only black is sure to read.
+            on_accent: Color::Black,
             ok: Color::Green,
             warn: Color::Yellow,
+        }
+    }
+
+    /// The four greens of the original Game Boy screen.
+    const fn dmg() -> Self {
+        Self {
+            bg: Color::Rgb(0x0F, 0x1B, 0x0F),
+            surface: Color::Rgb(0x1B, 0x2D, 0x19),
+            text: Color::Rgb(0xD0, 0xE4, 0xA4),
+            dim: Color::Rgb(0x62, 0x80, 0x4A),
+            accent: Color::Rgb(0x9B, 0xBC, 0x0F),
+            accent_light: Color::Rgb(0xC6, 0xE0, 0x4E),
+            on_accent: Color::Rgb(0x0F, 0x1B, 0x0F),
+            ok: Color::Rgb(0x7E, 0xD9, 0x8C),
+            warn: Color::Rgb(0xE8, 0xB8, 0x5A),
+        }
+    }
+
+    /// Icy blue.
+    const fn glacier() -> Self {
+        Self {
+            bg: Color::Rgb(0x0D, 0x15, 0x1F),
+            surface: Color::Rgb(0x17, 0x23, 0x31),
+            text: Color::Rgb(0xE2, 0xEE, 0xF8),
+            dim: Color::Rgb(0x5E, 0x78, 0x91),
+            accent: Color::Rgb(0x7C, 0xC4, 0xF0),
+            accent_light: Color::Rgb(0xAE, 0xE0, 0xFF),
+            on_accent: Color::Rgb(0x0D, 0x15, 0x1F),
+            ok: Color::Rgb(0x8C, 0xE0, 0xB4),
+            warn: Color::Rgb(0xF0, 0xC0, 0x70),
+        }
+    }
+
+    /// Warm orange.
+    const fn spice() -> Self {
+        Self {
+            bg: Color::Rgb(0x19, 0x11, 0x0C),
+            surface: Color::Rgb(0x29, 0x1C, 0x14),
+            text: Color::Rgb(0xF6, 0xE7, 0xDA),
+            dim: Color::Rgb(0x8A, 0x6D, 0x5A),
+            accent: Color::Rgb(0xFF, 0x9A, 0x4D),
+            accent_light: Color::Rgb(0xFF, 0xBE, 0x85),
+            on_accent: Color::Rgb(0x19, 0x11, 0x0C),
+            ok: Color::Rgb(0xA8, 0xD8, 0x78),
+            warn: Color::Rgb(0xFF, 0x6B, 0x6B),
+        }
+    }
+
+    /// Hot pink.
+    const fn fuchsia() -> Self {
+        Self {
+            bg: Color::Rgb(0x19, 0x0E, 0x18),
+            surface: Color::Rgb(0x29, 0x17, 0x27),
+            text: Color::Rgb(0xF7, 0xE4, 0xF3),
+            dim: Color::Rgb(0x86, 0x6A, 0x82),
+            accent: Color::Rgb(0xFF, 0x6A, 0xC1),
+            accent_light: Color::Rgb(0xFF, 0x9F, 0xD8),
+            on_accent: Color::Rgb(0x19, 0x0E, 0x18),
+            ok: Color::Rgb(0x8C, 0xE0, 0xA0),
+            warn: Color::Rgb(0xF0, 0xB8, 0x6C),
         }
     }
 
@@ -68,6 +135,7 @@ impl Palette {
             "DIM" => self.dim = value,
             "ACCENT" => self.accent = value,
             "ACCENT_LIGHT" => self.accent_light = value,
+            "ON_ACCENT" => self.on_accent = value,
             "OK" => self.ok = value,
             "WARN" => self.warn = value,
             _ => return false,
@@ -76,22 +144,34 @@ impl Palette {
     }
 }
 
-/// The built-in palettes a `theme` file (or `t` in the library) picks from.
+/// The built-in palettes a `theme` file (or the picker behind `t` in the
+/// library) chooses from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Preset {
     Dark,
     Light,
     Terminal,
+    Dmg,
+    Glacier,
+    Spice,
+    Fuchsia,
 }
 
 impl Preset {
+    /// Every preset, in the order the picker lists them.
+    pub const ALL: [Self; 7] = [
+        Self::Dark,
+        Self::Light,
+        Self::Terminal,
+        Self::Dmg,
+        Self::Glacier,
+        Self::Spice,
+        Self::Fuchsia,
+    ];
+
     fn parse(name: &str) -> Option<Self> {
-        match name.to_ascii_lowercase().as_str() {
-            "dark" => Some(Self::Dark),
-            "light" => Some(Self::Light),
-            "terminal" => Some(Self::Terminal),
-            _ => None,
-        }
+        let name = name.to_ascii_lowercase();
+        Self::ALL.into_iter().find(|preset| preset.name() == name)
     }
 
     /// The name the `theme` file uses.
@@ -101,22 +181,38 @@ impl Preset {
             Self::Dark => "dark",
             Self::Light => "light",
             Self::Terminal => "terminal",
+            Self::Dmg => "dmg",
+            Self::Glacier => "glacier",
+            Self::Spice => "spice",
+            Self::Fuchsia => "fuchsia",
         }
     }
 
-    const fn next(self) -> Self {
+    /// A few words on what it looks like.
+    #[must_use]
+    pub const fn description(self) -> &'static str {
         match self {
-            Self::Dark => Self::Light,
-            Self::Light => Self::Terminal,
-            Self::Terminal => Self::Dark,
+            Self::Dark => "indigo and lavender",
+            Self::Light => "lavender on paper",
+            Self::Terminal => "your terminal's own colours",
+            Self::Dmg => "the first Game Boy's greens",
+            Self::Glacier => "icy blue",
+            Self::Spice => "warm orange",
+            Self::Fuchsia => "hot pink",
         }
     }
 
-    const fn palette(self) -> Palette {
+    /// Its colours, before any of the `theme` file's own.
+    #[must_use]
+    pub const fn palette(self) -> Palette {
         match self {
             Self::Dark => Palette::dark(),
             Self::Light => Palette::light(),
             Self::Terminal => Palette::terminal(),
+            Self::Dmg => Palette::dmg(),
+            Self::Glacier => Palette::glacier(),
+            Self::Spice => Palette::spice(),
+            Self::Fuchsia => Palette::fuchsia(),
         }
     }
 }
@@ -215,17 +311,29 @@ impl Theme {
     }
 }
 
-/// Switches to the next preset, keeping the file's own colours, and
-/// writes the choice to the `theme` file so it sticks. The new preset
-/// is in use even when saving fails.
-pub fn cycle() -> (Preset, io::Result<()>) {
-    let preset = {
-        let mut theme = THEME.write().unwrap_or_else(PoisonError::into_inner);
-        let overrides = std::mem::take(&mut theme.overrides);
-        *theme = Theme::new(theme.preset.next(), overrides);
-        theme.preset
-    };
-    (preset, save_preset(preset))
+/// The preset in use.
+#[must_use]
+pub fn current() -> Preset {
+    THEME.read().unwrap_or_else(PoisonError::into_inner).preset
+}
+
+/// Switches to `preset`, keeping the file's own colours, without saving:
+/// the picker shows each preset this way as the cursor passes it.
+pub fn preview(preset: Preset) {
+    let mut theme = THEME.write().unwrap_or_else(PoisonError::into_inner);
+    let overrides = std::mem::take(&mut theme.overrides);
+    *theme = Theme::new(preset, overrides);
+}
+
+/// Switches to `preset` and writes it to the `theme` file so it sticks.
+/// The preset is in use even when saving fails.
+///
+/// # Errors
+///
+/// The `theme` file could not be read or written.
+pub fn choose(preset: Preset) -> io::Result<()> {
+    preview(preset);
+    save_preset(preset)
 }
 
 fn save_preset(preset: Preset) -> io::Result<()> {
@@ -273,6 +381,23 @@ fn parse_color(value: &str) -> Option<Color> {
     Some(Color::Rgb(red, green, blue))
 }
 
+/// `from` moved `t` (0–1) of the way to `to`. Only RGB colours blend;
+/// the named colours of the terminal preset switch over at the halfway
+/// point, so gradients there fall back to two flat halves.
+#[must_use]
+pub fn mix(from: Color, to: Color, t: f32) -> Color {
+    let t = t.clamp(0.0, 1.0);
+    match (from, to) {
+        (Color::Rgb(r1, g1, b1), Color::Rgb(r2, g2, b2)) => {
+            let lerp =
+                |a: u8, b: u8| (f32::from(a) + (f32::from(b) - f32::from(a)) * t).round() as u8;
+            Color::Rgb(lerp(r1, r2), lerp(g1, g2), lerp(b1, b2))
+        }
+        _ if t < 0.5 => from,
+        _ => to,
+    }
+}
+
 /// The page itself: what a screen is cleared to before anything is
 /// drawn on it.
 #[must_use]
@@ -313,7 +438,7 @@ pub fn border() -> Style {
 pub fn selected() -> Style {
     let p = palette();
     Style::default()
-        .fg(p.bg)
+        .fg(p.on_accent)
         .bg(p.accent)
         .add_modifier(Modifier::BOLD)
 }
@@ -366,7 +491,7 @@ mod tests {
         assert_eq!(problems, Vec::<String>::new());
         assert_eq!(theme.preset, Preset::Light);
         assert_eq!(theme.palette.accent, Color::Rgb(0xFF, 0, 0));
-        let next = Theme::new(theme.preset.next(), theme.overrides);
+        let next = Theme::new(Preset::Terminal, theme.overrides);
         assert_eq!(next.preset, Preset::Terminal);
         assert_eq!(next.palette.accent, Color::Rgb(0xFF, 0, 0));
         assert_eq!(next.palette.bg, Color::Reset);
@@ -396,11 +521,34 @@ mod tests {
     }
 
     #[test]
+    fn mixing_blends_rgb_and_switches_named_colours() {
+        let (a, b) = (Color::Rgb(0, 100, 200), Color::Rgb(100, 200, 0));
+        assert_eq!(mix(a, b, 0.0), a);
+        assert_eq!(mix(a, b, 0.5), Color::Rgb(50, 150, 100));
+        assert_eq!(mix(a, b, 7.0), b);
+        assert_eq!(mix(Color::Cyan, Color::Gray, 0.4), Color::Cyan);
+        assert_eq!(mix(Color::Cyan, Color::Gray, 0.6), Color::Gray);
+    }
+
+    #[test]
     fn presets_keep_hints_and_selection_readable() {
-        for p in [Palette::dark(), Palette::light(), Palette::terminal()] {
+        for p in Preset::ALL.map(Preset::palette) {
             assert_ne!(p.dim, p.surface, "{p:?}");
             assert_ne!(p.text, p.surface, "{p:?}");
             assert_ne!(p.bg, p.accent, "{p:?}");
+            assert_ne!(p.on_accent, p.accent, "{p:?}");
+            // Text on the accent must not be the terminal's own colour,
+            // which may be as light as the accent.
+            assert_ne!(p.on_accent, Color::Reset, "{p:?}");
         }
+    }
+
+    #[test]
+    fn every_preset_parses_by_name() {
+        for preset in Preset::ALL {
+            assert_eq!(Preset::parse(preset.name()), Some(preset));
+            assert_eq!(Preset::parse(&preset.name().to_uppercase()), Some(preset));
+        }
+        assert_eq!(Preset::parse("nope"), None);
     }
 }

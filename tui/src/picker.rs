@@ -1,21 +1,28 @@
 //! The library screen: pick a cartridge, manage the folders it comes from.
 
+use std::collections::HashMap;
 use std::fmt::Write as _;
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
 
 use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use ratatui::Frame;
-use ratatui::layout::{Alignment, Constraint, Layout, Margin, Rect};
-use ratatui::style::Style;
+use ratatui::buffer::Buffer;
+use ratatui::layout::{Alignment, Constraint, Flex, Layout, Margin, Rect};
+use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{
-    Block, BorderType, Borders, Clear, List, ListItem, ListState, Padding, Paragraph, Wrap,
+    Block, BorderType, Borders, Clear, List, ListItem, ListState, Padding, Paragraph, Scrollbar,
+    ScrollbarOrientation, ScrollbarState, Wrap,
 };
+use tuiba_core::Framebuffer;
 use tuiba_core::memory::SaveType;
 
 use crate::gamepad::{PadButton, PadStyle};
 use crate::library::{Library, Location, Recent, Rom, compact_home, expand_home, human_size};
-use crate::{theme, wordmark};
+use crate::screen::{CELL_HEIGHT, CELL_WIDTH, GbaScreen};
+use crate::theme::Preset;
+use crate::{cover, theme, wordmark};
 
 /// What the user decided.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -42,6 +49,12 @@ enum Mode {
     Filter,
     /// "Quit?" prompt: `y` or Enter confirms, anything else cancels.
     ConfirmQuit,
+    /// Choosing a colour theme: the cursor previews, Enter keeps it and
+    /// Esc goes back to `original`.
+    Themes {
+        index: usize,
+        original: Preset,
+    },
 }
 
 /// Orderings for the cartridge list, cycled with `s`.
@@ -96,7 +109,18 @@ pub struct Picker {
     notice: Option<(String, bool)>,
     /// The connected pad's labels, for the footer hints.
     pad: Option<PadStyle>,
+    /// When the screen was made: the clock the wordmark's shine runs on.
+    born: Instant,
+    /// Previews read so far, by shown path; `None` for a game never left
+    /// on a frame. Dropped on rescan, which follows every game.
+    covers: HashMap<PathBuf, Option<Framebuffer>>,
 }
+
+/// How often a shine sweeps across the wordmark, and how long it takes.
+const SHINE_PERIOD: Duration = Duration::from_secs(7);
+const SHINE_SWEEP: Duration = Duration::from_millis(1100);
+/// Half the width of the shine band, in pixels.
+const SHINE_HALF_WIDTH: f32 = 3.0;
 
 impl Picker {
     /// The pad the footer is naming buttons for.
@@ -130,6 +154,8 @@ impl Picker {
             filter: String::new(),
             notice: None,
             pad: None,
+            born: Instant::now(),
+            covers: HashMap::new(),
         };
         picker.rescan();
         // Start on whatever was played last.
@@ -146,6 +172,7 @@ impl Picker {
     /// when it still exists.
     pub fn rescan(&mut self) {
         let keep = self.selected().map(|r| r.path.clone());
+        self.covers.clear();
         self.roms = self.library.scan();
         self.refresh_view();
         if let Some(path) = keep {
@@ -289,6 +316,10 @@ impl Picker {
                 return matches!(key.code, KeyCode::Char('y' | 'Y') | KeyCode::Enter)
                     .then_some(Outcome::Quit);
             }
+            Mode::Themes { .. } => {
+                self.handle_themes(key);
+                return None;
+            }
             Mode::Browse => {}
         }
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
@@ -320,14 +351,9 @@ impl Picker {
             }
             KeyCode::Char('a') => self.mode = Mode::AddFolder(String::new()),
             KeyCode::Char('t') => {
-                let (preset, saved) = theme::cycle();
-                match saved {
-                    Ok(()) => self.notify(format!("theme: {}", preset.name()), true),
-                    Err(err) => self.notify(
-                        format!("theme: {} (not saved: {err})", preset.name()),
-                        false,
-                    ),
-                }
+                let original = theme::current();
+                let index = Preset::ALL.iter().position(|&p| p == original).unwrap_or(0);
+                self.mode = Mode::Themes { index, original };
             }
             KeyCode::Char('r') => {
                 self.rescan();
@@ -397,6 +423,39 @@ impl Picker {
         None
     }
 
+    /// Keys while the theme list is up.
+    fn handle_themes(&mut self, key: KeyEvent) {
+        let Mode::Themes { index, original } = &mut self.mode else {
+            return;
+        };
+        let last = Preset::ALL.len() - 1;
+        match key.code {
+            KeyCode::Up | KeyCode::Char('k') => *index = index.saturating_sub(1),
+            KeyCode::Down | KeyCode::Char('j') => *index = (*index + 1).min(last),
+            KeyCode::Home => *index = 0,
+            KeyCode::End => *index = last,
+            KeyCode::Enter => {
+                let preset = Preset::ALL[*index];
+                self.mode = Mode::Browse;
+                match theme::choose(preset) {
+                    Ok(()) => self.notify(format!("theme: {}", preset.name()), true),
+                    Err(err) => self.notify(
+                        format!("theme: {} (not saved: {err})", preset.name()),
+                        false,
+                    ),
+                }
+                return;
+            }
+            KeyCode::Esc | KeyCode::Char('q' | 't') => {
+                theme::preview(*original);
+                self.mode = Mode::Browse;
+                return;
+            }
+            _ => return,
+        }
+        theme::preview(Preset::ALL[*index]);
+    }
+
     /// Keys while typing a folder path.
     fn handle_add_folder(&mut self, key: KeyEvent) {
         let Mode::AddFolder(input) = &mut self.mode else {
@@ -436,6 +495,24 @@ impl Picker {
         *index = target.clamp(0, len as isize - 1) as usize;
     }
 
+    /// Where the shine is, as a fraction of its sweep, if one is under
+    /// way at `now`.
+    fn shine(&self, now: Instant) -> Option<f32> {
+        let period = SHINE_PERIOD.as_secs_f32();
+        let t = (now - self.born).as_secs_f32() % period;
+        // The first sweep comes a moment after the screen opens.
+        let t = (t - 1.5).rem_euclid(period);
+        (t < SHINE_SWEEP.as_secs_f32()).then(|| t / SHINE_SWEEP.as_secs_f32())
+    }
+
+    /// Whether the screen is moving and wants redrawing even without
+    /// input. Pass `drawn_moving`, what this said at the last draw, so
+    /// the frame after a sweep ends clears it.
+    #[must_use]
+    pub fn animating(&self, drawn_moving: bool) -> bool {
+        drawn_moving || self.shine(Instant::now()).is_some()
+    }
+
     /// Renders the screen.
     pub fn draw(&mut self, frame: &mut Frame) {
         let area = frame.area();
@@ -462,11 +539,16 @@ impl Picker {
         let [list_area, side] =
             Layout::horizontal([Constraint::Percentage(56), Constraint::Fill(1)]).areas(body);
         self.draw_roms(frame, list_area);
+        // The folder list takes what it needs; the preview the rest.
+        let folder_rows = self.library.folders.len().clamp(1, 5) as u16 + 2;
         let [detail, folders] =
-            Layout::vertical([Constraint::Length(10), Constraint::Fill(1)]).areas(side);
+            Layout::vertical([Constraint::Fill(1), Constraint::Length(folder_rows)]).areas(side);
         self.draw_detail(frame, detail);
         self.draw_folders(frame, folders);
         self.draw_footer(frame, footer);
+        if let Mode::Themes { index, .. } = self.mode {
+            draw_themes(frame, area, index);
+        }
     }
 
     fn draw_header(&self, frame: &mut Frame, area: Rect) {
@@ -476,14 +558,25 @@ impl Picker {
         ])
         .areas(area);
         if logo_area.width > wordmark::width() {
-            let shades = [
-                theme::accent().fg(theme::palette().accent_light),
-                theme::accent().fg(theme::palette().accent_light),
-                theme::accent(),
-                theme::accent(),
-            ];
+            let p = theme::palette();
+            let shine = self.shine(Instant::now());
+            let span = f32::from(wordmark::width()) + 2.0 * SHINE_HALF_WIDTH;
+            // Light falls from the top left; the shine is a slanted band
+            // of white sweeping left to right.
+            let paint = |x: u16, y: u16| {
+                let (x, y) = (f32::from(x), f32::from(y));
+                let base = theme::mix(p.accent_light, p.accent, f32::midpoint(x / 30.0, y / 7.0));
+                let Some(progress) = shine else { return base };
+                let centre = progress * span - SHINE_HALF_WIDTH + y * 0.5;
+                let near = 1.0 - (x - centre).abs() / SHINE_HALF_WIDTH;
+                if near > 0.0 {
+                    theme::mix(base, Color::Rgb(0xFF, 0xFF, 0xFF), near * 0.8)
+                } else {
+                    base
+                }
+            };
             frame.render_widget(
-                Paragraph::new(wordmark::lines(&shades))
+                Paragraph::new(wordmark::painted(paint, shadow(&p)))
                     .block(Block::default().padding(Padding::left(1))),
                 logo_area,
             );
@@ -515,14 +608,25 @@ impl Picker {
         frame.render_widget(Paragraph::new(lines).alignment(Alignment::Right), right);
     }
 
-    /// A thin separator under the header.
+    /// A thin separator under the header, glowing in the accent at the
+    /// left and fading into the page towards the right.
     fn draw_rule(frame: &mut Frame, area: Rect) {
-        let width = usize::from(area.width);
-        let rule = Line::from(vec![
-            Span::styled(" ", theme::dim()),
-            Span::styled("─".repeat(width.saturating_sub(2)), theme::border()),
-        ]);
-        frame.render_widget(Paragraph::new(vec![Line::default(), rule]), area);
+        let p = theme::palette();
+        let width = area.width.saturating_sub(2);
+        let mut spans = vec![Span::raw(" ")];
+        spans.extend((0..width).map(|i| {
+            let t = f32::from(i) / f32::from(width.max(1));
+            let colour = if t < 0.5 {
+                theme::mix(p.accent, p.dim, t * 2.0)
+            } else {
+                theme::mix(p.dim, p.surface, (t - 0.5) * 2.0)
+            };
+            Span::styled("─", Style::default().fg(colour))
+        }));
+        frame.render_widget(
+            Paragraph::new(vec![Line::default(), Line::from(spans)]),
+            area,
+        );
     }
 
     fn pane(title: &str, focused: bool) -> Block<'static> {
@@ -621,6 +725,39 @@ impl Picker {
             .collect();
         let mut state = ListState::default().with_selected(Some(self.rom_index));
         frame.render_stateful_widget(List::new(items), inner, &mut state);
+        if focused {
+            let row = (self.rom_index - state.offset()) as u16;
+            let bar = Rect {
+                x: inner.x.saturating_sub(1),
+                y: inner.y + row,
+                width: inner.width + 2,
+                height: 1,
+            };
+            glow(frame.buffer_mut(), bar);
+        }
+
+        if self.visible.len() > usize::from(inner.height) {
+            self.draw_scrollbar(frame, area, inner.height);
+        }
+    }
+
+    /// A scrollbar down the list's right border, for lists longer than
+    /// the `rows` it shows.
+    fn draw_scrollbar(&self, frame: &mut Frame, area: Rect, rows: u16) {
+        let mut scroll = ScrollbarState::new(self.visible.len())
+            .viewport_content_length(usize::from(rows))
+            .position(self.rom_index);
+        frame.render_stateful_widget(
+            Scrollbar::new(ScrollbarOrientation::VerticalRight)
+                .begin_symbol(None)
+                .end_symbol(None)
+                .track_symbol(Some("│"))
+                .track_style(theme::accent())
+                .thumb_symbol("┃")
+                .thumb_style(theme::accent().fg(theme::palette().accent_light)),
+            area.inner(Margin::new(0, 1)),
+            &mut scroll,
+        );
     }
 
     /// A label strip across the top of the detail pane, like the sticker
@@ -657,22 +794,24 @@ impl Picker {
         let block = Self::pane("CARTRIDGE", false);
         let inner = block.inner(area);
         frame.render_widget(block, area);
-        let Some(rom) = self
-            .visible
-            .get(self.rom_index)
-            .and_then(|&i| self.roms.get_mut(i))
-        else {
+        let Some(&rom_i) = self.visible.get(self.rom_index) else {
             frame.render_widget(
                 Paragraph::new("Select a cartridge to see its details.").style(theme::dim()),
                 inner,
             );
             return;
         };
+        // The facts keep their rows; whatever is above them shows the game.
+        let [preview_area, label_area, rows_area] = Layout::vertical([
+            Constraint::Fill(1),
+            Constraint::Length(3),
+            Constraint::Length(6),
+        ])
+        .areas(inner);
+        self.draw_preview(frame, preview_area, rom_i);
+        let rom = &mut self.roms[rom_i];
         let save_type = rom.save_type();
         let played = self.recent.rank(&rom.path);
-
-        let [label_area, rows_area] =
-            Layout::vertical([Constraint::Length(3), Constraint::Fill(1)]).areas(inner);
         Self::draw_cartridge_label(frame, label_area, rom);
 
         let row = |label: &str, value: Span<'static>| {
@@ -755,6 +894,56 @@ impl Picker {
             ),
         ));
         frame.render_widget(Paragraph::new(lines), rows_area);
+    }
+
+    /// The game as it was last left, in a little screen bezel, or a
+    /// drawing of the cartridge when it has never been played.
+    fn draw_preview(&mut self, frame: &mut Frame, area: Rect, rom_i: usize) {
+        // A row of air between the picture and the label below it.
+        let area = Rect {
+            height: area.height.saturating_sub(1),
+            ..area
+        };
+        let room = Rect {
+            width: area.width.saturating_sub(2),
+            height: area.height.saturating_sub(2),
+            ..area
+        };
+        if room.height < 6 || !GbaScreen::fits(room) {
+            return;
+        }
+        let scale = GbaScreen::scale_for(room);
+        let [bezel] = Layout::horizontal([Constraint::Length(CELL_WIDTH.div_ceil(scale) + 2)])
+            .flex(Flex::Center)
+            .areas(area);
+        let [bezel] = Layout::vertical([Constraint::Length(CELL_HEIGHT.div_ceil(scale) + 2)])
+            .flex(Flex::Center)
+            .areas(bezel);
+
+        let shown = self.roms[rom_i].location().shown_path();
+        let cover = self
+            .covers
+            .entry(shown)
+            .or_insert_with_key(|path| cover::load(path));
+        let caption = if cover.is_some() {
+            " last played frame "
+        } else {
+            " not played yet "
+        };
+        let block = Block::default()
+            .borders(Borders::ALL)
+            .border_type(BorderType::Rounded)
+            .border_style(theme::border())
+            .title_bottom(Line::styled(caption, theme::dim()).right_aligned())
+            .style(Style::default().bg(theme::palette().surface));
+        let screen = block.inner(bezel);
+        frame.render_widget(block, bezel);
+        if let Some(cover) = cover {
+            frame.render_widget(GbaScreen::new(cover), screen);
+        } else {
+            let name = self.roms[rom_i].name();
+            draw_cartridge_art(frame.buffer_mut(), screen, &name);
+        }
     }
 
     fn draw_folders(&self, frame: &mut Frame, area: Rect) {
@@ -850,7 +1039,8 @@ impl Picker {
                 ),
                 Span::styled("   ⏎ keep  esc clear  ↑↓ select", theme::hint()),
             ]),
-            Mode::Browse => {
+            // The theme list carries its own hints.
+            Mode::Browse | Mode::Themes { .. } => {
                 if let Some((message, ok)) = &self.notice {
                     let color = if *ok {
                         theme::palette().ok
@@ -916,14 +1106,15 @@ impl Picker {
                 }
             }
         };
+        let used = line.width() as u16;
         frame.render_widget(
             Paragraph::new(line).style(Style::default().bg(theme::palette().surface)),
             area,
         );
-        // Version, tucked into the right corner.
+        // Version, tucked into the right corner when the hints leave room.
         let version = format!("tuiba {} ", env!("CARGO_PKG_VERSION"));
         let width = version.chars().count() as u16;
-        if area.width > width + 40 {
+        if area.width >= used + width + 2 {
             frame.render_widget(
                 Paragraph::new(Line::styled(version, theme::hint())),
                 Rect {
@@ -932,6 +1123,211 @@ impl Picker {
                     ..area
                 },
             );
+        }
+    }
+}
+
+/// A cartridge drawn in cells, centred in `area`: a grey shell with a
+/// grip along the top and a label in the accent carrying `title`.
+fn draw_cartridge_art(buf: &mut Buffer, area: Rect, title: &str) {
+    let p = theme::palette();
+    // Wider than tall, like the real thing; a cell is twice as tall as
+    // it is wide.
+    let width = (area.width * 3 / 5).clamp(18, 56).min(area.width);
+    let height = area.height.saturating_sub(2).min(width * 5 / 16 + 1);
+    if height < 6 {
+        return;
+    }
+    let [cart] = Layout::horizontal([Constraint::Length(width)])
+        .flex(Flex::Center)
+        .areas(area);
+    let [cart] = Layout::vertical([Constraint::Length(height)])
+        .flex(Flex::Center)
+        .areas(cart);
+    let shell = theme::mix(p.dim, p.surface, 0.35);
+    let ridge = theme::mix(shell, p.surface, 0.5);
+    let mut put = |x: u16, y: u16, symbol: &str, fg: Color, bg: Color| {
+        if let Some(cell) = buf.cell_mut((cart.x + x, cart.y + y)) {
+            cell.set_symbol(symbol).set_fg(fg).set_bg(bg);
+        }
+    };
+    for y in 0..height {
+        for x in 0..width {
+            put(x, y, " ", shell, shell);
+        }
+    }
+    // Rounded corners: half the corner cell is shell, half background.
+    for x in [0, width - 1] {
+        put(x, 0, "▄", shell, p.surface);
+        put(x, height - 1, "▀", shell, p.surface);
+    }
+    // The grip ridges along the top edge.
+    for x in 3..width - 3 {
+        put(x, 1, "═", ridge, shell);
+    }
+
+    // The label, lit from above.
+    let label = Rect {
+        x: 2,
+        y: 3,
+        width: width - 4,
+        height: height.saturating_sub(5).max(2),
+    };
+    for row in 0..label.height {
+        let bg = theme::mix(
+            p.accent_light,
+            p.accent,
+            f32::from(row) / f32::from(label.height.max(2) - 1),
+        );
+        for x in 0..label.width {
+            put(label.x + x, label.y + row, " ", p.bg, bg);
+        }
+    }
+    let text_width = usize::from(label.width.saturating_sub(2));
+    let mut lines = wrap_words(title, text_width);
+    lines.truncate(usize::from(label.height.saturating_sub(1)).max(1));
+    let console = if text_width >= 16 {
+        "GAME BOY ADVANCE"
+    } else {
+        "GBA"
+    };
+    let rows = lines.len() as u16;
+    let top = label.y + (label.height.saturating_sub(1).saturating_sub(rows)) / 2;
+    let mut write = |y: u16, text: &str, fg: Color, bold: bool| {
+        let pad = (label.width - text.chars().count() as u16) / 2;
+        for (i, ch) in text.chars().enumerate() {
+            if let Some(cell) = buf.cell_mut((cart.x + label.x + pad + i as u16, cart.y + y)) {
+                cell.set_char(ch).set_fg(fg);
+                if bold {
+                    cell.modifier.insert(ratatui::style::Modifier::BOLD);
+                }
+            }
+        }
+    };
+    for (i, line) in lines.iter().enumerate() {
+        write(top + i as u16, line, p.on_accent, true);
+    }
+    write(
+        label.y + label.height - 1,
+        console,
+        theme::mix(p.accent, p.on_accent, 0.55),
+        false,
+    );
+}
+
+/// `text` broken into lines of at most `width` characters at spaces,
+/// overlong words cut.
+fn wrap_words(text: &str, width: usize) -> Vec<String> {
+    let mut lines: Vec<String> = Vec::new();
+    for word in text.split_whitespace() {
+        let word = truncate(word, width);
+        match lines.last_mut() {
+            Some(line) if line.chars().count() + 1 + word.chars().count() <= width => {
+                line.push(' ');
+                line.push_str(&word);
+            }
+            _ => lines.push(word),
+        }
+    }
+    lines
+}
+
+/// The wordmark's drop shadow: the accent sunk into the page, or the
+/// raised surface where the page is the terminal's own and cannot be
+/// blended with.
+fn shadow(p: &theme::Palette) -> Color {
+    match p.bg {
+        Color::Rgb(..) => theme::mix(p.accent, p.bg, 0.7),
+        _ => p.surface,
+    }
+}
+
+/// The theme list over the middle of the screen: each preset's name,
+/// what it looks like and a strip of its colours. The screen behind
+/// already wears the one under the cursor.
+fn draw_themes(frame: &mut Frame, area: Rect, index: usize) {
+    let rows = Preset::ALL.len() as u16;
+    let [popup] = Layout::horizontal([Constraint::Length(62)])
+        .flex(Flex::Center)
+        .areas(area);
+    let [popup] = Layout::vertical([Constraint::Length(rows + 5)])
+        .flex(Flex::Center)
+        .areas(popup);
+    frame.render_widget(Clear, popup);
+    let block = Block::default()
+        .title(Line::styled(" THEMES ", theme::accent().bold()))
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(theme::accent())
+        .padding(Padding::new(1, 1, 1, 0))
+        .style(theme::text().bg(theme::palette().surface));
+    let inside = block.inner(popup);
+    frame.render_widget(block, popup);
+    let [list, _, footer] = Layout::vertical([
+        Constraint::Length(rows),
+        Constraint::Length(1),
+        Constraint::Length(1),
+    ])
+    .areas(inside);
+
+    for (i, preset) in Preset::ALL.into_iter().enumerate() {
+        let selected = i == index;
+        let row = Rect {
+            y: list.y + i as u16,
+            height: 1,
+            ..list
+        };
+        let (name_style, about_style) = if selected {
+            (theme::selected(), theme::selected().not_bold())
+        } else {
+            (theme::text().bold(), theme::dim())
+        };
+        let marker = if selected { "▸ " } else { "  " };
+        let text = Line::from(vec![
+            Span::styled(format!("{marker}{:<10}", preset.name()), name_style),
+            Span::styled(preset.description(), about_style),
+        ]);
+        frame.render_widget(Paragraph::new(text), row);
+        if selected {
+            glow(frame.buffer_mut(), row);
+        }
+        // Swatches pinned right, each in the preset's own colour.
+        let c = preset.palette();
+        let colours = [c.bg, c.surface, c.dim, c.accent, c.accent_light, c.text];
+        let width = colours.len() as u16 * 2;
+        let swatch_area = Rect {
+            x: row.right().saturating_sub(width + 1),
+            width,
+            ..row
+        };
+        let swatches: Vec<Span> = colours
+            .iter()
+            .map(|&colour| Span::styled("██", Style::default().fg(colour)))
+            .collect();
+        frame.render_widget(Paragraph::new(Line::from(swatches)), swatch_area);
+    }
+
+    let hints = [("↑↓", "preview"), ("⏎", "keep"), ("esc", "cancel")];
+    let mut spans = Vec::new();
+    for (key, label) in hints {
+        spans.push(Span::styled(format!(" {key} "), theme::key()));
+        spans.push(Span::styled(format!("{label}  "), theme::hint()));
+    }
+    frame.render_widget(
+        Paragraph::new(Line::from(spans)).alignment(Alignment::Center),
+        footer,
+    );
+}
+
+/// Recolours the background of `area`, a selected row, from the accent
+/// at the left to a deeper shade at the right, keeping its text.
+fn glow(buf: &mut Buffer, area: Rect) {
+    let p = theme::palette();
+    let end = theme::mix(p.accent, p.bg, 0.45);
+    let last = f32::from(area.width.saturating_sub(1).max(1));
+    for x in area.left()..area.right() {
+        if let Some(cell) = buf.cell_mut((x, area.y)) {
+            cell.bg = theme::mix(p.accent, end, f32::from(x - area.x) / last);
         }
     }
 }

@@ -26,9 +26,9 @@ plays through the default audio device (`M` mutes it, `-` and `+` set the
 volume).
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/Huseynteymurzade28/tuiba/master/docs/demo.gif" alt="Filtering the library, playing two homebrew games, fast-forward, save states and the key list" width="800">
+  <img src="https://raw.githubusercontent.com/Huseynteymurzade28/tuiba/master/docs/demo.gif" alt="Browsing the library with game previews, trying colour themes, then racing in a homebrew game with a save state, the save-state slots, the key list and fast-forward" width="800">
   <br>
-  <sub>Add a folder, sort, filter, play. The game part shows the pixel renderer's output, as it looks in Kitty, Ghostty or WezTerm.</sub>
+  <sub>Browse with previews, try a theme, filter, play. Recorded with half-block rendering; in Kitty, Ghostty or WezTerm the game is drawn in real pixels.</sub>
 </p>
 
 <p align="center">
@@ -51,7 +51,7 @@ volume).
 | Clock    | The cartridge real-time clock (S-3511 over GPIO) some games use for day and night, reading your local time     |
 | BIOS     | Runs without a BIOS image: `IntrWait`, `Div`, `Sqrt`, `ArcTan2`, `CpuSet`, LZ77/RL/`BitUnPack`, affine helpers are emulated in software; or boots your own dump, logo and all |
 | Input    | Keyboard with exact key releases on terminals that support the Kitty keyboard protocol; gamepads, hot-pluggable; bindings in a config file |
-| Frontend | IPS/UPS/BPS patches applied on load; cheats (raw, GameShark, Action Replay, CodeBreaker) from libretro `.cht` files; library with folders, filter, sort and last-played memory; pixels over the Kitty, Sixel or iTerm2 protocol, or half-blocks; pause, frame step, fast-forward, rewind and screenshots; headless debug mode |
+| Frontend | IPS/UPS/BPS patches applied on load; cheats (raw, GameShark, Action Replay, CodeBreaker) from libretro `.cht` files; library with folders, filter, sort, last-played memory and a preview of each game; seven colour themes; pixels over the Kitty, Sixel or iTerm2 protocol, or half-blocks; pause, frame step, fast-forward, rewind and screenshots; headless debug mode |
 
 Not there yet: serial link, cycle-exact PPU/DMA
 interleaving. Accurate enough for the homebrew below; not a reference
@@ -153,7 +153,8 @@ tuiba falls back to half-blocks there.
 3. Pick a cartridge with `↑`/`↓` and press `⏎` to play. `Esc` twice
    brings you back to the library; `Ctrl+Q` quits from anywhere. The
    library opens on the cartridge you played last
-   (`~/.config/tuiba/recent`).
+   (`~/.config/tuiba/recent`), and shows each game you have played as
+   you left it.
 
 Both files live in tuiba's configuration directory: `~/.config/tuiba`,
 or `$XDG_CONFIG_HOME/tuiba` where that is set, or `%APPDATA%\tuiba` on
@@ -294,7 +295,7 @@ directory (`~/.config/tuiba/theme`, or `%APPDATA%\tuiba\theme` on Windows).
 Each line uses `name = value`; colours are six-digit RGB values:
 
 ```ini
-# Choose dark (default), light, or terminal
+# dark (default), light, terminal, dmg, glacier, spice or fuchsia
 preset = dark
 BG = #12101c
 SURFACE = #1e1a2e
@@ -302,13 +303,17 @@ TEXT = #e8e4f4
 DIM = #6f6888
 ACCENT = #a896ff
 ACCENT_LIGHT = #c4b6ff
+ON_ACCENT = #12101c
 OK = #8ce0a0
 WARN = #f0b86c
 ```
 
-Only the colours you specify are overridden. Built-in `light` and `terminal`
-presets are also available; `t` in the library switches between the three
-and writes the choice to the `preset` line, keeping your own colours.
+Only the colours you specify are overridden. `t` in the library opens a list
+of the built-in presets: the screen takes on each one as the cursor passes
+it, `⏎` keeps it (writing the `preset` line, your own colours kept) and `esc`
+goes back. Besides the default there are `light`, `terminal` (the
+terminal's own colours), `dmg` (the first Game Boy's greens), `glacier`,
+`spice` and `fuchsia`.
 Invalid lines are reported as warnings and do not prevent startup.
 
 ### Keys

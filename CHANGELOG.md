@@ -11,11 +11,20 @@ All notable changes to tuiba. The format follows
 - Colour themes: a `theme` file in the config directory picks a preset
   (`dark`, `light`, or `terminal` for the terminal's own colours) and
   overrides single colours as `#rrggbb`. (#84, #99) `t` in the library
-  switches between the presets and remembers the choice.
+  opens a theme list that previews each preset live and remembers the
+  choice. Presets: `dark`, `light`, `terminal`, `dmg`, `glacier`, `spice`
+  and `fuchsia`.
+- The library previews each game: the frame it was last left on, or a
+  drawn cartridge for games not played yet.
+- A livelier library: a shaded, shadowed wordmark with a passing shine,
+  a glowing selected row, a fading rule under the header and a scrollbar
+  for long lists.
 - More ways to install: a Homebrew tap, a Scoop bucket and a Nix flake
   (`nix run github:Huseynteymurzade28/tuiba`), listed in the README. (#85)
 
 ### Changed
+- In the `terminal` theme, text on the cyan accent is black, so the
+  selected row reads on light and dark terminals alike.
 - Panels (the key list, debugger, cheats and save states) sit on one
   even background instead of a dark strip behind every line of text.
 - The in-game status bar drops whole hints that do not fit instead of

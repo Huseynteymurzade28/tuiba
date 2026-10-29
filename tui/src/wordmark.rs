@@ -3,9 +3,10 @@
 //! Letters come from a 7-row pixel font with two-pixel strokes. A
 //! terminal cell is about twice as tall as it is wide, so a half block
 //! (`▀`/`▄`) is a square pixel: one column per pixel, two pixel rows per
-//! text row, four text rows in all.
+//! text row, four text rows in all, the last one shared with a drop
+//! shadow.
 
-use ratatui::style::Style;
+use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span};
 
 /// Pixel rows of each letter, `#` = lit.
@@ -50,33 +51,54 @@ fn pixel_rows() -> Vec<Vec<bool>> {
     rows
 }
 
-/// Width in terminal columns.
+/// Width in terminal columns, the drop shadow included.
 #[must_use]
 pub fn width() -> u16 {
-    pixel_rows()[0].len() as u16
+    pixel_rows()[0].len() as u16 + SHADOW
 }
 
-/// The wordmark as styled lines. `shades` colours the text rows from
-/// top to bottom (the last entry repeats if there are fewer than four).
+/// How far the drop shadow falls, right and down, in pixels.
+const SHADOW: u16 = 1;
+
+/// The wordmark as styled lines, every lit pixel coloured by
+/// `paint(x, y)` (in pixels from the top left) and the drop shadow in
+/// `shadow`. Each cell carries two pixels, the upper one as the
+/// foreground of `▀` and the lower one as its background, so colours
+/// change at pixel rather than text-row resolution.
 #[must_use]
-pub fn lines(shades: &[Style]) -> Vec<Line<'static>> {
+pub fn painted(paint: impl Fn(u16, u16) -> Color, shadow: Color) -> Vec<Line<'static>> {
     let rows = pixel_rows();
-    let width = rows[0].len();
-    (0..HEIGHT as usize)
+    let lit = |x: u16, y: u16| {
+        rows.get(usize::from(y))
+            .and_then(|r| r.get(usize::from(x)))
+            .copied()
+            .unwrap_or(false)
+    };
+    let offset = SHADOW;
+    let pixel = |x: u16, y: u16| {
+        if lit(x, y) {
+            Some(paint(x, y))
+        } else if x >= offset && y >= offset && lit(x - offset, y - offset) {
+            Some(shadow)
+        } else {
+            None
+        }
+    };
+    (0..HEIGHT)
         .map(|text_row| {
-            let style = shades[text_row.min(shades.len() - 1)];
-            let upper = &rows[text_row * 2];
-            let lower = rows.get(text_row * 2 + 1);
-            let mut line = String::with_capacity(width * 3);
-            for x in 0..width {
-                line.push(match (upper[x], lower.is_some_and(|r| r[x])) {
-                    (true, true) => '█',
-                    (true, false) => '▀',
-                    (false, true) => '▄',
-                    (false, false) => ' ',
-                });
-            }
-            Line::from(Span::styled(line, style))
+            let spans: Vec<Span<'static>> = (0..width())
+                .map(
+                    |x| match (pixel(x, text_row * 2), pixel(x, text_row * 2 + 1)) {
+                        (Some(upper), Some(lower)) => {
+                            Span::styled("▀", Style::default().fg(upper).bg(lower))
+                        }
+                        (Some(upper), None) => Span::styled("▀", Style::default().fg(upper)),
+                        (None, Some(lower)) => Span::styled("▄", Style::default().fg(lower)),
+                        (None, None) => Span::raw(" "),
+                    },
+                )
+                .collect();
+            Line::from(spans)
         })
         .collect()
 }
@@ -87,15 +109,30 @@ mod tests {
 
     #[test]
     fn renders_five_letters_in_four_rows() {
-        let lines = lines(&[Style::default()]);
+        let lines = painted(|_, _| Color::White, Color::DarkGray);
         assert_eq!(lines.len(), 4);
         let text: Vec<String> = lines.iter().map(ToString::to_string).collect();
         assert_eq!(text[0].chars().count() as u16, width());
-        assert_eq!(width(), 30);
+        assert_eq!(width(), 31);
         // The T: a two-pixel bar fills the first text row.
-        assert!(text[0].starts_with("██████ "), "{}", text[0]);
-        // The last row holds only the seventh pixel row: upper halves.
-        assert!(!text[3].contains('▄'));
+        assert!(text[0].starts_with("▀▀▀▀▀▀▄"), "{}", text[0]);
+        // The last row holds the seventh pixel row and the shadow below it.
         assert!(text[3].contains('▀'));
+    }
+
+    #[test]
+    fn colours_each_pixel_and_casts_a_shadow() {
+        let lines = painted(
+            |_, y| if y == 0 { Color::Red } else { Color::Blue },
+            Color::Black,
+        );
+        // Top-left cell of the T: red over blue.
+        let first = &lines[0].spans[0];
+        assert_eq!(first.style.fg, Some(Color::Red));
+        assert_eq!(first.style.bg, Some(Color::Blue));
+        // Right of the T's bar, one pixel down: shadow.
+        let edge = &lines[0].spans[6];
+        assert_eq!(edge.content, "▄");
+        assert_eq!(edge.style.fg, Some(Color::Black));
     }
 }
