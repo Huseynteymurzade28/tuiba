@@ -29,6 +29,12 @@ All notable changes to tuiba. The format follows
   even background instead of a dark strip behind every line of text.
 - The in-game status bar drops whole hints that do not fit instead of
   cutting the last one off mid-word.
+- A redrawn in-game status bar: the game as a badge, a coloured badge
+  for pause, rewind and fast-forward, dot-separated facts with warnings
+  and notices in their own colours, and key hints on the right. A narrow
+  bar drops the least telling facts first and always keeps `?`.
+- The `?` key list is grouped under buttons, play, states and tools, in
+  two columns when the terminal is wide enough.
 - The default keys for the buttons follow mGBA and most emulators,
   all within reach of one hand: `X` = A, `Z` = B, `A` = L, `S` = R.
   `B`, `L` and `R` still work too; a `keys` file brings back the old

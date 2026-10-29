@@ -46,7 +46,7 @@ use crossterm::terminal::{
 };
 use ratatui::backend::CrosstermBackend;
 use ratatui::layout::{Alignment, Constraint, Flex, Layout, Rect};
-use ratatui::style::Style;
+use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Borders, Clear, Padding, Paragraph};
 use ratatui::{Frame, Terminal};
@@ -303,6 +303,12 @@ enum Panel {
 
 /// How long "state saved" and friends stay in the status bar.
 const NOTICE_WINDOW: Duration = Duration::from_secs(2);
+
+/// Cells over which the status bar's game badge fades into the bar.
+const FADE: u16 = 3;
+
+/// Blank cells between two key hints on the status bar.
+const HINT_GAP: usize = 2;
 
 /// How much one press of `-` or `+` changes the volume, in percent.
 const VOLUME_STEP: u8 = 10;
@@ -825,126 +831,182 @@ impl App {
     }
 
     /// What the emulator is up to, for the status bar: an overlay,
-    /// pause, rewind, fast-forward or a pending leave.
-    fn mode(&self, now: Instant) -> String {
-        if self.help {
-            "  ⏸ keys".to_string()
+    /// pause, rewind, fast-forward or a pending leave, with the colour
+    /// of its badge.
+    fn mode(&self, now: Instant) -> Option<(String, Color)> {
+        let p = theme::palette();
+        let (text, colour) = if self.help {
+            ("‖ keys".to_string(), p.accent_light)
         } else if let Some(Panel::States(_)) = self.panel {
-            format!("  ⏸ states  (slot {})", self.slot + 1)
+            (format!("‖ states · slot {}", self.slot + 1), p.accent_light)
         } else if let Some(Panel::Cheats(_)) = self.panel {
-            "  ⏸ cheats".to_string()
+            ("‖ cheats".to_string(), p.accent_light)
         } else if let Some(Panel::Debugger(_)) = self.panel {
-            "  ⏸ debugger".to_string()
+            ("‖ debugger".to_string(), p.accent_light)
         } else if self.leave_armed.is_some_and(|t| now < t + LEAVE_WINDOW) {
-            "  esc again to leave".to_string()
+            ("esc again to leave".to_string(), p.warn)
         } else if self.bound_leave.is_some_and(|t| now < t + LEAVE_WINDOW) {
-            format!("  {} again to leave", self.hint_for(Action::Leave, "leave"))
+            (
+                format!("{} again to leave", self.hint_for(Action::Leave, "leave")),
+                p.warn,
+            )
         } else if self.paused {
-            "  ⏸ paused  (. = one frame)".to_string()
+            ("‖ paused · . = one frame".to_string(), p.warn)
         } else if self.rewinding && self.rewind.is_empty() {
-            "  ◀◀ nothing older to rewind to".to_string()
+            ("◀◀ nothing older".to_string(), p.warn)
         } else if self.rewinding {
-            "  ◀◀ rewinding".to_string()
+            ("◀◀ rewinding".to_string(), p.accent_light)
         } else if self.fast_held(now) {
-            format!("  ▶▶ ×{:.1}", self.fps / NOMINAL_FPS)
+            (format!("▶▶ ×{:.1}", self.fps / NOMINAL_FPS), p.ok)
         } else {
-            String::new()
-        }
+            return None;
+        };
+        Some((text, colour))
     }
 
-    /// The status bar: what the emulator is doing, and the three keys
-    /// that are never rebindable.
-    fn status_line(&self, size_hint: &str, width: u16) -> Line<'_> {
+    /// The facts for the status bar, most telling first, since a narrow
+    /// bar drops them from the end; anything that needs attention is in
+    /// the warning colour.
+    fn status_facts(&self, size: Option<(String, bool)>, now: Instant) -> Vec<Span<'_>> {
+        let p = theme::palette();
+        let bar = Style::default().bg(p.surface);
+        let dim = bar.fg(p.dim);
+        let warn = bar.fg(p.warn);
         let renderer = self
             .graphics
             .as_ref()
             .map_or("half-blocks", |g| g.protocol().name());
-        let now = Instant::now();
-        let swi_hint = self
-            .gba
-            .last_unsupported_swi
-            .map(|n| format!("  [unsupported SWI {n:#04x}]"))
-            .unwrap_or_default();
-        let held = self.held_buttons(now);
-        let held = if held.is_empty() {
-            String::new()
-        } else {
-            format!("  [{held}]")
-        };
-        // Without release events a key counts as held until it times out;
-        // worth knowing when a game feels sticky.
-        let keys = if self.keypad.has_release_events() {
-            ""
-        } else {
-            "  keys: timeout"
-        };
-        let save = self
-            .save_error
-            .as_ref()
-            .map(|err| format!("  [save failed: {err}]"))
-            .unwrap_or_default();
-        let pad = if self.pad_style.is_some() {
-            "  🎮"
-        } else {
-            ""
-        };
-        let sound = match &self.audio {
-            _ if self.muted => "  🔇 muted",
-            Ok(_) => "",
-            Err(_) => "  🔇 no audio",
-        };
-        let notice = self
+        let mut facts = vec![Span::styled(format!("{:.0} fps", self.fps), bar.fg(p.text))];
+        if let Some(err) = &self.save_error {
+            facts.push(Span::styled(format!("save failed: {err}"), warn.bold()));
+        }
+        if let Some((text, _)) = self
             .state_notice
             .as_ref()
             .filter(|(_, at)| now < *at + NOTICE_WINDOW)
-            .map(|(text, _)| format!("  [{text}]"))
-            .unwrap_or_default();
-        let mode = self.mode(now);
-        let mut spans = vec![
-            Span::styled(
-                format!(" {}  ", self.title),
-                theme::text().bg(theme::palette().surface),
-            ),
-            Span::styled(
-                format!(
-                    "{:.0} fps{mode}  {renderer}{size_hint}{keys}{pad}{sound}{notice}{swi_hint}{held}{save}",
-                    self.fps
-                ),
-                Style::default()
-                    .fg(theme::palette().dim)
-                    .bg(theme::palette().surface),
-            ),
-            Span::raw("  "),
-        ];
-        // The figures take the place of the key hints: they are for a
-        // player who already knows the keys and is chasing a problem.
-        if let Some(stats) = &self.stats {
-            let audio = self.audio.as_ref().ok().map(AudioOutput::stats);
-            spans.push(Span::styled(stats.line(self.fps, audio), theme::text()));
-            return Line::from(spans);
+        {
+            facts.push(Span::styled(text.clone(), bar.fg(p.ok).bold()));
         }
+        if let Some(n) = self.gba.last_unsupported_swi {
+            facts.push(Span::styled(format!("unsupported SWI {n:#04x}"), warn));
+        }
+        let held = self.held_buttons(now);
+        if !held.is_empty() {
+            facts.push(Span::styled(held, bar.fg(p.accent)));
+        }
+        if let Some((text, cropped)) = size {
+            facts.push(Span::styled(text, if cropped { warn } else { dim }));
+        }
+        match &self.audio {
+            _ if self.muted => facts.push(Span::styled("🔇 muted", dim)),
+            Ok(_) => {}
+            Err(_) => facts.push(Span::styled("🔇 no audio", warn)),
+        }
+        if self.pad_style.is_some() {
+            facts.push(Span::styled("🎮", dim));
+        }
+        // Without release events a key counts as held until it times out;
+        // worth knowing when a game feels sticky.
+        if !self.keypad.has_release_events() {
+            facts.push(Span::styled("keys: timeout", dim));
+        }
+        facts.push(Span::styled(renderer, dim));
+        facts
+    }
+
+    /// The status bar: the game as a badge, what the emulator is doing,
+    /// the facts worth knowing and, on the right, the keys that are
+    /// never rebindable.
+    fn status_line(&self, size: Option<(String, bool)>, width: u16) -> Line<'_> {
+        let p = theme::palette();
+        let now = Instant::now();
+        let bar = Style::default().bg(p.surface);
+        let dim = bar.fg(p.dim);
+        let badge = |colour: Color| {
+            Style::default()
+                .fg(p.on_accent)
+                .bg(colour)
+                .add_modifier(Modifier::BOLD)
+        };
+
+        let mut spans = vec![Span::styled(format!(" {} ", self.title), badge(p.accent))];
+        // The badge melts into the bar rather than ending in a hard edge.
+        for step in 1..=FADE {
+            let t = f32::from(step) / f32::from(FADE + 1);
+            spans.push(Span::styled(
+                " ",
+                bar.bg(theme::mix(p.accent, p.surface, t)),
+            ));
+        }
+        spans.push(Span::styled(" ", bar));
+        if let Some((text, colour)) = self.mode(now) {
+            spans.push(Span::styled(format!(" {text} "), badge(colour)));
+            spans.push(Span::styled(" ", bar));
+        }
+
+        let key = Style::default()
+            .fg(p.accent_light)
+            .bg(theme::mix(p.surface, p.accent, 0.25))
+            .add_modifier(Modifier::BOLD);
         let hints = [
-            (format!(" {} ", self.hint_for(Action::Help, "?")), "keys  "),
+            (format!(" {} ", self.hint_for(Action::Help, "?")), " keys"),
             (
                 format!(" {} ×2 ", self.hint_for(Action::Leave, "esc")),
-                "library  ",
+                " library",
             ),
             (
                 format!(" {} ", self.hint_for(Action::States, "f2")),
-                "states  ",
+                " states",
             ),
-            (" ctrl+q ".to_string(), "quit"),
+            (" ctrl+q ".to_string(), " quit"),
         ];
-        // Whole hints only, most useful first: a narrow terminal loses
-        // the last ones rather than showing half a word.
+        let hint_width = |(k, label): &(String, &str)| HINT_GAP + k.chars().count() + label.len();
+        // The figures take the place of the key hints: they are for a
+        // player who already knows the keys and is chasing a problem.
+        // Otherwise the first hint always keeps its place.
+        let reserve = if self.stats.is_some() {
+            0
+        } else {
+            hint_width(&hints[0]) + 1
+        };
         let mut used: usize = spans.iter().map(Span::width).sum();
-        for (key, label) in hints {
-            used += key.chars().count() + label.len();
-            if used > usize::from(width) {
+        for (i, fact) in self.status_facts(size, now).into_iter().enumerate() {
+            let sep = if i > 0 { 3 } else { 0 };
+            if used + sep + fact.width() + reserve > usize::from(width) {
                 break;
             }
-            spans.push(Span::styled(key, theme::key()));
-            spans.push(Span::styled(label, theme::hint()));
+            used += sep + fact.width();
+            if i > 0 {
+                spans.push(Span::styled(" · ", dim));
+            }
+            spans.push(fact);
+        }
+
+        if let Some(stats) = &self.stats {
+            let audio = self.audio.as_ref().ok().map(AudioOutput::stats);
+            spans.push(Span::styled("   ", bar));
+            spans.push(Span::styled(stats.line(self.fps, audio), bar.fg(p.text)));
+            return Line::from(spans);
+        }
+        // Whole hints only, most useful first, pushed to the right edge:
+        // a narrow terminal loses the last ones rather than showing half
+        // a word.
+        let room = usize::from(width).saturating_sub(used + 1);
+        let mut shown = Vec::new();
+        let mut taken = 0;
+        for hint in hints {
+            let wide = hint_width(&hint);
+            if taken + wide > room {
+                break;
+            }
+            taken += wide;
+            shown.push(hint);
+        }
+        spans.push(Span::styled(" ".repeat(room - taken), bar));
+        for (k, label) in shown {
+            spans.push(Span::styled(" ".repeat(HINT_GAP), bar));
+            spans.push(Span::styled(k, key));
+            spans.push(Span::styled(label, dim));
         }
         Line::from(spans)
     }
@@ -972,35 +1034,37 @@ impl App {
         self.screen_area = screen_area;
 
         frame.render_widget(Block::default().style(theme::page()), screen_area);
-        let size_hint = if self.graphics.is_some() || screen_area.width == 0 {
+        let size = if self.graphics.is_some() || screen_area.width == 0 {
             // The image is overlaid after the frame is flushed; the cells
             // underneath stay blank.
-            String::new()
+            None
         } else {
             frame.render_widget(GbaScreen::new(self.screen()), screen_area);
             let scale = GbaScreen::scale_for(screen_area);
             if !GbaScreen::fits(screen_area) {
-                format!(
-                    "  [terminal {}x{} too small: cropped]",
-                    screen_area.width, screen_area.height
-                )
+                Some((
+                    format!(
+                        "terminal {}x{} too small: cropped",
+                        screen_area.width, screen_area.height
+                    ),
+                    true,
+                ))
             } else if scale > 1 {
-                format!(
-                    "  [1/{scale} scale; {}x{} for full]",
-                    screen::CELL_WIDTH,
-                    screen::CELL_HEIGHT
-                )
+                Some((
+                    format!(
+                        "1/{scale} scale ({}x{} for full)",
+                        screen::CELL_WIDTH,
+                        screen::CELL_HEIGHT
+                    ),
+                    false,
+                ))
             } else {
-                String::new()
+                None
             }
         };
-        let status = self.status_line(&size_hint, status_area.width);
+        let status = self.status_line(size, status_area.width);
         frame.render_widget(
-            Paragraph::new(status).style(
-                Style::default()
-                    .fg(theme::palette().dim)
-                    .bg(theme::palette().surface),
-            ),
+            Paragraph::new(status).style(Style::default().bg(theme::palette().surface)),
             status_area,
         );
         if self.help {
@@ -1024,59 +1088,54 @@ impl App {
         }
     }
 
-    /// The `?` overlay: every action with its keys, and where to change
-    /// them.
+    /// The `?` overlay: every action with its keys under a heading for
+    /// its kind, in two columns when they fit, and where to change them.
     fn draw_help(&self, frame: &mut Frame, area: Rect) {
-        let mut lines: Vec<Line> = Action::ALL
-            .iter()
-            .map(|&action| {
-                let mut spans = vec![Span::styled(
-                    format!("{:>20}  ", action.label()),
-                    theme::dim(),
-                )];
-                // A build that cannot read pads keeps quiet about them.
-                let inputs = self
-                    .bindings
-                    .inputs_for(action)
-                    .filter(|i| Gamepads::SUPPORTED || matches!(i, Input::Key(_)));
-                if let Some(key) = action.fixed_key() {
-                    spans.push(Span::styled(key, theme::text()));
-                }
-                for input in inputs {
-                    if spans.len() > 1 {
-                        spans.push(Span::raw("  "));
+        let mut sections: [Vec<(&str, Vec<Span>)>; 4] = Default::default();
+        for action in Action::ALL {
+            sections[help_section(action)].push((action.label(), self.inputs_spans(action)));
+        }
+        sections[3].push(("quit", vec![Span::styled("ctrl+q", theme::text().bold())]));
+
+        // Names are lined up per column, so a column is as wide as its
+        // longest name plus its longest set of keys.
+        let wide = |which: &[usize]| {
+            let rows = || which.iter().flat_map(|&i| &sections[i]);
+            let names = rows().map(|(label, _)| label.len()).max().unwrap_or(0);
+            let keys = rows()
+                .map(|(_, inputs)| inputs.iter().map(Span::width).sum::<usize>())
+                .max()
+                .unwrap_or(0);
+            names + 2 + keys
+        };
+        let (left, right) = ([0, 2], [1, 3]);
+        let (left_width, right_width) = (wide(&left), wide(&right));
+        let two = left_width + COLUMN_GAP + right_width + 4 <= usize::from(area.width);
+        let mut lines = if two {
+            let left = help_column(&sections, &left, left_width);
+            let right = help_column(&sections, &right, right_width);
+            let blank = Line::raw(" ".repeat(left_width));
+            let rows = left.len().max(right.len());
+            (0..rows)
+                .map(|row| {
+                    let mut spans = left.get(row).unwrap_or(&blank).spans.clone();
+                    let pad = left_width.saturating_sub(Line::from(spans.clone()).width());
+                    spans.push(Span::raw(" ".repeat(pad + COLUMN_GAP)));
+                    if let Some(line) = right.get(row) {
+                        spans.extend(line.spans.iter().cloned());
                     }
-                    // A connected pad's buttons as printed on it; without
-                    // one, the names the keys file takes.
-                    spans.push(match (input, self.pad_style) {
-                        (Input::Pad(button), Some(style)) => {
-                            Span::styled(format!(" {} ", style.label(button)), theme::key())
-                        }
-                        (Input::Pad(_), None) => {
-                            Span::styled(bindings::input_name(input), theme::accent())
-                        }
-                        (Input::Key(_), _) => {
-                            Span::styled(bindings::input_name(input), theme::text())
-                        }
-                    });
-                }
-                if spans.len() == 1 {
-                    spans.push(Span::styled("(unbound)", theme::dim()));
-                }
-                Line::from(spans)
-            })
-            .collect();
-        lines.push(Line::default());
-        lines.push(Line::from(vec![
-            Span::styled(format!("{:>20}  ", "quit"), theme::dim()),
-            Span::styled("ctrl+q", theme::text()),
-        ]));
-        lines.push(Line::default());
+                    Line::from(spans)
+                })
+                .collect::<Vec<_>>()
+        } else {
+            help_column(&sections, &[0, 1, 2, 3], left_width.max(right_width))
+        };
         let file = Bindings::file().map_or_else(
             || "keys file needs a config directory".to_string(),
-            |p| format!("edit {}", library::compact_home(&p)),
+            |p| format!("edit {} to change them", library::compact_home(&p)),
         );
-        lines.push(Line::styled(file, theme::hint()).alignment(Alignment::Center));
+        lines.push(Line::default());
+        lines.push(Line::styled(file, theme::dim()).alignment(Alignment::Center));
         // Wide enough for the longest line (usually the path), within
         // the screen.
         let width = lines.iter().map(Line::width).max().unwrap_or(0).max(44) as u16 + 4;
@@ -1093,16 +1152,123 @@ impl App {
         frame.render_widget(
             Paragraph::new(lines).block(
                 Block::default()
-                    .title(Line::styled(" KEYS ", theme::accent().bold()))
+                    .title(Line::styled(" KEYS ", theme::selected()))
                     .borders(Borders::ALL)
                     .border_type(BorderType::Rounded)
-                    .border_style(theme::border())
+                    .border_style(theme::accent())
                     .padding(Padding::horizontal(1))
                     .style(theme::text().bg(theme::palette().surface)),
             ),
             popup,
         );
     }
+
+    /// The keys and buttons bound to `action`, for the `?` overlay.
+    fn inputs_spans(&self, action: Action) -> Vec<Span<'static>> {
+        let mut spans = Vec::new();
+        if let Some(key) = action.fixed_key() {
+            spans.push(Span::styled(key, theme::text().bold()));
+        }
+        // A build that cannot read pads keeps quiet about them.
+        let inputs = self
+            .bindings
+            .inputs_for(action)
+            .filter(|i| Gamepads::SUPPORTED || matches!(i, Input::Key(_)));
+        for input in inputs {
+            if !spans.is_empty() {
+                spans.push(Span::raw("  "));
+            }
+            // A connected pad's buttons as printed on it; without one,
+            // the names the keys file takes.
+            spans.push(match (input, self.pad_style) {
+                (Input::Pad(button), Some(style)) => {
+                    Span::styled(format!(" {} ", style.label(button)), theme::key())
+                }
+                (Input::Pad(_), None) => Span::styled(bindings::input_name(input), theme::accent()),
+                (Input::Key(_), _) => {
+                    Span::styled(bindings::input_name(input), theme::text().bold())
+                }
+            });
+        }
+        if spans.is_empty() {
+            spans.push(Span::styled("(unbound)", theme::dim()));
+        }
+        spans
+    }
+}
+
+/// Blank cells between the two columns of the `?` overlay.
+const COLUMN_GAP: usize = 4;
+
+/// The headings of the `?` overlay, by [`help_section`].
+const HELP_HEADINGS: [&str; 4] = ["BUTTONS", "PLAY", "STATES", "TOOLS"];
+
+/// Which heading of the `?` overlay `action` goes under.
+const fn help_section(action: Action) -> usize {
+    match action {
+        Action::Button(_) => 0,
+        Action::Pause
+        | Action::Step
+        | Action::FastForward
+        | Action::FastSpeed
+        | Action::Rewind
+        | Action::Mute
+        | Action::VolumeDown
+        | Action::VolumeUp => 1,
+        Action::SaveState | Action::LoadState | Action::States => 2,
+        Action::Cheats
+        | Action::Debugger
+        | Action::Screenshot
+        | Action::Stats
+        | Action::LcdColours
+        | Action::Leave
+        | Action::Help => 3,
+    }
+}
+
+/// One column of the `?` overlay: each section's heading over a rule
+/// that fades out, then its actions with the names lined up.
+fn help_column<'a>(
+    sections: &[Vec<(&str, Vec<Span<'a>>)>; 4],
+    which: &[usize],
+    width: usize,
+) -> Vec<Line<'a>> {
+    let p = theme::palette();
+    let label_width = which
+        .iter()
+        .flat_map(|&i| &sections[i])
+        .map(|(label, _)| label.len())
+        .max()
+        .unwrap_or(0);
+    let mut lines = Vec::new();
+    for &i in which {
+        if !lines.is_empty() {
+            lines.push(Line::default());
+        }
+        let heading = HELP_HEADINGS[i];
+        let mut spans = vec![
+            Span::styled(heading, theme::accent().bold()),
+            Span::raw(" "),
+        ];
+        let rule = u16::try_from(width.saturating_sub(heading.len() + 1)).unwrap_or(0);
+        for x in 0..rule {
+            let t = f32::from(x) / f32::from(rule.max(1));
+            spans.push(Span::styled(
+                "─",
+                Style::default().fg(theme::mix(p.accent, p.surface, 0.3 + 0.7 * t)),
+            ));
+        }
+        lines.push(Line::from(spans));
+        for (label, inputs) in &sections[i] {
+            let mut spans = vec![Span::styled(
+                format!("{label:>label_width$}  "),
+                theme::dim(),
+            )];
+            spans.extend(inputs.iter().cloned());
+            lines.push(Line::from(spans));
+        }
+    }
+    lines
 }
 
 /// How the game loop ended.
