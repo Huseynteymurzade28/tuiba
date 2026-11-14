@@ -1,7 +1,6 @@
 name: Game compatibility report
 description: Report how a freely available game or demo runs in tuiba
 title: "[Compatibility] "
-labels: ["compatibility"]
 body:
   - type: markdown
     attributes:
