@@ -1,0 +1,100 @@
+name: Game compatibility report
+description: Report how a freely available game or demo runs in tuiba
+title: "[Compatibility] "
+labels: ["compatibility"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Report compatibility for freely available homebrew or demos.
+        Do not upload, attach, or link commercial ROMs. Link the game's
+        official page or source instead.
+  - type: input
+    id: game
+    attributes:
+      label: Game title
+      description: Include the build or release name if known.
+      placeholder: Game title (version/build)
+    validations:
+      required: true
+  - type: input
+    id: game_url
+    attributes:
+      label: Official game page or source
+      description: Link to the author's page or source repository.
+      placeholder: https://
+    validations:
+      required: true
+  - type: input
+    id: game_license
+    attributes:
+      label: Game licence
+      description: Include separate code, art, music, or ROM terms if known. Use "unknown" if unclear.
+      placeholder: MIT / GPL-3.0 / unknown
+    validations:
+      required: false
+  - type: input
+    id: tuiba_version
+    attributes:
+      label: tuiba version
+      description: Release number or commit SHA.
+      placeholder: 0.17.0 or commit SHA
+    validations:
+      required: true
+  - type: input
+    id: platform
+    attributes:
+      label: Operating system
+      placeholder: Linux / macOS / Windows (include version if known)
+    validations:
+      required: true
+  - type: input
+    id: terminal
+    attributes:
+      label: Terminal and renderer
+      placeholder: Kitty / Sixel / iTerm2 / half-blocks
+    validations:
+      required: false
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: What did you test?
+      description: Leave unchecked anything you did not test.
+      options:
+        - label: Game boots
+        - label: Gameplay is playable
+        - label: Graphics and rendering
+        - label: Audio
+        - label: Save/load (in-game save)
+        - label: Cartridge clock / RTC
+        - label: Other features (describe below)
+  - type: textarea
+    id: result
+    attributes:
+      label: Result and compatibility status
+      description: Choose perfect, playable, glitches, or broken, and explain what you observed.
+      placeholder: |
+        Status:
+        Observed behaviour:
+        Known glitches or limitations:
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Steps to reproduce
+      description: Include relevant settings, inputs, or scenario details.
+      placeholder: |
+        1.
+        2.
+        3.
+    validations:
+      required: false
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Evidence
+      description: Add a screenshot, log excerpt, or other useful details. Do not attach ROM files.
+      placeholder: Screenshot link or relevant log output
+    validations:
+      required: false
