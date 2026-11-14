@@ -11,8 +11,8 @@ use chrono::NaiveDateTime;
 use tuiba_core::Boot;
 
 use crate::graphics::{Renderer, Zoom};
-use crate::library::expand_home;
 use crate::input::GbaKey;
+use crate::library::expand_home;
 
 /// Usage text printed on `--help` or a bad invocation.
 pub const USAGE: &str = "\
