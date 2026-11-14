@@ -59,6 +59,8 @@ implementation.
 
 ## Compatibility
 
+See the [detailed compatibility list](docs/compatibility.md) for game links, licence notes, tested areas, and instructions for reporting results.
+
 Tested with freely distributed homebrew:
 
 | Title                        | Notes                                                                 |
