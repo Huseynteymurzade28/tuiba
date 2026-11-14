@@ -25,9 +25,9 @@ Please add a version and date when repeating or extending a test.
 | Game | Link | Licence information | Status | What was checked | tuiba version | Notes |
 | --- | --- | --- | --- | --- | --- | --- |
 | Anguna: Warriors of Virtue | [Game page](https://gauauu.itch.io/anguna) | MIT (code and assets, as credited in the project README) | Playable | Gameplay; SRAM saves | Not recorded | A boot-timing race exposed by this game is now handled like hardware. |
-| Aereven Advance (jam build) | [Game page](https://dreamnoid.itch.io/aereven-advance) | Not stated on the linked game page; check the author's terms before redistribution. | Playable | Gameplay | Not recorded | The jam build is the version noted in the project README. |
+| Aereven Advance (jam build) | [Game page](https://dreamnoid.itch.io/aereven-advance) | Not stated on the linked game page; check the author's terms before redistribution. | Playable | Gameplay | Not recorded | The game page identifies the jam build as version 4 (21 August 2024). |
 | Heartwrench Advance | [Game page](https://michaelchase.itch.io/heartwrench-advance) | Not stated on the linked game page; check the author's terms before redistribution. | Playable | Gameplay; SRAM saves | Not recorded |  |
-| Pliko | [Game page](https://pomettini.itch.io/pliko-gba-port) | MIT code licence is listed on the game page; verify separate asset/game distribution terms. | Playable | Gameplay | Not recorded |  |
+| Pliko | [Game page](https://pomettini.itch.io/pliko-gba-port) | MIT (code licence listed on the game page); verify separate asset terms. | Playable | Gameplay | Not recorded |  |
 | Butano Fighter | [Source and game](https://github.com/GValiente/butano/tree/master/games/butano-fighter) | Code: zlib; art: CC0 and CC BY-NC-SA 4.0, as credited in the project README. | Playable | Gameplay | Not recorded | Built from the Butano sources. |
 | Varooom 3D | [Source and game](https://github.com/GValiente/butano/tree/master/games/varooom-3d) | Code: zlib; art: CC0 and CC BY-NC-SA 4.0, as credited in the project README. | Playable | Gameplay; software-rendered 3D racing | Not recorded |  |
 | BeatBeast (jam build) | [Source and game](https://github.com/afska/beat-beast) | Code: MIT; art licences are listed in the game's `#licenses` directory. | Playable | Gameplay; 32 MiB cartridge | Not recorded |  |
