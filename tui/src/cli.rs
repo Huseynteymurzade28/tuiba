@@ -11,6 +11,7 @@ use chrono::NaiveDateTime;
 use tuiba_core::Boot;
 
 use crate::graphics::Renderer;
+use crate::library::expand_home;
 use crate::input::GbaKey;
 
 /// Usage text printed on `--help` or a bad invocation.
@@ -336,7 +337,7 @@ impl Args {
                 flag if flag.starts_with('-') && flag.len() > 1 => {
                     return Err(ArgError::Unknown(arg));
                 }
-                _ if rom.is_none() => rom = Some(PathBuf::from(arg)),
+                _ if rom.is_none() => rom = Some(expand_home(&arg)),
                 _ => return Err(ArgError::Unknown(arg)),
             }
         }
@@ -485,6 +486,16 @@ mod tests {
         );
         assert!(parse(&["--fast-speed", "1"]).is_err());
         assert!(parse(&["--fast-speed", "fast"]).is_err());
+    }
+
+    #[test]
+    fn command_line_paths_expand_the_home_directory() {
+        let args = parse(&["~/Games/GBA"]).unwrap();
+        assert_eq!(
+            args.rom,
+            Some(expand_home("~/Games/GBA")),
+            "the documented tilde path must resolve before directory detection"
+        );
     }
 
     #[test]
