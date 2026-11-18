@@ -56,10 +56,10 @@ use tuiba_core::{Boot, Cartridge, Framebuffer, Gba, Snapshot};
 use crate::audio::AudioOutput;
 use crate::bindings::{Action, Bindings, Input};
 use crate::cheats::{CheatFile, CheatsPanel};
-use crate::cli::FastSpeed;
+use crate::cli::{Chrome, FastSpeed};
 use crate::debugger::{Breakpoints, DebuggerPanel};
 use crate::gamepad::{Gamepads, PadButton, PadNotice, PadSet, PadStyle};
-use crate::graphics::{Graphics, Renderer};
+use crate::graphics::{Graphics, Renderer, Zoom};
 use crate::input::{GbaKey, Hold, Keypad};
 use crate::library::{Library, Location};
 use crate::picker::{Outcome, Picker};
@@ -237,6 +237,8 @@ struct App {
     lcd: Option<Box<Framebuffer>>,
     /// How fast fast-forward may run.
     fast_speed: FastSpeed,
+    /// How much of the status bar shows.
+    chrome: Chrome,
     /// The cartridge being played, for naming its state files.
     rom: PathBuf,
     /// Which slot `F5` and `F8` act on, counting from zero. The panel
@@ -490,6 +492,22 @@ impl App {
                     Some(_) => None,
                     None => Some(Stats::new(now)),
                 };
+            }
+            Action::Zoom => {
+                let text = if let Some(graphics) = &mut self.graphics {
+                    graphics.zoom = graphics.zoom.next(Graphics::fit_factor(self.screen_area));
+                    format!("screen size {}", graphics.zoom)
+                } else {
+                    // Half-blocks are already as large as cells allow.
+                    "screen size needs an image renderer (kitty, sixel, iterm2)".to_string()
+                };
+                self.hide_image();
+                self.state_notice = Some((text, now));
+            }
+            Action::Ui => {
+                self.chrome = self.chrome.next();
+                self.hide_image();
+                self.state_notice = Some((format!("status bar {}", self.chrome), now));
             }
             Action::LcdColours => {
                 self.lcd = match self.lcd {
@@ -876,7 +894,16 @@ impl App {
             .graphics
             .as_ref()
             .map_or("half-blocks", |g| g.protocol().name());
-        let mut facts = vec![Span::styled(format!("{:.0} fps", self.fps), bar.fg(p.text))];
+        // Only what needs reading now: nothing that changes every frame.
+        let minimal = self.chrome == Chrome::Minimal;
+        let mut facts = Vec::new();
+        if !minimal {
+            // Fixed width, so the facts after it stay put.
+            facts.push(Span::styled(
+                format!("{:>3.0} fps", self.fps),
+                bar.fg(p.text),
+            ));
+        }
         if let Some(err) = &self.save_error {
             facts.push(Span::styled(format!("save failed: {err}"), warn.bold()));
         }
@@ -890,12 +917,13 @@ impl App {
         if let Some(n) = self.gba.last_unsupported_swi {
             facts.push(Span::styled(format!("unsupported SWI {n:#04x}"), warn));
         }
-        let held = self.held_buttons(now);
-        if !held.is_empty() {
-            facts.push(Span::styled(held, bar.fg(p.accent)));
-        }
-        if let Some((text, cropped)) = size {
+        if let Some((text, cropped)) = size
+            && (cropped || !minimal)
+        {
             facts.push(Span::styled(text, if cropped { warn } else { dim }));
+        }
+        if minimal {
+            return facts;
         }
         match &self.audio {
             _ if self.muted => facts.push(Span::styled("🔇 muted", dim)),
@@ -911,6 +939,12 @@ impl App {
             facts.push(Span::styled("keys: timeout", dim));
         }
         facts.push(Span::styled(renderer, dim));
+        // Last: they come and go with every press, and would shift
+        // whatever followed them.
+        let held = self.held_buttons(now);
+        if !held.is_empty() {
+            facts.push(Span::styled(held, bar.fg(p.accent)));
+        }
         facts
     }
 
@@ -964,7 +998,7 @@ impl App {
         // The figures take the place of the key hints: they are for a
         // player who already knows the keys and is chasing a problem.
         // Otherwise the first hint always keeps its place.
-        let reserve = if self.stats.is_some() {
+        let reserve = if self.stats.is_some() || self.chrome == Chrome::Minimal {
             0
         } else {
             hint_width(&hints[0]) + 1
@@ -982,6 +1016,9 @@ impl App {
             spans.push(fact);
         }
 
+        if self.chrome == Chrome::Minimal {
+            return Line::from(spans);
+        }
         if let Some(stats) = &self.stats {
             let audio = self.audio.as_ref().ok().map(AudioOutput::stats);
             spans.push(Span::styled("   ", bar));
@@ -1025,8 +1062,10 @@ impl App {
     }
 
     fn draw(&mut self, frame: &mut Frame) {
+        let status_rows = u16::from(self.chrome != Chrome::Hidden);
         let [main_area, status_area] =
-            Layout::vertical([Constraint::Fill(1), Constraint::Length(1)]).areas(frame.area());
+            Layout::vertical([Constraint::Fill(1), Constraint::Length(status_rows)])
+                .areas(frame.area());
         let (screen_area, debugger_area) = match self.panel {
             Some(Panel::Debugger(_)) => DebuggerPanel::split(main_area),
             _ => (main_area, Rect::default()),
@@ -1062,11 +1101,13 @@ impl App {
                 None
             }
         };
-        let status = self.status_line(size, status_area.width);
-        frame.render_widget(
-            Paragraph::new(status).style(Style::default().bg(theme::palette().surface)),
-            status_area,
-        );
+        if status_rows > 0 {
+            let status = self.status_line(size, status_area.width);
+            frame.render_widget(
+                Paragraph::new(status).style(Style::default().bg(theme::palette().surface)),
+                status_area,
+            );
+        }
         if self.help {
             self.draw_help(frame, screen_area);
         }
@@ -1221,6 +1262,8 @@ const fn help_section(action: Action) -> usize {
         | Action::Screenshot
         | Action::Stats
         | Action::LcdColours
+        | Action::Zoom
+        | Action::Ui
         | Action::Leave
         | Action::Help => 3,
     }
@@ -1346,6 +1389,8 @@ fn run() -> Result<(), AppError> {
         volume: Cell::new(args.volume),
         stats: Cell::new(args.stats),
         lcd_colours: Cell::new(args.lcd_colours),
+        zoom: Cell::new(args.zoom),
+        chrome: Cell::new(args.chrome),
         fast_speed: Cell::new(args.fast_speed),
         bindings,
         firmware,
@@ -1378,6 +1423,10 @@ struct Session {
     stats: Cell<bool>,
     /// LCD colour correction, as last set in a game.
     lcd_colours: Cell<bool>,
+    /// How large an image renderer draws the screen.
+    zoom: Cell<Zoom>,
+    /// How much of the status bar shows.
+    chrome: Cell<Chrome>,
     /// Fast-forward limit, as last set in a game.
     fast_speed: Cell<FastSpeed>,
     bindings: Bindings,
@@ -1632,7 +1681,11 @@ fn play(
         title,
         gba,
         keypad: Keypad::new(session.release_events),
-        graphics: session.renderer.protocol().map(Graphics::new),
+        graphics: session.renderer.protocol().map(|protocol| {
+            let mut graphics = Graphics::new(protocol);
+            graphics.zoom = session.zoom.get();
+            graphics
+        }),
         screen_area: Rect::default(),
         fps_frames: 0,
         fps_window_start: Instant::now(),
@@ -1662,6 +1715,7 @@ fn play(
         stats: session.stats.get().then(|| Stats::new(Instant::now())),
         lcd: session.lcd_colours.get().then(Box::default),
         fast_speed: session.fast_speed.get(),
+        chrome: session.chrome.get(),
         rom: rom.clone(),
         slot: 0,
         held_state: None,
@@ -1688,6 +1742,10 @@ fn play(
     session.stats.set(app.stats.is_some());
     session.lcd_colours.set(app.lcd.is_some());
     session.fast_speed.set(app.fast_speed);
+    session.chrome.set(app.chrome);
+    if let Some(graphics) = &app.graphics {
+        session.zoom.set(graphics.zoom);
+    }
     if let Some(err) = &app.save_error {
         crashlog::record(
             "save",

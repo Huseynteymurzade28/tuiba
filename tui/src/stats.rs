@@ -74,10 +74,10 @@ impl Stats {
         let ms = |d: Duration| d.as_secs_f64() * 1000.0;
         let sound = audio.map_or_else(
             || "no sound".to_string(),
-            |a| format!("sound {} ms queued, {} dry", a.queued_ms, a.dry_spells),
+            |a| format!("sound {:3} ms queued, {} dry", a.queued_ms, a.dry_spells),
         );
         format!(
-            "emu {emulated:.1} fps · shown {:.1} fps · draw {:.1} ms avg {:.1} worst · {sound}",
+            "emu {emulated:5.1} fps · shown {:5.1} fps · draw {:4.1} ms avg {:5.1} worst · {sound}",
             self.last.rate,
             ms(self.last.average),
             ms(self.last.worst),
@@ -110,7 +110,7 @@ mod tests {
                     dry_spells: 2
                 })
             ),
-            "emu 59.7 fps · shown 20.0 fps · draw 12.0 ms avg 50.0 worst · sound 98 ms queued, 2 dry"
+            "emu  59.7 fps · shown  20.0 fps · draw 12.0 ms avg  50.0 worst · sound  98 ms queued, 2 dry"
         );
         // The next window starts from nothing.
         stats.draw(ms(5), start + ms(1100));

@@ -12,7 +12,8 @@
 //!   `LC_TERMINAL=iTerm2`): a PNG painted into the cells.
 //!
 //! The frame is scaled by the largest integer factor that fits the cell
-//! area, with nearest-neighbour sampling so pixels stay crisp. Sixel and
+//! area, with nearest-neighbour sampling so pixels stay crisp, unless a
+//! [`Zoom`] asks for a smaller factor or for filling the area. Sixel and
 //! iTerm2 images overwrite the cells they cover, so taking one away means
 //! repainting those cells; see [`Graphics::hide`].
 
@@ -33,6 +34,59 @@ use crate::theme;
 /// Largest upscale factor: beyond this the terminal scales the rest
 /// (Kitty) or the image just stops growing.
 const MAX_FACTOR: usize = 6;
+
+/// How large the image is drawn in the area it is given.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Zoom {
+    /// The largest whole multiple of the GBA screen that fits: every
+    /// pixel the same size.
+    #[default]
+    Fit,
+    /// As large as fits, keeping the aspect ratio; some pixels come out
+    /// a column or row wider than others.
+    Fill,
+    /// This many times the GBA screen, or less if that does not fit.
+    Times(usize),
+}
+
+impl Zoom {
+    /// The setting after this one, given the factor [`Zoom::Fit`] picks:
+    /// fit, fill, then each smaller whole factor from 1× up.
+    #[must_use]
+    pub fn next(self, fit: usize) -> Self {
+        match self {
+            Self::Fit => Self::Fill,
+            Self::Fill if fit > 1 => Self::Times(1),
+            Self::Times(n) if n + 1 < fit => Self::Times(n + 1),
+            Self::Fill | Self::Times(_) => Self::Fit,
+        }
+    }
+}
+
+impl fmt::Display for Zoom {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Fit => f.write_str("fit"),
+            Self::Fill => f.write_str("fill"),
+            Self::Times(n) => write!(f, "{n}×"),
+        }
+    }
+}
+
+impl FromStr for Zoom {
+    type Err = ();
+
+    fn from_str(s: &str) -> Result<Self, ()> {
+        match s {
+            "fit" => Ok(Self::Fit),
+            "fill" => Ok(Self::Fill),
+            n => match n.trim_end_matches(['x', '×']).parse() {
+                Ok(n @ 1..=MAX_FACTOR) => Ok(Self::Times(n)),
+                _ => Err(()),
+            },
+        }
+    }
+}
 
 /// An image protocol.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -164,10 +218,11 @@ struct Placement {
     rows: u16,
     /// Integer upscale factor (1 when shrinking).
     factor: usize,
-    /// The area is smaller than the screen: the image must shrink.
-    shrink: bool,
+    /// The image is not the screen times `factor`: it must be shrunk or
+    /// stretched to `width` × `height`.
+    resize: bool,
     /// Image size in pixels on the terminal: the screen times `factor`,
-    /// or the shrunk size.
+    /// or the resized size.
     width: usize,
     height: usize,
 }
@@ -200,23 +255,23 @@ impl CellSize {
     }
 }
 
-/// Placement for `area`: the largest integer scale that fits, centred.
+/// Placement for `area`, centred: the largest integer scale that fits,
+/// or what `zoom` asks for instead.
 #[allow(
     clippy::cast_precision_loss,
     clippy::cast_possible_truncation,
     clippy::cast_sign_loss
 )] // screen dimensions are tiny and positive
-fn placement(area: Rect, cell: CellSize) -> Placement {
-    let area_w = f64::from(area.width) * cell.width;
-    let area_h = f64::from(area.height) * cell.height;
-    let fit = (area_w / SCREEN_WIDTH as f64).min(area_h / SCREEN_HEIGHT as f64);
+fn placement(area: Rect, cell: CellSize, zoom: Zoom) -> Placement {
+    let fit = fit_scale(area, cell);
     let shrink = fit < 1.0;
-    let factor = if shrink {
-        1
-    } else {
-        (fit.floor() as usize).min(MAX_FACTOR)
+    let whole = (fit.floor() as usize).clamp(1, MAX_FACTOR);
+    let factor = match zoom {
+        _ if shrink => 1,
+        Zoom::Fit | Zoom::Fill => whole,
+        Zoom::Times(n) => n.clamp(1, whole),
     };
-    let (width, height) = if shrink {
+    let (width, height) = if shrink || zoom == Zoom::Fill {
         (
             ((SCREEN_WIDTH as f64 * fit) as usize).max(1),
             ((SCREEN_HEIGHT as f64 * fit) as usize).max(1),
@@ -224,6 +279,7 @@ fn placement(area: Rect, cell: CellSize) -> Placement {
     } else {
         (SCREEN_WIDTH * factor, SCREEN_HEIGHT * factor)
     };
+    let resize = width != SCREEN_WIDTH * factor;
     let cols = ((width as f64 / cell.width).ceil() as u16).clamp(1, area.width.max(1));
     let rows = ((height as f64 / cell.height).ceil() as u16).clamp(1, area.height.max(1));
     Placement {
@@ -232,10 +288,18 @@ fn placement(area: Rect, cell: CellSize) -> Placement {
         cols,
         rows,
         factor,
-        shrink,
+        resize,
         width,
         height,
     }
+}
+
+/// How many times the GBA screen fits in `area`, not rounded.
+#[allow(clippy::cast_precision_loss)] // screen dimensions are tiny
+fn fit_scale(area: Rect, cell: CellSize) -> f64 {
+    let area_w = f64::from(area.width) * cell.width;
+    let area_h = f64::from(area.height) * cell.height;
+    (area_w / SCREEN_WIDTH as f64).min(area_h / SCREEN_HEIGHT as f64)
 }
 
 /// The screen scaled by `factor` as packed RGB, into `pixels`.
@@ -283,6 +347,8 @@ pub struct Graphics {
     /// The frame last sent, to skip sending the same picture again.
     frame: Vec<u32>,
     shown: Option<Shown>,
+    /// How large the image is drawn.
+    pub zoom: Zoom,
 }
 
 impl Graphics {
@@ -299,6 +365,7 @@ impl Graphics {
             out: Vec::new(),
             frame: Vec::new(),
             shown: None,
+            zoom: Zoom::Fit,
         }
     }
 
@@ -314,7 +381,7 @@ impl Graphics {
         if area.width == 0 || area.height == 0 {
             return self.hide();
         }
-        let placement = placement(area, CellSize::query());
+        let placement = placement(area, CellSize::query(), self.zoom);
         let shown = Shown { area, placement };
         if self.shown == Some(shown) && self.frame == fb.pixels() {
             return Ok(());
@@ -346,6 +413,12 @@ impl Graphics {
         self.frame.extend_from_slice(fb.pixels());
         self.shown = Some(shown);
         Ok(())
+    }
+
+    /// The whole factor [`Zoom::Fit`] picks for `area`.
+    #[must_use]
+    pub fn fit_factor(area: Rect) -> usize {
+        placement(area, CellSize::query(), Zoom::Fit).factor
     }
 
     /// Takes the image off the screen. Call it *before* drawing whatever
@@ -482,24 +555,61 @@ mod tests {
             height: 20.0,
         };
         // 100 cols × 40 rows = 1000 × 800 px: 4× would be 960 × 640.
-        let p = placement(Rect::new(0, 0, 100, 40), cell);
+        let p = placement(Rect::new(0, 0, 100, 40), cell, Zoom::Fit);
         assert_eq!(p.factor, 4);
-        assert!(!p.shrink);
+        assert!(!p.resize);
         assert_eq!((p.width, p.height), (960, 640));
         assert_eq!((p.cols, p.rows), (96, 32));
         assert_eq!((p.x, p.y), (2, 4), "centred");
 
         // Too small for 1:1 (200 × 200 px): shrunk to 200 × 133 px.
-        let p = placement(Rect::new(5, 5, 20, 10), cell);
+        let p = placement(Rect::new(5, 5, 20, 10), cell, Zoom::Fit);
         assert_eq!(p.factor, 1);
-        assert!(p.shrink);
+        assert!(p.resize);
         assert_eq!((p.width, p.height), (200, 133));
         assert_eq!((p.cols, p.rows), (20, 7));
         assert_eq!((p.x, p.y), (5, 6));
 
         // The factor is capped.
-        let p = placement(Rect::new(0, 0, 400, 200), cell);
+        let p = placement(Rect::new(0, 0, 400, 200), cell, Zoom::Fit);
         assert_eq!(p.factor, MAX_FACTOR);
+    }
+
+    #[test]
+    fn zoom_picks_a_smaller_factor_or_fills() {
+        let cell = CellSize {
+            width: 10.0,
+            height: 20.0,
+        };
+        // 4.17× fits (1000 × 800 px).
+        let area = Rect::new(0, 0, 100, 40);
+        let p = placement(area, cell, Zoom::Times(2));
+        assert_eq!((p.factor, p.width, p.height), (2, 480, 320));
+        assert!(!p.resize);
+        assert_eq!((p.cols, p.rows), (48, 16));
+        // More than fits is what fits.
+        assert_eq!(placement(area, cell, Zoom::Times(6)).factor, 4);
+        let p = placement(area, cell, Zoom::Fill);
+        assert_eq!((p.factor, p.width, p.height), (4, 1000, 666));
+        assert!(p.resize);
+        assert_eq!((p.cols, p.rows), (100, 34));
+    }
+
+    #[test]
+    fn zoom_cycles_fit_fill_then_smaller_factors() {
+        let mut zoom = Zoom::Fit;
+        let mut seen = Vec::new();
+        for _ in 0..6 {
+            zoom = zoom.next(4);
+            seen.push(zoom.to_string());
+        }
+        assert_eq!(seen, ["fill", "1×", "2×", "3×", "fit", "fill"]);
+        assert_eq!(Zoom::Fill.next(1), Zoom::Fit);
+        assert_eq!("fill".parse(), Ok(Zoom::Fill));
+        assert_eq!("3".parse(), Ok(Zoom::Times(3)));
+        assert_eq!("2x".parse(), Ok(Zoom::Times(2)));
+        assert!("0".parse::<Zoom>().is_err());
+        assert!("7".parse::<Zoom>().is_err());
     }
 
     #[test]

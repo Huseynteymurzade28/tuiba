@@ -10,7 +10,7 @@ use std::path::PathBuf;
 use chrono::NaiveDateTime;
 use tuiba_core::Boot;
 
-use crate::graphics::Renderer;
+use crate::graphics::{Renderer, Zoom};
 use crate::input::GbaKey;
 
 /// Usage text printed on `--help` or a bad invocation.
@@ -68,6 +68,12 @@ Display and sound options:
                         the status bar (F3 toggles it in a game)
   --color-correction    show colours as the GBA's LCD does: darker, less
                         saturated (C toggles it in a game)
+  --zoom SIZE           how large an image renderer draws the screen: fit
+                        (default: the largest whole multiple that fits),
+                        fill (as large as fits), or 1 to 6 times; F9 cycles
+                        it in a game
+  --ui LEVEL            the status bar in a game: full (default), minimal
+                        (title and notices only) or hidden; H cycles it
   -V, --version         show the version
   -h, --help            show this help";
 
@@ -142,10 +148,58 @@ pub struct Args {
     pub fast_speed: FastSpeed,
     /// Start with LCD colour correction on.
     pub lcd_colours: bool,
+    /// How large an image renderer draws the screen.
+    pub zoom: Zoom,
+    /// How much of the status bar shows in a game.
+    pub chrome: Chrome,
     /// Which BIOS image to run.
     pub bios: BiosChoice,
     /// Where a machine with a BIOS image starts.
     pub boot: Boot,
+}
+
+/// How much of the status bar shows in a game.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Chrome {
+    /// Title, figures, notices and key hints.
+    #[default]
+    Full,
+    /// Title, what the emulator is doing and passing notices: nothing
+    /// that changes every frame.
+    Minimal,
+    /// No status bar; the screen gets its row.
+    Hidden,
+}
+
+impl Chrome {
+    /// The setting after this one.
+    #[must_use]
+    pub const fn next(self) -> Self {
+        match self {
+            Self::Full => Self::Minimal,
+            Self::Minimal => Self::Hidden,
+            Self::Hidden => Self::Full,
+        }
+    }
+
+    fn parse(text: &str) -> Option<Self> {
+        match text {
+            "full" => Some(Self::Full),
+            "minimal" => Some(Self::Minimal),
+            "hidden" => Some(Self::Hidden),
+            _ => None,
+        }
+    }
+}
+
+impl fmt::Display for Chrome {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Self::Full => "full",
+            Self::Minimal => "minimal",
+            Self::Hidden => "hidden",
+        })
+    }
 }
 
 /// Which BIOS image to run.
@@ -294,6 +348,8 @@ impl Args {
         let mut volume = 100;
         let mut stats = false;
         let mut lcd_colours = false;
+        let mut zoom = Zoom::Fit;
+        let mut chrome = Chrome::Full;
         let mut fast_speed = FastSpeed::Max;
         let mut bios = BiosChoice::Default;
         let mut boot = Boot::Intro;
@@ -318,6 +374,8 @@ impl Args {
                 "--mute" => mute = true,
                 "--stats" => stats = true,
                 "--color-correction" => lcd_colours = true,
+                "--zoom" => zoom = parsed(value("--zoom"), |v| v.parse().ok())?,
+                "--ui" => chrome = parsed(value("--ui"), Chrome::parse)?,
                 "--fast-speed" => fast_speed = parsed(value("--fast-speed"), FastSpeed::parse)?,
                 "--volume" => {
                     volume = parsed(value("--volume"), |v| v.parse().ok().filter(|&n| n <= 100))?;
@@ -373,6 +431,8 @@ impl Args {
             stats,
             fast_speed,
             lcd_colours,
+            zoom,
+            chrome,
             bios,
             boot,
         })
@@ -449,6 +509,8 @@ mod tests {
                 stats: false,
                 fast_speed: FastSpeed::Max,
                 lcd_colours: false,
+                zoom: Zoom::Fit,
+                chrome: Chrome::Full,
                 bios: BiosChoice::Default,
                 boot: Boot::Intro,
             }
@@ -475,6 +537,11 @@ mod tests {
         assert!(parse(&["--volume", "-5"]).is_err());
         assert!(parse(&["--stats"]).unwrap().stats);
         assert!(parse(&["--color-correction"]).unwrap().lcd_colours);
+        assert_eq!(parse(&["--zoom", "fill"]).unwrap().zoom, Zoom::Fill);
+        assert_eq!(parse(&["--zoom", "2"]).unwrap().zoom, Zoom::Times(2));
+        assert!(parse(&["--zoom", "big"]).is_err());
+        assert_eq!(parse(&["--ui", "hidden"]).unwrap().chrome, Chrome::Hidden);
+        assert!(parse(&["--ui", "none"]).is_err());
         assert_eq!(
             parse(&["--fast-speed", "4"]).unwrap().fast_speed,
             FastSpeed::Times(4)

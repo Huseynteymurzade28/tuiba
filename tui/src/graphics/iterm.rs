@@ -27,7 +27,7 @@ impl Iterm2 {
         placement: Placement,
         out: &mut Vec<u8>,
     ) -> io::Result<()> {
-        // A shrink is left to the terminal: it scales the native image
+        // A resize (shrink or fill) is left to the terminal: it scales the native image
         // into the cell box.
         upscale_rgb(fb, placement.factor, &mut self.pixels);
         self.png.clear();

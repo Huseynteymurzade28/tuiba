@@ -67,6 +67,10 @@ pub enum Action {
     Stats,
     /// Toggle LCD colour correction.
     LcdColours,
+    /// Cycle how large the screen is drawn.
+    Zoom,
+    /// Cycle the status bar: full, minimal, hidden.
+    Ui,
     /// Back to the library, pressed twice like `Esc`.
     Leave,
     /// Show the bindings, like `?`.
@@ -75,7 +79,7 @@ pub enum Action {
 
 impl Action {
     /// Every action, in the order the help overlay and the file use.
-    pub const ALL: [Self; 28] = [
+    pub const ALL: [Self; 30] = [
         Self::Button(GbaKey::Up),
         Self::Button(GbaKey::Down),
         Self::Button(GbaKey::Left),
@@ -102,6 +106,8 @@ impl Action {
         Self::Screenshot,
         Self::Stats,
         Self::LcdColours,
+        Self::Zoom,
+        Self::Ui,
         Self::Leave,
         Self::Help,
     ];
@@ -136,6 +142,8 @@ impl Action {
             Self::Screenshot => "screenshot",
             Self::Stats => "stats",
             Self::LcdColours => "lcd",
+            Self::Zoom => "zoom",
+            Self::Ui => "ui",
             Self::Leave => "leave",
             Self::Help => "help",
         }
@@ -171,6 +179,8 @@ impl Action {
             Self::Screenshot => "screenshot",
             Self::Stats => "performance figures",
             Self::LcdColours => "LCD colours",
+            Self::Zoom => "screen size",
+            Self::Ui => "status bar",
             Self::Leave => "library (twice)",
             Self::Help => "this list",
         }
@@ -282,6 +292,8 @@ impl Bindings {
         bind(&mut b, Action::Screenshot, &[KeyCode::F(12)]);
         bind(&mut b, Action::Stats, &[KeyCode::F(3)]);
         bind(&mut b, Action::LcdColours, &[Char('c')]);
+        bind(&mut b, Action::Zoom, &[KeyCode::F(9)]);
+        bind(&mut b, Action::Ui, &[Char('h')]);
         for (action, button) in [
             (Action::Button(GbaKey::Up), PadButton::Up),
             (Action::Button(GbaKey::Down), PadButton::Down),
