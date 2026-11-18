@@ -105,6 +105,18 @@ pub fn compact_home(path: &Path) -> String {
     path.display().to_string()
 }
 
+/// What went wrong with the folder list `file`, in words that say how
+/// to fix it. A folder in its place is the likely mistake: the name
+/// `library` reads like the place to put games.
+fn file_problem(file: &Path, err: &io::Error) -> String {
+    let shown = compact_home(file);
+    if err.kind() == io::ErrorKind::IsADirectory || file.is_dir() {
+        format!("{shown} is a folder; it must be tuiba's folder list file, so move it elsewhere")
+    } else {
+        format!("{shown}: {err}")
+    }
+}
+
 /// The remembered folders.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct Library {
@@ -113,13 +125,19 @@ pub struct Library {
 }
 
 impl Library {
-    /// Reads the folder list; a missing file is an empty library.
+    /// Reads the folder list; a missing file is an empty library. A file
+    /// that exists but cannot be read also gives an empty library, along
+    /// with what went wrong, for the footer.
     #[must_use]
-    pub fn load() -> Self {
-        library_file()
-            .and_then(|file| fs::read_to_string(file).ok())
-            .map(|text| Self::parse(&text))
-            .unwrap_or_default()
+    pub fn load() -> (Self, Option<String>) {
+        let Some(file) = library_file() else {
+            return (Self::default(), None);
+        };
+        match fs::read_to_string(&file) {
+            Ok(text) => (Self::parse(&text), None),
+            Err(err) if err.kind() == io::ErrorKind::NotFound => (Self::default(), None),
+            Err(err) => (Self::default(), Some(file_problem(&file, &err))),
+        }
     }
 
     fn parse(text: &str) -> Self {
@@ -133,20 +151,20 @@ impl Library {
         }
     }
 
-    /// Writes the folder list back.
+    /// Writes the folder list back. The error names the file.
     pub fn save(&self) -> io::Result<()> {
         let Some(file) = library_file() else {
             return Err(io::Error::other("no config directory (HOME unset)"));
         };
-        if let Some(dir) = file.parent() {
-            fs::create_dir_all(dir)?;
-        }
         let mut text = String::new();
         for folder in &self.folders {
             text.push_str(&folder.display().to_string());
             text.push('\n');
         }
-        fs::write(file, text)
+        file.parent()
+            .map_or(Ok(()), fs::create_dir_all)
+            .and_then(|()| fs::write(&file, text))
+            .map_err(|err| io::Error::new(err.kind(), file_problem(&file, &err)))
     }
 
     /// Adds a folder unless it is already listed. Returns whether the
@@ -551,6 +569,19 @@ pub fn is_placeholder_title(title: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_folder_in_place_of_the_list_is_explained() {
+        let dir = std::env::temp_dir().join(format!("tuiba-lib-dir-{}", std::process::id()));
+        let file = dir.join("library");
+        fs::create_dir_all(&file).unwrap();
+        let err = fs::read_to_string(&file).unwrap_err();
+        let problem = file_problem(&file, &err);
+        assert!(problem.contains("is a folder"), "{problem}");
+        let err = fs::write(&file, "x").unwrap_err();
+        assert!(file_problem(&file, &err).contains("is a folder"));
+        fs::remove_dir_all(&dir).unwrap();
+    }
 
     /// Fails before the `%APPDATA%` fix, passes after it. Only asserts the shape when
     /// the ambient environment supplies `APPDATA` and does not override it with
