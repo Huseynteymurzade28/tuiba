@@ -6,6 +6,8 @@ All notable changes to tuiba. The format follows
 
 ## [Unreleased]
 
+## [0.18.0] – 2026-11-19
+
 ### Added
 - Screen size for the image renderers (#93): `F9` (action `zoom`) cycles
   fit (the largest whole multiple, as before), fill (as large as the
@@ -414,6 +416,7 @@ First release: ARM7TDMI, memory map with DMA and timers, PPU modes 0–5
 with sprites, windows and blending, HLE BIOS, SRAM/flash/EEPROM saves,
 Kitty graphics and half-block renderers, library screen, headless mode.
 
+[0.18.0]: https://github.com/Huseynteymurzade28/tuiba/compare/v0.17.0...v0.18.0
 [0.17.0]: https://github.com/Huseynteymurzade28/tuiba/compare/v0.16.0...v0.17.0
 [0.16.0]: https://github.com/Huseynteymurzade28/tuiba/compare/v0.15.2...v0.16.0
 [0.15.2]: https://github.com/Huseynteymurzade28/tuiba/compare/v0.15.1...v0.15.2
