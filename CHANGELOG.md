@@ -6,6 +6,19 @@ All notable changes to tuiba. The format follows
 
 ## [Unreleased]
 
+### Added
+- Screen size for the image renderers (#93): `F9` (action `zoom`) cycles
+  fit (the largest whole multiple, as before), fill (as large as the
+  window allows) and each smaller whole size from 1×; `--zoom` picks it
+  at start.
+- A quieter status bar (#93): `H` (action `ui`) cycles full, minimal
+  (title and passing notices, no frame rate, renderer or key hints) and
+  hidden, which gives the screen the bar's row; `--ui` picks it at start.
+
+### Changed
+- The status bar no longer shifts as you play: the frame rate has a fixed
+  width and held buttons are listed last (#93).
+
 ### Fixed
 - `tuiba <folder>` no longer quits with "terminal error: Is a directory"
   when `~/.config/tuiba/library` is a folder: the library opens with the

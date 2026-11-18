@@ -108,8 +108,9 @@ impl Kitty {
             tuiba_core::SCREEN_HEIGHT * placement.factor,
         );
         // At native size the terminal must not stretch the image to a
-        // whole number of cells; only a shrink needs the cell box.
-        let fit_box = if placement.shrink {
+        // whole number of cells; only a resize (shrink or fill) needs the
+        // cell box, and the terminal does the resizing.
+        let fit_box = if placement.resize {
             format!(",c={},r={}", placement.cols, placement.rows)
         } else {
             String::new()

@@ -294,7 +294,7 @@ mod tests {
             cols: 1,
             rows: 1,
             factor: width / SCREEN_WIDTH,
-            shrink: width < SCREEN_WIDTH,
+            resize: !width.is_multiple_of(SCREEN_WIDTH),
             width,
             height,
         }

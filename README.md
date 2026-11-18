@@ -173,6 +173,8 @@ tuiba --volume 50      # start at half volume; - and + change it in a game
 tuiba --stats          # frame rates, draw times and the sound queue; F3 in a game
 tuiba --color-correction # the GBA screen's muted colours; C in a game
 tuiba --fast-speed 4   # fast-forward at most ×4 (default max); F4 cycles ×2, ×4, max
+tuiba --zoom 2         # draw the screen at 2× (fit, fill or 1–6); F9 in a game
+tuiba --ui minimal     # status bar with title and notices only (or hidden); H in a game
 ```
 
 `F5` freezes the machine into the current slot and `F8` puts it back —
@@ -335,6 +337,8 @@ Invalid lines are reported as warnings and do not prevent startup.
 |                                  | `F12` — screenshot                           |
 |                                  | `F3` — performance figures                   |
 |                                  | `C` — LCD colour correction                  |
+|                                  | `F9` — screen size: fit, fill, 1×, 2×…       |
+|                                  | `H` — status bar: full, minimal, hidden      |
 |                                  | `?` — show the active bindings               |
 | `q` — quit (asks first)          | `Esc` twice — back to the library            |
 |                                  | `Ctrl+Q` — quit                              |
@@ -376,9 +380,9 @@ Windows), one action per line:
 # button = key [key ...]      actions: up down left right a b l r
 a      = j                    #          start select pause step fast speed rewind
 b      = k pad:lstick         #          mute quieter louder save load states
-select = space                #          cheats screenshot stats lcd leave help
+select = space                #          cheats screenshot stats lcd zoom ui leave help
 start  = enter                # unlisted actions keep their defaults
-fast   = f9 tab               # an empty right-hand side unbinds
+fast   = f10 tab              # an empty right-hand side unbinds
 ```
 
 Keys are single characters or `up down left right enter space backspace
