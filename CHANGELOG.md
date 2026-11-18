@@ -6,6 +6,11 @@ All notable changes to tuiba. The format follows
 
 ## [Unreleased]
 
+### Fixed
+- `tuiba <folder>` no longer quits with "terminal error: Is a directory"
+  when `~/.config/tuiba/library` is a folder: the library opens with the
+  folder and its footer says what to move (#115).
+
 ## [0.17.0] – 2026-10-29
 
 ### Added

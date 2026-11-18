@@ -1304,11 +1304,15 @@ fn run() -> Result<(), AppError> {
 
     // A ROM plays directly; a folder (or nothing) opens the library.
     let theme_problems = theme::load();
-    let mut library = Library::load();
+    let (mut library, mut library_problem) = Library::load();
     let direct_rom = match &args.rom {
         Some(path) if path.is_dir() => {
-            if library.add(path.clone()) {
-                library.save()?;
+            // An unsaved list still opens with the folder for this run.
+            if library.add(path.clone())
+                && let Err(err) = library.save()
+                && library_problem.is_none()
+            {
+                library_problem = Some(format!("folder not remembered: {err}"));
             }
             None
         }
@@ -1319,7 +1323,11 @@ fn run() -> Result<(), AppError> {
     let (bindings, key_problems) = Bindings::load();
     if direct_rom.is_some() {
         // No library footer to show these in; they stay in the scrollback.
-        for problem in theme_problems.iter().chain(&key_problems) {
+        for problem in theme_problems
+            .iter()
+            .chain(&key_problems)
+            .chain(&library_problem)
+        {
             eprintln!("warning: {problem}");
         }
     }
@@ -1346,7 +1354,11 @@ fn run() -> Result<(), AppError> {
         return play(terminal, &rom, &session, &mut gamepads).map(|_| ());
     }
     let mut picker = Picker::new(library);
-    if let Some(problem) = theme_problems.first().or_else(|| key_problems.first()) {
+    if let Some(problem) = library_problem
+        .as_ref()
+        .or_else(|| theme_problems.first())
+        .or_else(|| key_problems.first())
+    {
         picker.notify_error(problem.clone());
     }
     library_loop(terminal, picker, &session, &mut gamepads)
