@@ -237,9 +237,7 @@ impl Apu {
 
     /// Clearing the master enable resets every PSG register and channel.
     fn power_off(&mut self) {
-        for i in Self::index(reg::SOUND1CNT_L)..Self::index(reg::SOUNDCNT_H) {
-            self.raw[i] = 0;
-        }
+        self.raw[Self::index(reg::SOUND1CNT_L)..Self::index(reg::SOUNDCNT_H)].fill(0);
         self.square1 = Square::default();
         self.square2 = Square::default();
         self.wave = Wave::default();
